@@ -6,29 +6,59 @@ param(
 )
 
 $ErrorActionPreference = "Stop"
+
+function Invoke-InferraCommand {
+    param(
+        [Parameter(Mandatory = $true)][string]$FilePath,
+        [Parameter(Mandatory = $true)][string[]]$Arguments
+    )
+
+    & $FilePath @Arguments
+    if ($LASTEXITCODE -ne 0) {
+        throw "Command failed with exit code ${LASTEXITCODE}: $FilePath $($Arguments -join ' ')"
+    }
+}
+
 $programData = Split-Path -Parent $ConfigPath
 New-Item -ItemType Directory -Force -Path $programData | Out-Null
 
 if (-not (Test-Path $ConfigPath)) {
-    Push-Location $ProjectDir
-    & $Python -m cli --config $ConfigPath setup --yes --skip-connection-test --data-dir "$env:ProgramData\Inferra\data"
-    Pop-Location
+    try {
+        Push-Location $ProjectDir
+        Invoke-InferraCommand $Python @(
+            "-m",
+            "cli",
+            "--config",
+            $ConfigPath,
+            "setup",
+            "--yes",
+            "--skip-connection-test",
+            "--data-dir",
+            "$env:ProgramData\Inferra\data"
+        )
+    } finally {
+        Pop-Location
+    }
 }
 
 $existing = Get-Service -Name "Inferra" -ErrorAction SilentlyContinue
 if ($existing) {
     Stop-Service Inferra -ErrorAction SilentlyContinue
-    & $Python -m windows_service remove | Out-Null
+    Invoke-InferraCommand $Python @("-m", "windows_service", "remove") | Out-Null
     Start-Sleep -Seconds 2
 }
 
 if (-not $SkipInstall) {
-    Push-Location $ProjectDir
-    & $Python -m pip install -e ".[windows]"
-    Pop-Location
+    try {
+        Push-Location $ProjectDir
+        Invoke-InferraCommand $Python @("-m", "pip", "install", "-e", ".[windows]")
+    } finally {
+        Pop-Location
+    }
 }
 
 $env:INFERRA_CONFIG = $ConfigPath
-& $Python -m windows_service install --startup auto
-Start-Service Inferra
+Invoke-InferraCommand $Python @("-m", "windows_service", "--startup", "auto", "install")
+$registered = Get-Service -Name "Inferra" -ErrorAction Stop
+Start-Service -Name $registered.Name -ErrorAction Stop
 Write-Host "Inferra service installed and started."

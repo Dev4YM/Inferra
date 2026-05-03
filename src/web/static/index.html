@@ -3,87 +3,223 @@
   <head>
     <meta charset="utf-8">
     <meta name="viewport" content="width=device-width, initial-scale=1">
-    <title>Inferra</title>
+    <title>Inferra Console</title>
+    <script src="https://cdn.tailwindcss.com"></script>
+    <script>
+      tailwind.config = {
+        theme: {
+          extend: {
+            colors: {
+              ink: "#172033",
+              panel: "#ffffff",
+              line: "#d9e1ea",
+              quiet: "#667085",
+              accent: "#0f766e",
+              danger: "#b42318",
+              warn: "#b54708"
+            }
+          }
+        }
+      };
+    </script>
     <link rel="stylesheet" href="/static/styles.css">
   </head>
-  <body>
-    <header>
-      <div>
-        <strong>Inferra</strong>
-        <span id="status">Starting...</span>
+  <body class="min-h-screen bg-slate-100 text-ink">
+    <div class="min-h-screen xl:grid xl:grid-cols-[248px_minmax(0,1fr)]">
+      <aside class="border-b border-slate-300 bg-slate-950 text-slate-100 xl:min-h-screen xl:border-b-0 xl:border-r">
+        <div class="flex items-center justify-between gap-4 px-5 py-4 xl:block">
+          <div>
+            <div class="text-xl font-semibold tracking-normal">Inferra</div>
+            <div class="mt-1 text-xs text-slate-400">Local failure explanation</div>
+          </div>
+          <div id="ai-pill" class="rounded-full border border-slate-600 px-3 py-1 text-xs text-slate-300">AI checking</div>
+        </div>
+        <nav class="flex gap-1 overflow-x-auto px-3 pb-3 xl:grid xl:px-3 xl:pb-0" aria-label="Primary">
+          <button class="nav-item active" type="button" data-view="dashboard">Dashboard</button>
+          <button class="nav-item" type="button" data-view="incidents">Incidents</button>
+          <button class="nav-item" type="button" data-view="logs">Logs</button>
+          <button class="nav-item" type="button" data-view="services">Services</button>
+          <button class="nav-item" type="button" data-view="collectors">Collectors</button>
+          <button class="nav-item" type="button" data-view="settings">Settings</button>
+        </nav>
+        <div class="hidden border-t border-slate-800 p-4 text-xs text-slate-400 xl:block">
+          <div class="font-medium text-slate-300">Evidence policy</div>
+          <p class="mt-2 leading-5">AI explains deterministic evidence. It does not rank incidents, alter scores, or write remediation changes.</p>
+        </div>
+      </aside>
+
+      <div class="min-w-0">
+        <header class="sticky top-0 z-20 border-b border-slate-300 bg-white/95 px-5 py-3 backdrop-blur">
+          <div class="flex flex-wrap items-center justify-between gap-3">
+            <div>
+              <h1 id="page-title" class="text-lg font-semibold">Dashboard</h1>
+              <p id="status" class="text-sm text-slate-600">Starting...</p>
+            </div>
+            <div class="flex flex-wrap items-center gap-2">
+              <button id="refresh-data" class="btn-secondary" type="button">Refresh</button>
+              <button id="start-collectors" class="btn-secondary" type="button">Start Collectors</button>
+              <button id="stop-collectors" class="btn-secondary" type="button">Stop Collectors</button>
+            </div>
+          </div>
+        </header>
+
+        <main class="p-4 sm:p-5">
+          <section id="view-dashboard" class="view active"></section>
+
+          <section id="view-incidents" class="view">
+            <div class="grid gap-4 xl:grid-cols-[360px_minmax(0,1fr)]">
+              <section class="surface">
+                <div class="section-head">
+                  <div>
+                    <h2>Active Incidents</h2>
+                    <p>Sorted by severity and freshness.</p>
+                  </div>
+                </div>
+                <div id="incidents" class="stack"></div>
+              </section>
+
+              <section class="surface min-w-0">
+                <div class="section-head">
+                  <div>
+                    <h2 id="detail-title">Incident Workbench</h2>
+                    <p id="detail-meta">Select an incident to trace evidence.</p>
+                  </div>
+                  <button id="resolve-incident" class="btn-secondary" type="button" hidden>Resolve</button>
+                </div>
+                <div id="incident-detail" class="empty-state">Select an incident.</div>
+                <div id="incident-tabs" class="tabs" hidden>
+                  <button class="tab active" type="button" data-tab="timeline">Timeline</button>
+                  <button class="tab" type="button" data-tab="logs">Logs</button>
+                  <button class="tab" type="button" data-tab="graph">Graph</button>
+                  <button class="tab" type="button" data-tab="explanation">Explanation</button>
+                  <button class="tab" type="button" data-tab="trace">AI Trace</button>
+                  <button class="tab" type="button" data-tab="chat">Chat</button>
+                </div>
+                <div id="incident-panel" class="mt-4"></div>
+              </section>
+            </div>
+          </section>
+
+          <section id="view-logs" class="view">
+            <section class="surface">
+              <div class="section-head">
+                <div>
+                  <h2>Logs</h2>
+                  <p>Queryable normalized events with raw drill-down.</p>
+                </div>
+                <button id="refresh-logs" class="btn-secondary" type="button">Refresh Logs</button>
+              </div>
+              <form id="log-filters" class="grid gap-3 md:grid-cols-[1fr_160px_160px_140px_auto]">
+                <input id="log-search" class="field" type="search" placeholder="Search messages">
+                <select id="log-service" class="field"></select>
+                <select id="log-severity" class="field">
+                  <option value="">All severities</option>
+                  <option value="2">Warn and above</option>
+                  <option value="3">Error and above</option>
+                  <option value="4">Critical only</option>
+                </select>
+                <input id="log-limit" class="field" type="number" min="1" max="500" value="120">
+                <button class="btn-primary" type="submit">Apply</button>
+              </form>
+              <div id="logs" class="mt-4 overflow-hidden rounded-md border border-slate-200"></div>
+            </section>
+          </section>
+
+          <section id="view-services" class="view">
+            <div class="grid gap-4 xl:grid-cols-[minmax(0,1fr)_420px]">
+              <section class="surface">
+                <div class="section-head">
+                  <div>
+                    <h2>Services</h2>
+                    <p>Health from events, errors, and active incident links.</p>
+                  </div>
+                </div>
+                <div id="services" class="service-grid"></div>
+              </section>
+              <section class="surface">
+                <div class="section-head">
+                  <div>
+                    <h2>Service Detail</h2>
+                    <p id="service-detail-title">Select a service.</p>
+                  </div>
+                </div>
+                <div id="service-detail" class="empty-state">No service selected.</div>
+              </section>
+            </div>
+          </section>
+
+          <section id="view-collectors" class="view">
+            <section class="surface">
+              <div class="section-head">
+                <div>
+                  <h2>Collectors</h2>
+                  <p>Supervised input tasks, queue depth, errors, and last activity.</p>
+                </div>
+              </div>
+              <div id="collectors" class="grid gap-3 lg:grid-cols-2"></div>
+            </section>
+          </section>
+
+          <section id="view-settings" class="view">
+            <div class="grid gap-4 xl:grid-cols-[minmax(0,1.2fr)_minmax(320px,0.8fr)]">
+              <section class="surface">
+                <div class="section-head">
+                  <div>
+                    <h2>AI Provider</h2>
+                    <p>Ollama local or remote server. No model weights are pulled from the UI.</p>
+                  </div>
+                  <button id="refresh-ai" class="btn-secondary" type="button">Refresh AI</button>
+                </div>
+                <form id="ai-config-form" class="grid gap-3 md:grid-cols-[120px_minmax(220px,1fr)_minmax(220px,1fr)_minmax(160px,0.7fr)_auto]">
+                  <label class="field-label">
+                    <span>Enabled</span>
+                    <input id="ai-enabled" type="checkbox" class="h-5 w-5 rounded border-slate-300">
+                  </label>
+                  <label class="field-label">
+                    <span>Server</span>
+                    <input id="ai-base-url" class="field" type="url" autocomplete="off">
+                  </label>
+                  <label class="field-label">
+                    <span>Model</span>
+                    <select id="ai-model" class="field"></select>
+                  </label>
+                  <label class="field-label">
+                    <span>Token Env</span>
+                    <input id="ai-token-env" class="field" autocomplete="off" placeholder="OLLAMA_TOKEN">
+                  </label>
+                  <button class="btn-primary self-end" type="submit">Save</button>
+                </form>
+                <div id="ai-status" class="mt-4 grid gap-3 md:grid-cols-4"></div>
+              </section>
+              <section class="surface">
+                <div class="section-head">
+                  <div>
+                    <h2>Gemma 4 Registry</h2>
+                    <p>Known Ollama tags and installed model markers.</p>
+                  </div>
+                </div>
+                <div id="ai-models" class="stack"></div>
+              </section>
+            </div>
+          </section>
+        </main>
       </div>
-      <div id="ai-pill" class="status-pill">AI checking</div>
-    </header>
-    <main class="workspace">
-      <section class="panel panel-ai">
-        <div class="panel-head">
-          <h1>AI</h1>
-          <button id="refresh-ai" type="button" title="Refresh AI status">Refresh</button>
-        </div>
-        <form id="ai-config-form" class="ai-config">
-          <label>
-            <span>Enabled</span>
-            <input id="ai-enabled" type="checkbox">
-          </label>
-          <label>
-            <span>Server</span>
-            <input id="ai-base-url" type="url" autocomplete="off">
-          </label>
-          <label>
-            <span>Model</span>
-            <select id="ai-model"></select>
-          </label>
-          <label>
-            <span>Token Env</span>
-            <input id="ai-token-env" autocomplete="off" placeholder="OLLAMA_TOKEN">
-          </label>
-          <button type="submit">Save</button>
-        </form>
-        <div id="ai-status" class="status-grid"></div>
-        <div id="ai-models" class="model-strip"></div>
-      </section>
+    </div>
 
-      <section class="panel panel-list">
-        <div class="panel-head">
-          <h1>Incidents</h1>
-          <button id="refresh-data" type="button" title="Refresh incidents and events">Refresh</button>
-        </div>
-        <div id="incidents" class="list"></div>
-      </section>
-
-      <section class="panel panel-collectors">
-        <div class="panel-head">
-          <h1>Collectors</h1>
-          <div class="button-group">
-            <button id="start-collectors" type="button">Start</button>
-            <button id="stop-collectors" type="button">Stop</button>
+    <div id="event-drawer" class="drawer" hidden>
+      <div class="drawer-backdrop" data-close-drawer></div>
+      <aside class="drawer-panel">
+        <div class="section-head">
+          <div>
+            <h2>Event Detail</h2>
+            <p id="drawer-subtitle">Normalized log evidence</p>
           </div>
+          <button class="btn-secondary" type="button" data-close-drawer>Close</button>
         </div>
-        <div id="collectors" class="list"></div>
-      </section>
+        <div id="event-detail" class="mt-4"></div>
+      </aside>
+    </div>
 
-      <section class="panel panel-detail">
-        <div class="panel-head">
-          <h1 id="detail-title">Incident Detail</h1>
-          <span id="detail-meta" class="muted"></span>
-        </div>
-        <div id="incident-detail" class="detail-empty">Select an incident.</div>
-        <div id="explanation"></div>
-        <form id="chat-form" class="chat-form" hidden>
-          <label for="chat-question">Ask about this incident</label>
-          <div class="chat-row">
-            <input id="chat-question" name="question" autocomplete="off" placeholder="What evidence supports the top hypothesis?">
-            <button type="submit">Send</button>
-          </div>
-        </form>
-        <div id="chat-log" class="chat-log"></div>
-      </section>
-
-      <section class="panel panel-events">
-        <h1>Recent Events</h1>
-        <div id="events" class="list"></div>
-      </section>
-    </main>
     <script src="/static/app.js"></script>
   </body>
 </html>

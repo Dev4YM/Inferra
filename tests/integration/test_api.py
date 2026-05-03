@@ -111,3 +111,33 @@ def test_api_collector_start_stop_controls(tmp_path):
         assert start.json()["started"] is True
         assert stop.status_code == 200
         assert stop.json()["stopped"] is True
+
+
+def test_api_dashboard_logs_event_detail_and_ai_trace(tmp_path):
+    app = create_app(InferraConfig(storage=StorageConfig(data_dir=tmp_path)))
+
+    with TestClient(app) as client:
+        client.post("/api/ingest", json={"service": "api", "level": "error", "message": "timeout calling postgres"})
+        client.post(
+            "/api/ingest",
+            json={"service": "api", "level": "error", "message": "connection refused from postgres"},
+        )
+
+        dashboard = client.get("/api/dashboard")
+        assert dashboard.status_code == 200
+        assert dashboard.json()["severity_counts"]["error"] >= 1
+
+        logs = client.get("/api/logs?service=api&severity=3&search=timeout").json()["logs"]
+        assert len(logs) == 1
+        assert logs[0]["service_id"] == "api"
+
+        event_detail = client.get(f"/api/events/{logs[0]['event_id']}")
+        assert event_detail.status_code == 200
+        assert event_detail.json()["event"]["message"] == "timeout calling postgres"
+
+        incident_id = client.get("/api/incidents").json()["incidents"][0]["incident_id"]
+        trace = client.get(f"/api/incidents/{incident_id}/ai-trace")
+        assert trace.status_code == 200
+        payload = trace.json()
+        assert payload["redaction"]["raw_logs_sent"] is False
+        assert payload["included_events"]
