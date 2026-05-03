@@ -1,0 +1,58 @@
+[build-system]
+requires = ["setuptools>=68", "wheel"]
+build-backend = "setuptools.build_meta"
+
+[project]
+name = "inferra"
+version = "0.1.0"
+description = "Local-first runtime failure explanation system"
+readme = "README.md"
+requires-python = ">=3.11"
+keywords = ["observability", "debugging", "incident-response", "ollama", "sqlite"]
+dependencies = [
+  "fastapi>=0.110",
+  "uvicorn[standard]>=0.27",
+  "networkx>=3.2",
+  "psutil>=5.9",
+]
+
+[project.optional-dependencies]
+windows = ["pywin32>=306"]
+kubernetes = ["kubernetes>=29"]
+dev = ["pytest>=8", "pytest-asyncio>=0.23"]
+
+[project.scripts]
+inferra = "cli:main"
+
+[tool.setuptools]
+package-dir = {"" = "src"}
+py-modules = ["app", "cli", "windows_service"]
+
+[tool.setuptools.packages.find]
+where = ["src"]
+include = [
+  "ai*",
+  "analysis*",
+  "collectors*",
+  "config*",
+  "core*",
+  "events*",
+  "explanation*",
+  "normalization*",
+  "reasoning*",
+  "runtime*",
+  "storage*",
+  "web*",
+]
+
+[tool.setuptools.package-data]
+config = ["*.toml"]
+web = ["static/*"]
+
+[tool.pytest.ini_options]
+testpaths = ["tests"]
+asyncio_mode = "auto"
+
+[tool.ruff]
+line-length = 120
+target-version = "py311"

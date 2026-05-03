@@ -1,0 +1,83 @@
+[server]
+host = "127.0.0.1"
+port = 7433
+
+[storage]
+data_dir = "./data"
+retention_hours = 72
+
+[ai]
+enabled = false
+provider = "ollama"
+base_url = "http://127.0.0.1:11434"
+model = "gemma4:e4b"
+token_env = ""
+timeout_seconds = 30.0
+temperature = 1.0
+top_p = 0.95
+top_k = 64
+max_context_events = 30
+redact_raw_logs = true
+allow_remote = false
+
+[collectors]
+auto_start = false
+retry_initial_seconds = 1.0
+retry_max_seconds = 60.0
+
+[collectors.file]
+enabled = true
+paths = []
+poll_interval_seconds = 1.0
+start_at_end = false
+
+[collectors.app]
+enabled = true
+max_payload_bytes = 65536
+
+[collectors.windows_eventlog]
+enabled = true
+channels = ["Application", "System"]
+poll_interval_seconds = 5.0
+
+[collectors.host_metrics]
+enabled = true
+poll_interval_seconds = 10.0
+warn_cpu_percent = 85.0
+warn_memory_percent = 85.0
+warn_disk_percent = 90.0
+
+[collectors.windows_service]
+enabled = true
+poll_interval_seconds = 30.0
+include_stopped = false
+names = []
+
+[collectors.linux_syslog]
+enabled = true
+paths = ["/var/log/syslog", "/var/log/messages"]
+poll_interval_seconds = 2.0
+start_at_end = true
+
+[collectors.journald]
+enabled = true
+poll_interval_seconds = 5.0
+units = []
+since = "-1 hour"
+limit = 200
+
+[collectors.kubernetes]
+enabled = false
+poll_interval_seconds = 15.0
+namespaces = []
+all_namespaces = true
+limit = 200
+include_pods = true
+include_events = true
+
+[collectors.process]
+enabled = true
+poll_interval_seconds = 15.0
+top_n = 20
+min_cpu_percent = 75.0
+min_memory_mb = 512.0

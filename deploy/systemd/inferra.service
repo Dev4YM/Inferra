@@ -1,0 +1,19 @@
+[Unit]
+Description=Inferra local runtime failure explanation service
+After=network-online.target
+Wants=network-online.target
+
+[Service]
+Type=simple
+User=inferra
+Group=inferra
+WorkingDirectory=/opt/inferra
+Environment=PYTHONUNBUFFERED=1
+ExecStart=/opt/inferra/.venv/bin/inferra --config /etc/inferra/inferra.toml serve --host 0.0.0.0 --port 7433
+Restart=on-failure
+RestartSec=5
+StateDirectory=inferra
+ReadWritePaths=/var/lib/inferra /etc/inferra
+
+[Install]
+WantedBy=multi-user.target

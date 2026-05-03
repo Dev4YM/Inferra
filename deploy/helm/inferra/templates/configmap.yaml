@@ -1,0 +1,27 @@
+apiVersion: v1
+kind: ConfigMap
+metadata:
+  name: {{ include "inferra.fullname" . }}-config
+data:
+  inferra.toml: |
+    [server]
+    host = "0.0.0.0"
+    port = 7433
+
+    [storage]
+    data_dir = "/data"
+    retention_hours = 72
+
+    [ai]
+    enabled = {{ .Values.config.ai.enabled }}
+    provider = "ollama"
+    base_url = "{{ .Values.config.ai.baseUrl }}"
+    model = "{{ .Values.config.ai.model }}"
+    token_env = ""
+    timeout_seconds = 30.0
+    temperature = 1.0
+    top_p = 0.95
+    top_k = 64
+    max_context_events = 30
+    redact_raw_logs = true
+    allow_remote = true

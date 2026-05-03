@@ -1,0 +1,89 @@
+<!doctype html>
+<html lang="en">
+  <head>
+    <meta charset="utf-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1">
+    <title>Inferra</title>
+    <link rel="stylesheet" href="/static/styles.css">
+  </head>
+  <body>
+    <header>
+      <div>
+        <strong>Inferra</strong>
+        <span id="status">Starting...</span>
+      </div>
+      <div id="ai-pill" class="status-pill">AI checking</div>
+    </header>
+    <main class="workspace">
+      <section class="panel panel-ai">
+        <div class="panel-head">
+          <h1>AI</h1>
+          <button id="refresh-ai" type="button" title="Refresh AI status">Refresh</button>
+        </div>
+        <form id="ai-config-form" class="ai-config">
+          <label>
+            <span>Enabled</span>
+            <input id="ai-enabled" type="checkbox">
+          </label>
+          <label>
+            <span>Server</span>
+            <input id="ai-base-url" type="url" autocomplete="off">
+          </label>
+          <label>
+            <span>Model</span>
+            <select id="ai-model"></select>
+          </label>
+          <label>
+            <span>Token Env</span>
+            <input id="ai-token-env" autocomplete="off" placeholder="OLLAMA_TOKEN">
+          </label>
+          <button type="submit">Save</button>
+        </form>
+        <div id="ai-status" class="status-grid"></div>
+        <div id="ai-models" class="model-strip"></div>
+      </section>
+
+      <section class="panel panel-list">
+        <div class="panel-head">
+          <h1>Incidents</h1>
+          <button id="refresh-data" type="button" title="Refresh incidents and events">Refresh</button>
+        </div>
+        <div id="incidents" class="list"></div>
+      </section>
+
+      <section class="panel panel-collectors">
+        <div class="panel-head">
+          <h1>Collectors</h1>
+          <div class="button-group">
+            <button id="start-collectors" type="button">Start</button>
+            <button id="stop-collectors" type="button">Stop</button>
+          </div>
+        </div>
+        <div id="collectors" class="list"></div>
+      </section>
+
+      <section class="panel panel-detail">
+        <div class="panel-head">
+          <h1 id="detail-title">Incident Detail</h1>
+          <span id="detail-meta" class="muted"></span>
+        </div>
+        <div id="incident-detail" class="detail-empty">Select an incident.</div>
+        <div id="explanation"></div>
+        <form id="chat-form" class="chat-form" hidden>
+          <label for="chat-question">Ask about this incident</label>
+          <div class="chat-row">
+            <input id="chat-question" name="question" autocomplete="off" placeholder="What evidence supports the top hypothesis?">
+            <button type="submit">Send</button>
+          </div>
+        </form>
+        <div id="chat-log" class="chat-log"></div>
+      </section>
+
+      <section class="panel panel-events">
+        <h1>Recent Events</h1>
+        <div id="events" class="list"></div>
+      </section>
+    </main>
+    <script src="/static/app.js"></script>
+  </body>
+</html>

@@ -1,0 +1,16 @@
+services:
+  inferra:
+    build: .
+    ports:
+      - "7433:7433"
+    volumes:
+      - inferra-data:/data
+      - ./deploy/examples/inferra.container.toml:/etc/inferra/inferra.toml:ro
+    environment:
+      OLLAMA_HOST: http://host.docker.internal:11434
+    extra_hosts:
+      - "host.docker.internal:host-gateway"
+    restart: unless-stopped
+
+volumes:
+  inferra-data:

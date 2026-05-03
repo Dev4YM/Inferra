@@ -1,79 +1,146 @@
 # Inferra
 
-## Tagline
-Understand why your system fails — instantly.
+Inferra is a local-first runtime failure explanation system. It collects operational signals, stores them locally in SQLite, builds deterministic incident hypotheses, and optionally uses a local Ollama model to explain the evidence in plain language.
 
----
+Inferra does not remediate systems, execute fixes, or require a cloud service.
 
-## What is Inferra?
+## Current Capabilities
 
-Inferra is a local-first AI debugging radar that observes runtime signals (logs, containers, services), builds causal hypotheses about system failures, and presents ranked, evidence-backed explanations.
+- Python + SQLite local storage.
+- CLI-first setup, configuration, collection, and server control.
+- Optional FastAPI web dashboard.
+- Optional Ollama AI explanations and incident chat.
+- Gemma 4 model registry for Ollama tags.
+- Windows-first collectors:
+  - Windows Event Log with bookmark persistence.
+  - Windows service snapshots.
+  - host and process metrics.
+- Linux collectors:
+  - syslog file ingestion.
+  - journald JSON ingestion through `journalctl`.
+- Kubernetes event and pod-state collection.
+- Deterministic reasoning:
+  - correlation clusters.
+  - anomaly scoring.
+  - topology-aware root-cause selection.
+  - contradiction handling.
+  - confidence calibration.
+- Deployment assets for Windows, Linux systemd, Docker, Helm, and macOS launchd.
 
-It does NOT fix systems.  
-It does NOT act autonomously.  
-It only explains what is happening and why.
+## Quick Start
 
----
+```powershell
+python -m pip install -e ".[dev]"
+inferra --config inferra.toml setup --yes --skip-connection-test
+inferra --config inferra.toml serve
+```
 
-## Core Idea
+Open `http://127.0.0.1:7433`.
 
-Instead of reading logs manually or relying on generic observability dashboards, Inferra:
+If your shell cannot find the installed `inferra` script, use `python -m cli` from the repository checkout:
 
-1. Ingests runtime events
-2. Correlates them across services and time
-3. Builds a causal graph of possible failure reasons
-4. Generates multiple hypotheses
-5. Scores and ranks them deterministically
-6. Uses an LLM only to explain results clearly
+```powershell
+python -m cli --config inferra.toml serve
+```
 
----
+## Ollama AI Setup
 
-## Key Feature
+AI is disabled by default. To use local Gemma 4 through Ollama:
 
-> Hypothesis-driven debugging, not log summarization.
+```powershell
+ollama pull gemma4:e4b
+inferra --config inferra.toml config set ai.enabled true
+inferra --config inferra.toml config set ai.model gemma4:e4b
+inferra --config inferra.toml ai test
+```
 
----
+Remote Ollama-compatible servers are configured through `ai.base_url` and optional `ai.token_env`.
 
-## Scope
+## Useful CLI Commands
 
-Optimized for:
-- Backend APIs
-- Dockerized services
-- Node.js / Python systems
+```powershell
+inferra check-config
+inferra init-db
+inferra ai status
+inferra ai models
+inferra collectors status
+inferra run-collectors
+inferra collect-host
+inferra collect-processes
+inferra collect-services --include-stopped
+inferra collect-eventlog --channel Application
+```
 
----
+Linux:
 
-## Architecture Overview
+```bash
+inferra collect-syslog --path /var/log/syslog
+inferra collect-journald --unit nginx.service --since "-1 hour"
+```
 
-Event Stream → Correlation Engine → Incident Clustering → Hypothesis Generator → Scoring Engine → Explanation Layer (LLM)
+Kubernetes:
 
----
+```bash
+python -m pip install -e ".[kubernetes]"
+inferra collect-kubernetes --namespace default
+```
 
-## Key Output
+## Collector Presets
 
-When a failure occurs, Inferra outputs:
+```powershell
+inferra config preset web-only
+inferra config preset windows-server
+inferra config preset linux-node
+inferra config preset kubernetes
+```
 
-- Primary cause hypothesis
-- Confidence score (deterministic)
-- Supporting evidence logs
-- Timeline of events
-- Alternative hypotheses
-- Suggested debugging steps
+Presets update collector configuration and `collectors.auto_start`.
 
----
+## Repository Layout
+
+The project intentionally uses a flat `src/` layout with top-level packages:
+
+```text
+src/
+  ai/
+  analysis/
+  collectors/
+  config/
+  core/
+  events/
+  explanation/
+  normalization/
+  reasoning/
+  runtime/
+  storage/
+  web/
+  app.py
+  cli.py
+  windows_service.py
+```
+
+There is no nested `inferra/` package directory.
+
+## Documentation
+
+- [Install Guide](docs/operations/install.md)
+- [AI Provider Setup](docs/operations/ai_provider.md)
+- [Collector Commands](docs/operations/collectors.md)
+- [Implementation Roadmap](docs/implementation_roadmap.md)
+- [Architecture Planning](docs/planning/full_build_architecture_plan.md)
+- [Architecture Decision Records](docs/adr/0001-local-first-guided-ai.md)
+
+## Development
+
+```powershell
+python -m pip install -e ".[dev]"
+python -m compileall src tests
+python -m pytest -q
+```
 
 ## Non-Goals
 
-- No system modification
-- No auto-remediation
-- No cloud dependency
-- No alerting system replacement
-
----
-
-## Why Inferra Exists
-
-Because debugging failures is not a data problem —  
-it is a reasoning problem.
-
-Inferra compresses that reasoning.
+- No autonomous remediation.
+- No hidden cloud dependency.
+- No replacement for full observability platforms.
+- No AI-based mutation of deterministic scores or incident evidence.

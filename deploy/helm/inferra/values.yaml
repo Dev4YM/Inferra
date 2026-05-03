@@ -1,0 +1,27 @@
+replicaCount: 1
+
+image:
+  repository: inferra
+  tag: "0.1.0"
+  pullPolicy: IfNotPresent
+
+service:
+  type: ClusterIP
+  port: 7433
+
+storage:
+  size: 5Gi
+
+config:
+  ai:
+    enabled: false
+    baseUrl: "http://ollama.default.svc.cluster.local:11434"
+    model: "gemma4:e4b"
+
+resources:
+  requests:
+    cpu: 100m
+    memory: 256Mi
+  limits:
+    cpu: "1"
+    memory: 1Gi
