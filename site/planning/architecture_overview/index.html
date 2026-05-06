@@ -1,0 +1,571 @@
+<!DOCTYPE html>
+<html class="writer-html5" lang="en" >
+<head>
+    <meta charset="utf-8" />
+    <meta http-equiv="X-UA-Compatible" content="IE=edge" />
+    <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+      <link rel="shortcut icon" href="../../img/favicon.ico" />
+    <title>Architecture overview - Inferra</title>
+    <link rel="stylesheet" href="../../css/theme.css" />
+    <link rel="stylesheet" href="../../css/theme_extra.css" />
+        <link rel="stylesheet" href="https://cdnjs.cloudflare.com/ajax/libs/highlight.js/11.8.0/styles/github.min.css" />
+    
+      <script>
+        // Current page data
+        var mkdocs_page_name = "Architecture overview";
+        var mkdocs_page_input_path = "planning\\architecture_overview.md";
+        var mkdocs_page_url = null;
+      </script>
+    
+    <!--[if lt IE 9]>
+      <script src="../../js/html5shiv.min.js"></script>
+    <![endif]-->
+      <script src="https://cdnjs.cloudflare.com/ajax/libs/highlight.js/11.8.0/highlight.min.js"></script>
+      <script>hljs.highlightAll();</script> 
+</head>
+
+<body class="wy-body-for-nav" role="document">
+
+  <div class="wy-grid-for-nav">
+    <nav data-toggle="wy-nav-shift" class="wy-nav-side stickynav">
+    <div class="wy-side-scroll">
+      <div class="wy-side-nav-search">
+          <a href="../.." class="icon icon-home"> Inferra
+        </a><div role="search">
+  <form id ="rtd-search-form" class="wy-form" action="../../search.html" method="get">
+      <input type="text" name="q" placeholder="Search docs" aria-label="Search docs" title="Type search term here" />
+  </form>
+</div>
+      </div>
+
+      <div class="wy-menu wy-menu-vertical" data-spy="affix" role="navigation" aria-label="Navigation menu">
+              <ul>
+                <li class="toctree-l1"><a class="reference internal" href="../..">Home</a>
+                </li>
+              </ul>
+              <p class="caption"><span class="caption-text">Operator guides</span></p>
+              <ul>
+                  <li class="toctree-l1"><a class="reference internal" href="../../operations/install/">Install</a>
+                  </li>
+                  <li class="toctree-l1"><a class="reference internal" href="../../operations/ai_provider/">AI provider</a>
+                  </li>
+                  <li class="toctree-l1"><a class="reference internal" href="../../operations/collectors/">Collectors</a>
+                  </li>
+                  <li class="toctree-l1"><a class="reference internal" href="../../operations/tuning/">Tuning</a>
+                  </li>
+                  <li class="toctree-l1"><a class="reference internal" href="../../operations/upgrade/">Upgrade</a>
+                  </li>
+                  <li class="toctree-l1"><a class="reference internal" href="../../operations/troubleshooting/">Troubleshooting</a>
+                  </li>
+                  <li class="toctree-l1"><a class="reference internal" href="../../operations/ci/">CI</a>
+                  </li>
+                  <li class="toctree-l1"><a class="reference internal" href="../../operations/release_signing/">Release signing</a>
+                  </li>
+              </ul>
+              <p class="caption"><span class="caption-text">Architecture Decision Records</span></p>
+              <ul>
+                  <li class="toctree-l1"><a class="reference internal" href="../../adr/0001-local-first-guided-ai/">ADR 0001 — Local-first guided AI</a>
+                  </li>
+                  <li class="toctree-l1"><a class="reference internal" href="../../adr/0002-flat-src-layout/">ADR 0002 — Flat src layout</a>
+                  </li>
+                  <li class="toctree-l1"><a class="reference internal" href="../../adr/0003-storage-protocols/">ADR 0003 — Storage protocols</a>
+                  </li>
+                  <li class="toctree-l1"><a class="reference internal" href="../../adr/0004-windows-first-collectors/">ADR 0004 — Windows-first collectors</a>
+                  </li>
+                  <li class="toctree-l1"><a class="reference internal" href="../../adr/0005-ai-presentation-only/">ADR 0005 — AI presentation-only</a>
+                  </li>
+                  <li class="toctree-l1"><a class="reference internal" href="../../adr/0006-ollama-gemma-default/">ADR 0006 — Ollama Gemma default</a>
+                  </li>
+              </ul>
+              <p class="caption"><span class="caption-text">Planning</span></p>
+              <ul class="current">
+                  <li class="toctree-l1 current"><a class="reference internal current" href="#">Architecture overview</a>
+    <ul class="current">
+    <li class="toctree-l2"><a class="reference internal" href="#design-philosophy">Design Philosophy</a>
+        <ul>
+    <li class="toctree-l3"><a class="reference internal" href="#where-determinism-does-and-does-not-hold">Where Determinism Does and Does Not Hold</a>
+    </li>
+        </ul>
+    </li>
+    <li class="toctree-l2"><a class="reference internal" href="#system-boundary">System Boundary</a>
+    </li>
+    <li class="toctree-l2"><a class="reference internal" href="#high-level-pipeline">High-Level Pipeline</a>
+    </li>
+    <li class="toctree-l2"><a class="reference internal" href="#module-boundaries">Module Boundaries</a>
+        <ul>
+    <li class="toctree-l3"><a class="reference internal" href="#module-dependency-rules">Module Dependency Rules</a>
+    </li>
+        </ul>
+    </li>
+    <li class="toctree-l2"><a class="reference internal" href="#concurrency-model">Concurrency Model</a>
+    </li>
+    <li class="toctree-l2"><a class="reference internal" href="#deployment-topology">Deployment Topology</a>
+    </li>
+    <li class="toctree-l2"><a class="reference internal" href="#scaling-path-not-now-but-not-never">Scaling Path (Not Now, But Not Never)</a>
+        <ul>
+    <li class="toctree-l3"><a class="reference internal" href="#whats-already-extensible">What's Already Extensible</a>
+    </li>
+    <li class="toctree-l3"><a class="reference internal" href="#what-would-require-architectural-changes">What Would Require Architectural Changes</a>
+    </li>
+    <li class="toctree-l3"><a class="reference internal" href="#design-rules-that-preserve-growth">Design Rules That Preserve Growth</a>
+    </li>
+        </ul>
+    </li>
+    <li class="toctree-l2"><a class="reference internal" href="#technology-stack">Technology Stack</a>
+    </li>
+    <li class="toctree-l2"><a class="reference internal" href="#startup-sequence">Startup Sequence</a>
+    </li>
+    <li class="toctree-l2"><a class="reference internal" href="#shutdown-sequence">Shutdown Sequence</a>
+    </li>
+    </ul>
+                  </li>
+                  <li class="toctree-l1"><a class="reference internal" href="../full_build_architecture_plan/">Full build architecture plan</a>
+                  </li>
+                  <li class="toctree-l1"><a class="reference internal" href="../data_flow_contracts/">Data flow contracts</a>
+                  </li>
+                  <li class="toctree-l1"><a class="reference internal" href="../implementation_index/">Implementation index</a>
+                  </li>
+              </ul>
+      </div>
+    </div>
+    </nav>
+
+    <section data-toggle="wy-nav-shift" class="wy-nav-content-wrap">
+      <nav class="wy-nav-top" role="navigation" aria-label="Mobile navigation menu">
+          <i data-toggle="wy-nav-top" class="fa fa-bars"></i>
+          <a href="../..">Inferra</a>
+        
+      </nav>
+      <div class="wy-nav-content">
+        <div class="rst-content"><div role="navigation" aria-label="breadcrumbs navigation">
+  <ul class="wy-breadcrumbs">
+    <li><a href="../.." class="icon icon-home" aria-label="Docs"></a></li>
+          <li class="breadcrumb-item">Planning</li>
+      <li class="breadcrumb-item active">Architecture overview</li>
+    <li class="wy-breadcrumbs-aside">
+    </li>
+  </ul>
+  <hr/>
+</div>
+          <div role="main" class="document" itemscope="itemscope" itemtype="http://schema.org/Article">
+            <div class="section" itemprop="articleBody">
+              
+                <h1 id="architecture-overview">Architecture Overview<a class="headerlink" href="#architecture-overview" title="Permanent link">&para;</a></h1>
+<p>Implementation mapping: see <a href="../implementation_index/">implementation index</a> for planning documents linked to <code>src/</code> packages.</p>
+<h2 id="design-philosophy">Design Philosophy<a class="headerlink" href="#design-philosophy" title="Permanent link">&para;</a></h2>
+<p>Inferra is a local-first runtime debugging system that operates on a strict separation of concerns:</p>
+<ul>
+<li><strong>Reproducible reasoning layer</strong>: Correlation, hypothesis generation, scoring, and ranking are performed by rule-based algorithms with explicitly defined heuristics. Given the same input <strong>and</strong> the same internal state (baselines, scoring weights), the system produces the same output. However, several components involve bounded uncertainty: anomaly detection baselines shift over time, log normalization uses heuristic parsers that may misclassify ambiguous input, and deduplication relies on template-based fingerprinting that is imperfect for novel log formats. The system tracks and surfaces this uncertainty through data quality scores (see below) rather than pretending inputs are always clean.</li>
+<li><strong>Probabilistic shell</strong>: An LLM layer exists solely to translate structured, already-decided results into human-readable explanations. It never influences decisions, rankings, or scores.</li>
+</ul>
+<p>This separation exists because debugging trust requires auditability. An operator must be able to trace <em>why</em> the system ranked hypothesis A above hypothesis B without encountering a black-box step. Where the reasoning layer relies on heuristics (pattern matching, temporal proximity thresholds, fingerprint templates), those heuristics are documented, configurable, and their uncertainty is propagated to downstream consumers.</p>
+<h3 id="where-determinism-does-and-does-not-hold">Where Determinism Does and Does Not Hold<a class="headerlink" href="#where-determinism-does-and-does-not-hold" title="Permanent link">&para;</a></h3>
+<table>
+<thead>
+<tr>
+<th>Component</th>
+<th>Deterministic?</th>
+<th>Source of Uncertainty</th>
+</tr>
+</thead>
+<tbody>
+<tr>
+<td>Log parsing / normalization</td>
+<td>Reproducible but heuristic</td>
+<td>Ambiguous formats, missing fields, encoding errors</td>
+</tr>
+<tr>
+<td>Deduplication</td>
+<td>Reproducible given same fingerprint logic</td>
+<td>Template may not correctly generalize novel log patterns</td>
+</tr>
+<tr>
+<td>Anomaly detection baselines</td>
+<td>Stateful — changes over time</td>
+<td>EMA-based learning means baselines shift with incoming data</td>
+</tr>
+<tr>
+<td>Correlation edge creation</td>
+<td>Reproducible given same inputs + thresholds</td>
+<td>Thresholds are heuristic; false correlations possible</td>
+</tr>
+<tr>
+<td>Signal detection</td>
+<td>Reproducible</td>
+<td>Tag-based pattern matching may miss unusual phrasing</td>
+</tr>
+<tr>
+<td>Hypothesis composition</td>
+<td>Reproducible</td>
+<td>Rule coverage is finite; novel failure modes may not match</td>
+</tr>
+<tr>
+<td>Scoring</td>
+<td>Reproducible given same weights</td>
+<td>Weights are tunable via feedback; default weights are heuristic</td>
+</tr>
+<tr>
+<td>Ranking</td>
+<td>Fully deterministic</td>
+<td>Pure sort — no uncertainty</td>
+</tr>
+<tr>
+<td>LLM explanation</td>
+<td>Non-deterministic</td>
+<td>Temperature &gt; 0; different runs produce different text</td>
+</tr>
+</tbody>
+</table>
+<hr />
+<h2 id="system-boundary">System Boundary<a class="headerlink" href="#system-boundary" title="Permanent link">&para;</a></h2>
+<p>Inferra runs entirely on the operator's machine (or within a single-node deployment). It has:</p>
+<ul>
+<li><strong>No outbound network dependency</strong> for core operation (LLM can optionally call a local model or a remote API, but core logic never requires it).</li>
+<li><strong>No write access</strong> to observed systems. Inferra is read-only with respect to the infrastructure it monitors.</li>
+<li><strong>No persistent external state</strong>. All state is local: SQLite for structured data, filesystem for logs and indexes.</li>
+</ul>
+<hr />
+<h2 id="high-level-pipeline">High-Level Pipeline<a class="headerlink" href="#high-level-pipeline" title="Permanent link">&para;</a></h2>
+<pre><code>┌─────────────────────────────────────────────────────────────────────────────┐
+│                           COLLECTION LAYER                                  │
+│  ┌──────────┐ ┌──────────┐ ┌──────────┐ ┌──────────┐ ┌──────────┐         │
+│  │ Docker   │ │ Journald │ │ File     │ │ Proc/Sys │ │ App      │         │
+│  │ Collector│ │ Collector│ │ Collector│ │ Collector│ │ Collector│         │
+│  └────┬─────┘ └────┬─────┘ └────┬─────┘ └────┬─────┘ └────┬─────┘         │
+│       └─────────────┴─────────────┴─────────────┴─────────────┘             │
+│                                   │                                         │
+│                          Backpressure Buffer                                │
+└──────────────────────────────────┬──────────────────────────────────────────┘
+                                   │ raw events
+                                   ▼
+┌──────────────────────────────────────────────────────────────────────────────┐
+│                        NORMALIZATION LAYER                                   │
+│  ┌────────────────┐  ┌────────────────┐  ┌────────────────┐                 │
+│  │ Log Parser      │  │ Schema Mapper  │  │ Field Enricher │                 │
+│  │ (regex/grok)    │  │ (canonical     │  │ (service_id,   │                 │
+│  │                 │  │  event schema) │  │  host, tags)   │                 │
+│  └───────┬────────┘  └───────┬────────┘  └───────┬────────┘                 │
+│          └───────────────────┴───────────────────┘                           │
+│                              │                                               │
+│              ┌───────────────┼───────────────┐                               │
+│              ▼               ▼               ▼                               │
+│     Deduplication     Noise Filter    Validation                             │
+└─────────────────────────────┬────────────────────────────────────────────────┘
+                              │ normalized events
+                              ▼
+┌──────────────────────────────────────────────────────────────────────────────┐
+│                          STORAGE LAYER                                       │
+│  ┌──────────────┐  ┌──────────────────┐  ┌────────────────┐                 │
+│  │ Event Store   │  │ Time-Series      │  │ Service Graph  │                 │
+│  │ (SQLite +     │  │ Ringbuffer       │  │ (in-memory     │                 │
+│  │  append log)  │  │ (metric windows) │  │  adjacency)    │                 │
+│  └──────┬───────┘  └───────┬──────────┘  └───────┬────────┘                 │
+└─────────┼──────────────────┼──────────────────────┼──────────────────────────┘
+          │                  │                      │
+          ▼                  ▼                      ▼
+┌──────────────────────────────────────────────────────────────────────────────┐
+│                         ANALYSIS LAYER                                       │
+│                                                                              │
+│  ┌─────────────────┐     ┌──────────────────┐     ┌──────────────────┐      │
+│  │ Anomaly          │     │ Correlation       │     │ Runtime Context  │      │
+│  │ Detector         │────▶│ Engine            │◀────│ Builder          │      │
+│  │                  │     │                   │     │                  │      │
+│  │ - baseline model │     │ - temporal join   │     │ - resource state │      │
+│  │ - deviation calc │     │ - service graph   │     │ - topology       │      │
+│  │ - spike detect   │     │   traversal       │     │ - config snap    │      │
+│  └─────────────────┘     │ - inference graph │     └──────────────────┘      │
+│                           │   construction    │                               │
+│                           └────────┬─────────┘                               │
+│                                    │ incident clusters                       │
+│                                    ▼                                         │
+│                     ┌──────────────────────────┐                             │
+│                     │ Incident Builder          │                             │
+│                     │ - cluster → incident      │                             │
+│                     │ - scope assignment        │                             │
+│                     │ - lifecycle management    │                             │
+│                     └────────────┬─────────────┘                             │
+└──────────────────────────────────┼───────────────────────────────────────────┘
+                                   │ incidents
+                                   ▼
+┌──────────────────────────────────────────────────────────────────────────────┐
+│                        REASONING LAYER                                       │
+│                                                                              │
+│  ┌──────────────────┐    ┌──────────────────┐    ┌──────────────────┐       │
+│  │ Hypothesis        │    │ Hypothesis        │    │ Scoring          │       │
+│  │ Generator         │───▶│ Validator         │───▶│ Engine           │       │
+│  │                   │    │                   │    │                  │       │
+│  │ - signal detect   │    │ - evidence check  │    │ - weighted sum   │       │
+│  │ - signal compose  │    │ - contradiction   │    │ - feedback tune  │       │
+│  │ - graph traversal │    │   detection       │    │ - calibration    │       │
+│  └──────────────────┘    │ - invalidation    │    └────────┬─────────┘       │
+│                           └──────────────────┘             │                 │
+│                                                            │ ranked list     │
+│                    ┌───────────────────────────┐           │                 │
+│                    │ Contradiction Handler      │◀──────────┘                 │
+│                    │ - conflicting evidence     │                             │
+│                    │ - ambiguity flagging       │                             │
+│                    └───────────────────────────┘                             │
+└──────────────────────────────────┬───────────────────────────────────────────┘
+                                   │ scored hypotheses + evidence
+                                   ▼
+┌──────────────────────────────────────────────────────────────────────────────┐
+│                       PRESENTATION LAYER                                     │
+│                                                                              │
+│  ┌──────────────────┐    ┌──────────────────┐    ┌──────────────────┐       │
+│  │ Explanation       │    │ Incident          │    │ UI Server        │       │
+│  │ Layer (LLM)       │    │ Lifecycle Mgr     │    │ (local web)      │       │
+│  │                   │    │                   │    │                  │       │
+│  │ - prompt build    │    │ - state machine   │    │ - dashboard      │       │
+│  │ - guardrails      │    │ - merge/split     │    │ - incident view  │       │
+│  │ - citation check  │    │ - resolution      │    │ - timeline       │       │
+│  └──────────────────┘    └──────────────────┘    │ - graph view     │       │
+│                                                   └──────────────────┘       │
+└──────────────────────────────────────────────────────────────────────────────┘
+</code></pre>
+<hr />
+<h2 id="module-boundaries">Module Boundaries<a class="headerlink" href="#module-boundaries" title="Permanent link">&para;</a></h2>
+<p>Each subsystem communicates through typed data contracts (see <code>data_flow_contracts.md</code>). No module holds a direct reference to another module's internals. Communication is via:</p>
+<ol>
+<li><strong>Function call with typed structs</strong> for synchronous in-process calls (collectors → normalization → storage).</li>
+<li><strong>Internal event bus</strong> for asynchronous decoupled flow (storage writes → analysis triggers).</li>
+<li><strong>Query interface</strong> for on-demand data access (hypothesis engine querying event store).</li>
+</ol>
+<h3 id="module-dependency-rules">Module Dependency Rules<a class="headerlink" href="#module-dependency-rules" title="Permanent link">&para;</a></h3>
+<ul>
+<li>Collection layer depends on: nothing (leaf inputs)</li>
+<li>Normalization layer depends on: event model schema</li>
+<li>Storage layer depends on: event model schema</li>
+<li>Analysis layer depends on: storage layer (read), event model</li>
+<li>Reasoning layer depends on: analysis layer output, storage layer (read)</li>
+<li>Presentation layer depends on: reasoning layer output, storage layer (read)</li>
+</ul>
+<p>Circular dependencies are forbidden. Data flows strictly downward through the pipeline.</p>
+<hr />
+<h2 id="concurrency-model">Concurrency Model<a class="headerlink" href="#concurrency-model" title="Permanent link">&para;</a></h2>
+<p>Inferra uses a single-process, multi-coroutine architecture (Python asyncio):</p>
+<ul>
+<li><strong>Collectors</strong> run as independent async tasks, each polling or tailing its source.</li>
+<li><strong>Normalization</strong> is a synchronous pipeline invoked per-event (low latency requirement: &lt;5ms per event).</li>
+<li><strong>Analysis</strong> runs on a periodic tick (configurable, default 5 seconds) or is triggered when event volume exceeds a threshold.</li>
+<li><strong>Reasoning</strong> is triggered per-incident (on incident creation or update).</li>
+<li><strong>Explanation</strong> is triggered on-demand (user requests explanation) or lazily on incident finalization.</li>
+</ul>
+<p>There is no multi-threading. All CPU-bound work (scoring, graph traversal) is designed to complete within single-digit milliseconds for typical incident sizes (&lt;1000 events).</p>
+<hr />
+<h2 id="deployment-topology">Deployment Topology<a class="headerlink" href="#deployment-topology" title="Permanent link">&para;</a></h2>
+<pre><code>Single machine:
+┌─────────────────────────────────────────┐
+│  Inferra Process                        │
+│  ├── Collector tasks (async)            │
+│  ├── Normalization pipeline (sync)      │
+│  ├── Analysis engine (periodic async)   │
+│  ├── Reasoning engine (event-driven)    │
+│  ├── Explanation layer (on-demand)      │
+│  └── Web UI server (localhost:PORT)     │
+│                                         │
+│  Storage:                               │
+│  ├── ./data/events.db    (SQLite)       │
+│  ├── ./data/incidents.db (SQLite)       │
+│  ├── ./data/metrics/     (ringbuffers)  │
+│  └── ./data/baselines/   (JSON)         │
+└─────────────────────────────────────────┘
+</code></pre>
+<p>No sidecar processes. No message queues. No container orchestration. One process, one machine, full control.</p>
+<hr />
+<h2 id="scaling-path-not-now-but-not-never">Scaling Path (Not Now, But Not Never)<a class="headerlink" href="#scaling-path-not-now-but-not-never" title="Permanent link">&para;</a></h2>
+<p>The single-machine design is the correct MVP architecture. But it must not become a cage. The following design decisions preserve future extensibility without adding current complexity:</p>
+<h3 id="whats-already-extensible">What's Already Extensible<a class="headerlink" href="#whats-already-extensible" title="Permanent link">&para;</a></h3>
+<table>
+<thead>
+<tr>
+<th>Aspect</th>
+<th>Current</th>
+<th>Growth Path</th>
+</tr>
+</thead>
+<tbody>
+<tr>
+<td>Collectors</td>
+<td>In-process async tasks</td>
+<td>Can become separate processes feeding a local queue (Unix socket, named pipe)</td>
+</tr>
+<tr>
+<td>Event storage</td>
+<td>SQLite</td>
+<td>Schema is compatible with PostgreSQL migration; query interface is abstracted behind <code>EventStore</code> protocol</td>
+</tr>
+<tr>
+<td>Analysis engine</td>
+<td>Single periodic tick</td>
+<td>Can be split into independent workers per strategy (correlation, anomaly, inference) communicating via shared storage</td>
+</tr>
+<tr>
+<td>Service graph</td>
+<td>In-memory NetworkX</td>
+<td>Graph structure is serializable; can move to a graph database if node count exceeds ~500</td>
+</tr>
+<tr>
+<td>Scoring weights</td>
+<td>Local JSON file</td>
+<td>Can become a shared config store if multiple instances need synchronized weights</td>
+</tr>
+</tbody>
+</table>
+<h3 id="what-would-require-architectural-changes">What Would Require Architectural Changes<a class="headerlink" href="#what-would-require-architectural-changes" title="Permanent link">&para;</a></h3>
+<table>
+<thead>
+<tr>
+<th>Aspect</th>
+<th>Current Limitation</th>
+<th>Required for Growth</th>
+</tr>
+</thead>
+<tbody>
+<tr>
+<td>Multi-host observation</td>
+<td>Single machine only</td>
+<td>Would need an event relay agent on each host, plus a central correlation instance</td>
+</tr>
+<tr>
+<td>Event throughput &gt;100/s</td>
+<td>Python single-process ceiling</td>
+<td>Would need Rust/Go collector sidecar writing to shared storage, Python processing off the hot path</td>
+</tr>
+<tr>
+<td>&gt;200 concurrent incidents</td>
+<td>CPU budget exceeded</td>
+<td>Would need incident prioritization or sharding by service group</td>
+</tr>
+<tr>
+<td>Multi-user access</td>
+<td>No auth, localhost only</td>
+<td>Would need auth layer, RBAC, and possibly a shared backend</td>
+</tr>
+</tbody>
+</table>
+<h3 id="design-rules-that-preserve-growth">Design Rules That Preserve Growth<a class="headerlink" href="#design-rules-that-preserve-growth" title="Permanent link">&para;</a></h3>
+<ol>
+<li><strong>All inter-module communication uses typed contracts</strong> (see <code>data_flow_contracts.md</code>). Modules can be replaced or relocated independently.</li>
+<li><strong>Storage is accessed through protocol interfaces</strong>, not direct SQL. Swapping SQLite for PostgreSQL requires implementing the same protocol.</li>
+<li><strong>No module holds in-memory state that isn't recoverable from storage.</strong> Crash → restart → resume. This is the foundation for any future distribution.</li>
+<li><strong>Configuration is external</strong> (<code>inferra.toml</code>), not compiled. Adding a new collector, changing storage backend, or switching LLM provider is a config change.</li>
+</ol>
+<p>The honest position: Inferra v1 is a single-machine tool. It will remain performant and valuable at that scale. If it needs to grow, the abstractions are in place to grow it without a rewrite — but the growth itself requires engineering work that isn't free.</p>
+<hr />
+<h2 id="technology-stack">Technology Stack<a class="headerlink" href="#technology-stack" title="Permanent link">&para;</a></h2>
+<table>
+<thead>
+<tr>
+<th>Component</th>
+<th>Technology</th>
+<th>Rationale</th>
+</tr>
+</thead>
+<tbody>
+<tr>
+<td>Language</td>
+<td>Python 3.11+</td>
+<td>Ecosystem for log parsing, async, data processing</td>
+</tr>
+<tr>
+<td>Storage</td>
+<td>SQLite (WAL mode)</td>
+<td>Local-first, zero-config, concurrent reads</td>
+</tr>
+<tr>
+<td>Event bus</td>
+<td>Internal asyncio queues</td>
+<td>No external dependencies</td>
+</tr>
+<tr>
+<td>Web UI</td>
+<td>FastAPI + static frontend</td>
+<td>Minimal footprint, WebSocket for live updates</td>
+</tr>
+<tr>
+<td>LLM integration</td>
+<td>Pluggable (local ollama / remote API)</td>
+<td>User choice, not a hard dependency</td>
+</tr>
+<tr>
+<td>Graph operations</td>
+<td>NetworkX (in-memory)</td>
+<td>Sufficient for single-machine scale</td>
+</tr>
+<tr>
+<td>Metric storage</td>
+<td>Custom ringbuffer</td>
+<td>Fixed memory, no unbounded growth</td>
+</tr>
+</tbody>
+</table>
+<hr />
+<h2 id="startup-sequence">Startup Sequence<a class="headerlink" href="#startup-sequence" title="Permanent link">&para;</a></h2>
+<ol>
+<li>Load configuration (<code>inferra.toml</code>)</li>
+<li>Initialize storage (create SQLite tables if missing, verify schema version)</li>
+<li>Load baseline models from <code>./data/baselines/</code> (or initialize empty)</li>
+<li>Discover and start collectors (based on config: which Docker socket, which log paths, etc.)</li>
+<li>Start normalization pipeline consumer</li>
+<li>Start analysis engine tick loop</li>
+<li>Start web UI server</li>
+<li>Log: <code>Inferra ready. Observing.</code></li>
+</ol>
+<hr />
+<h2 id="shutdown-sequence">Shutdown Sequence<a class="headerlink" href="#shutdown-sequence" title="Permanent link">&para;</a></h2>
+<ol>
+<li>Signal collectors to stop (drain in-flight events)</li>
+<li>Flush normalization pipeline</li>
+<li>Persist any in-memory baselines to disk</li>
+<li>Commit pending SQLite transactions</li>
+<li>Close web UI server</li>
+<li>Exit</li>
+</ol>
+              
+            </div>
+          </div><footer>
+    <div class="rst-footer-buttons" role="navigation" aria-label="Footer Navigation">
+        <a href="../../adr/0006-ollama-gemma-default/" class="btn btn-neutral float-left" title="ADR 0006 — Ollama Gemma default"><span class="icon icon-circle-arrow-left"></span> Previous</a>
+        <a href="../full_build_architecture_plan/" class="btn btn-neutral float-right" title="Full build architecture plan">Next <span class="icon icon-circle-arrow-right"></span></a>
+    </div>
+
+  <hr/>
+
+  <div role="contentinfo">
+    <!-- Copyright etc -->
+  </div>
+
+  Built with <a href="https://www.mkdocs.org/">MkDocs</a> using a <a href="https://github.com/readthedocs/sphinx_rtd_theme">theme</a> provided by <a href="https://readthedocs.org">Read the Docs</a>.
+</footer>
+          
+        </div>
+      </div>
+
+    </section>
+
+  </div>
+
+  <div class="rst-versions" role="note" aria-label="Versions">
+  <span class="rst-current-version" data-toggle="rst-current-version">
+    
+    
+      <span><a href="../../adr/0006-ollama-gemma-default/" style="color: #fcfcfc">&laquo; Previous</a></span>
+    
+    
+      <span><a href="../full_build_architecture_plan/" style="color: #fcfcfc">Next &raquo;</a></span>
+    
+  </span>
+</div>
+    <script src="../../js/jquery-3.6.0.min.js"></script>
+    <script>var base_url = "../..";</script>
+    <script src="../../js/theme_extra.js"></script>
+    <script src="../../js/theme.js"></script>
+      <script src="../../search/main.js"></script>
+    <script>
+        jQuery(function () {
+            SphinxRtdTheme.Navigation.enable(true);
+        });
+    </script>
+
+</body>
+</html>

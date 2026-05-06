@@ -1,0 +1,270 @@
+<!DOCTYPE html>
+<html class="writer-html5" lang="en" >
+<head>
+    <meta charset="utf-8" />
+    <meta http-equiv="X-UA-Compatible" content="IE=edge" />
+    <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+      <link rel="shortcut icon" href="../img/favicon.ico" />
+    <title>Inferra Implementation Roadmap - Inferra</title>
+    <link rel="stylesheet" href="../css/theme.css" />
+    <link rel="stylesheet" href="../css/theme_extra.css" />
+        <link rel="stylesheet" href="https://cdnjs.cloudflare.com/ajax/libs/highlight.js/11.8.0/styles/github.min.css" />
+    
+      <script>
+        // Current page data
+        var mkdocs_page_name = "Inferra Implementation Roadmap";
+        var mkdocs_page_input_path = "implementation_roadmap.md";
+        var mkdocs_page_url = null;
+      </script>
+    
+    <!--[if lt IE 9]>
+      <script src="../js/html5shiv.min.js"></script>
+    <![endif]-->
+      <script src="https://cdnjs.cloudflare.com/ajax/libs/highlight.js/11.8.0/highlight.min.js"></script>
+      <script>hljs.highlightAll();</script> 
+</head>
+
+<body class="wy-body-for-nav" role="document">
+
+  <div class="wy-grid-for-nav">
+    <nav data-toggle="wy-nav-shift" class="wy-nav-side stickynav">
+    <div class="wy-side-scroll">
+      <div class="wy-side-nav-search">
+          <a href=".." class="icon icon-home"> Inferra
+        </a><div role="search">
+  <form id ="rtd-search-form" class="wy-form" action="../search.html" method="get">
+      <input type="text" name="q" placeholder="Search docs" aria-label="Search docs" title="Type search term here" />
+  </form>
+</div>
+      </div>
+
+      <div class="wy-menu wy-menu-vertical" data-spy="affix" role="navigation" aria-label="Navigation menu">
+              <ul>
+                <li class="toctree-l1"><a class="reference internal" href="..">Home</a>
+                </li>
+              </ul>
+              <p class="caption"><span class="caption-text">Operator guides</span></p>
+              <ul>
+                  <li class="toctree-l1"><a class="reference internal" href="../operations/install/">Install</a>
+                  </li>
+                  <li class="toctree-l1"><a class="reference internal" href="../operations/ai_provider/">AI provider</a>
+                  </li>
+                  <li class="toctree-l1"><a class="reference internal" href="../operations/collectors/">Collectors</a>
+                  </li>
+                  <li class="toctree-l1"><a class="reference internal" href="../operations/tuning/">Tuning</a>
+                  </li>
+                  <li class="toctree-l1"><a class="reference internal" href="../operations/upgrade/">Upgrade</a>
+                  </li>
+                  <li class="toctree-l1"><a class="reference internal" href="../operations/troubleshooting/">Troubleshooting</a>
+                  </li>
+                  <li class="toctree-l1"><a class="reference internal" href="../operations/ci/">CI</a>
+                  </li>
+                  <li class="toctree-l1"><a class="reference internal" href="../operations/release_signing/">Release signing</a>
+                  </li>
+              </ul>
+              <p class="caption"><span class="caption-text">Architecture Decision Records</span></p>
+              <ul>
+                  <li class="toctree-l1"><a class="reference internal" href="../adr/0001-local-first-guided-ai/">ADR 0001 — Local-first guided AI</a>
+                  </li>
+                  <li class="toctree-l1"><a class="reference internal" href="../adr/0002-flat-src-layout/">ADR 0002 — Flat src layout</a>
+                  </li>
+                  <li class="toctree-l1"><a class="reference internal" href="../adr/0003-storage-protocols/">ADR 0003 — Storage protocols</a>
+                  </li>
+                  <li class="toctree-l1"><a class="reference internal" href="../adr/0004-windows-first-collectors/">ADR 0004 — Windows-first collectors</a>
+                  </li>
+                  <li class="toctree-l1"><a class="reference internal" href="../adr/0005-ai-presentation-only/">ADR 0005 — AI presentation-only</a>
+                  </li>
+                  <li class="toctree-l1"><a class="reference internal" href="../adr/0006-ollama-gemma-default/">ADR 0006 — Ollama Gemma default</a>
+                  </li>
+              </ul>
+              <p class="caption"><span class="caption-text">Planning</span></p>
+              <ul>
+                  <li class="toctree-l1"><a class="reference internal" href="../planning/architecture_overview/">Architecture overview</a>
+                  </li>
+                  <li class="toctree-l1"><a class="reference internal" href="../planning/full_build_architecture_plan/">Full build architecture plan</a>
+                  </li>
+                  <li class="toctree-l1"><a class="reference internal" href="../planning/data_flow_contracts/">Data flow contracts</a>
+                  </li>
+                  <li class="toctree-l1"><a class="reference internal" href="../planning/implementation_index/">Implementation index</a>
+                  </li>
+              </ul>
+      </div>
+    </div>
+    </nav>
+
+    <section data-toggle="wy-nav-shift" class="wy-nav-content-wrap">
+      <nav class="wy-nav-top" role="navigation" aria-label="Mobile navigation menu">
+          <i data-toggle="wy-nav-top" class="fa fa-bars"></i>
+          <a href="..">Inferra</a>
+        
+      </nav>
+      <div class="wy-nav-content">
+        <div class="rst-content"><div role="navigation" aria-label="breadcrumbs navigation">
+  <ul class="wy-breadcrumbs">
+    <li><a href=".." class="icon icon-home" aria-label="Docs"></a></li>
+      <li class="breadcrumb-item active">Inferra Implementation Roadmap</li>
+    <li class="wy-breadcrumbs-aside">
+    </li>
+  </ul>
+  <hr/>
+</div>
+          <div role="main" class="document" itemscope="itemscope" itemtype="http://schema.org/Article">
+            <div class="section" itemprop="articleBody">
+              
+                <h1 id="inferra-implementation-roadmap">Inferra Implementation Roadmap<a class="headerlink" href="#inferra-implementation-roadmap" title="Permanent link">&para;</a></h1>
+<p>This file is the living checklist for building Inferra in deep, complete slices while keeping the repository ready for GitHub.</p>
+<h2 id="current-slice-collector-coverage-operations">Current Slice: Collector Coverage + Operations<a class="headerlink" href="#current-slice-collector-coverage-operations" title="Permanent link">&para;</a></h2>
+<ul>
+<li>[x] Canonicalize storage behind package-level protocols and split SQLite/JSON implementations.</li>
+<li>[x] Keep the flattened <code>src/</code> layout with no nested <code>inferra/</code> package.</li>
+<li>[x] Add an AI subsystem for provider logic, model registry, prompting, redaction, and explanation service.</li>
+<li>[x] Add Ollama local/remote HTTP support with optional bearer token from an environment variable.</li>
+<li>[x] Add verified Gemma 3 and Gemma 4 model registry from the official Ollama tag list.</li>
+<li>[x] Upgrade Ollama provider to async aiohttp, streaming chat/generate, streamed pull progress, and health probes.</li>
+<li>[x] Add first-run setup and AI control commands to the CLI.</li>
+<li>[x] Make <code>inferra.toml</code> the canonical typed config surface with round-trip CLI editing and startup checks.</li>
+<li>[x] Expand the CLI into a grouped dispatcher with <code>serve</code>, <code>init-db</code>, completion generation, API-backed collector control, one-shot <code>collect-*</code> commands, and JSON output for every command.</li>
+<li>[x] Add web API endpoints for AI status, model registry, incident explanation, and incident chat.</li>
+<li>[x] Full REST surface from architecture plan: <code>GET/PUT /api/config</code>, <code>GET /api/version</code>, optional <code>GET /api/metrics</code> (Prometheus), <code>GET /api/ai/trace/{id}</code>, <code>POST</code> feedback, anomaly and NL search routes; localhost loopback guard plus optional bearer auth from <code>[server] auth_token_env</code>; CORS from config; per-IP HTTP and per-connection WebSocket token buckets for chat/explain; <code>WebSocket /ws</code> with incident lifecycle, <code>event_count</code>, <code>collector_health</code>, <code>explanation_ready</code>, <code>baseline_status</code>, and <code>ai_stream_token</code> messages plus client control messages (<code>subscribe_incident</code>, <code>unsubscribe_incident</code>, <code>resolve_incident</code>, <code>chat_send</code>, <code>explain_request</code>).</li>
+<li>[x] Add tests for config, registry, redaction, Ollama provider behavior, CLI setup, and AI web endpoints.</li>
+</ul>
+<h2 id="next-slices">Next Slices<a class="headerlink" href="#next-slices" title="Permanent link">&para;</a></h2>
+<ul>
+<li>[x] Collector depth: Windows Event Log, service/process state, performance counters, Linux journald/syslog, Docker, Kubernetes events, and app HTTP ingest.</li>
+<li>[x] Portable process snapshot collector with CPU/memory threshold crossings and metric ringbuffer writes.</li>
+<li>[x] Windows service collector emitting state-change events only.</li>
+<li>[x] Windows Event Log bookmark persistence and channel metadata enrichment.</li>
+<li>[x] Linux journald/syslog collectors with cursor or inode rotation tracking.</li>
+<li>[x] File collector glob, multiline, and filename-derived service identity support.</li>
+<li>[x] Docker event and log collection.</li>
+<li>[x] Kubernetes event/workload collectors with restart and OOM detection.</li>
+<li>[x] App HTTP collector in mounted and standalone modes.</li>
+<li>[x] Normalization depth: parser coverage, enrichment, validation, and stable fingerprinting.</li>
+<li>[x] Parser package for JSON lines, syslog RFC 3164/5424, Windows Event Log, Kubernetes, Docker, and generic text.</li>
+<li>[x] Deterministic host/service/process enrichment with config-based overrides and mappings.</li>
+<li>[x] Validation for timestamp bounds, message truncation, and structured payload compaction.</li>
+<li>[x] Stable template-based fingerprinting plus fixture-driven normalization and performance tests.</li>
+<li>[x] Reasoning depth: anomaly scoring, causal graph traversal, contradiction handling, confidence calibration.</li>
+<li>[x] Signal detectors, inference graph builder (DAG with strategy edges and budgets), hypothesis composer with custom rules merge, <code>HypothesisEngine</code> replacing the legacy simple engine, CLI <code>reason-incident</code>, and fixture-driven coverage plus 100-run determinism tests.</li>
+<li>[x] Deterministic anomaly scoring for severity, resource tags, host metrics, and process metrics.</li>
+<li>[x] Baseline-backed anomaly signals: per-(service, fingerprint) EMA, closed-bucket metrics, spike z-score, sustained mean, heartbeat absence, JSON persistence under <code>data_dir/baselines/</code>, and <code>GET /api/anomaly/{service}/status</code>.</li>
+<li>[x] Runtime context snapshot builder (<code>runtime.context</code>) for read-only host, process, disk, and Docker summaries fed to correlation-style consumers.</li>
+<li>[x] Causal graph traversal for dependency proximity and root-cause event selection.</li>
+<li>[x] Weighted hypothesis scoring (six components from <code>reasoning/scoring.py</code>), <code>ContradictionHandler</code> rules, validation gates, per-bucket calibration with staleness-aware labels, bounded <code>WeightStore</code> feedback updates, <code>POST /api/incidents/{id}/feedback</code>, <code>inferra reset-weights</code>, and <code>inferra calibration show</code>.</li>
+<li>[x] Web UI: multi-view console (dashboard, incidents workbench, virtualized logs, services, per-collector controls, settings), vendored Tailwind build (<code>scripts/build-ui.sh</code>), native ES modules under <code>src/web/static/js/</code>, dark theme + reduced-motion styling, live <code>/ws</code> updates (including <code>ai_stream_token</code> on Chat), optional Playwright smoke (<code>pip install -e ".[ui]"</code> then <code>pytest</code>).</li>
+<li>[x] Packaging: Windows service/installer, Linux systemd unit, Docker image, Helm chart, macOS launch agent.</li>
+<li>[x] Windows <code>windows_service</code> helper (<code>install</code> / <code>remove</code> / <code>start</code> / <code>stop</code> / <code>debug</code>) with <code>service_runtime.json</code> for <code>--config</code> / <code>--data-dir</code>, pywin32 subprocess guard, and <code>deploy/windows/install-service.ps1</code> (ProgramData layout, ACLs, optional <code>-AllowFirewall</code>).</li>
+<li>[x] PyInstaller <code>deploy/windows/inferra.spec</code> + <code>deploy/windows/pyi_entry.py</code> one-file <code>inferra.exe</code>.</li>
+<li>[x] Linux <code>deploy/systemd/inferra.service</code> (<code>DynamicUser</code>, <code>ProtectSystem=strict</code>, <code>StateDirectory</code>) and <code>deploy/linux/fpm-package.sh</code> (.deb / .rpm via fpm).</li>
+<li>[x] Root <code>Dockerfile</code> (python:3.12-slim, non-root), <code>compose.yaml</code>, <code>.dockerignore</code>.</li>
+<li>[x] Helm chart: <code>values.yaml</code> collectors.kubernetes, ServiceAccount, least-privilege ClusterRole/RBAC, optional ServiceMonitor.</li>
+<li>[x] macOS <code>deploy/macos/install.sh</code> and <code>uninstall.sh</code> for <code>com.inferra.agent</code>.</li>
+<li>[x] CI matrix (Windows, Linux, macOS; Python 3.11/3.12), Helm <code>helm template</code> gate, <code>release.yml</code> (wheel/sdist, SBOM, Helm tgz, Windows exe, GHCR multi-arch image, cosign keyless + documented signtool path).</li>
+<li>[x] Documentation: install (all target platforms), AI provider, collectors, tuning, upgrade, troubleshooting, CI and release operator notes; ADRs 0001-0006; planning index; <code>mkdocs build</code> via <code>python -m pip install -e ".[docs]"</code>.</li>
+<li>[x] Install guide.</li>
+<li>[x] AI provider setup guide.</li>
+<li>[x] Collector command guide.</li>
+<li>[x] Architecture decision records.</li>
+<li>[x] Service supervision and health.</li>
+<li>[x] Long-running collector supervisor with retry/backoff.</li>
+<li>[x] <code>run-collectors</code> CLI command.</li>
+<li>[x] Collector health API and dashboard panel.</li>
+<li>[x] Configurable service mode presets.</li>
+<li>[x] Operator controls.</li>
+<li>[x] Start/stop supervised collectors from API and web UI.</li>
+<li>
+<p>[x] CLI collector status command.</p>
+</li>
+<li>
+<p>[x] SQLite storage layer: production-grade multi-day continuous operation.</p>
+</li>
+<li>[x] Migration framework with ordered Migration objects, version-aware upgrades, and downgrade refusal.</li>
+<li>[x] Full events.db schema: events, raw_events, collector_state, fingerprint_seen, dedup_window, schema_version.</li>
+<li>[x] Full incidents.db schema: incidents, incident_events, incident_clusters, hypotheses, explanations, feedback, incident_state_log, schema_version.</li>
+<li>[x] All read-path indexes: service_id+timestamp, severity+timestamp, fingerprint, incident_id composites.</li>
+<li>[x] WAL tuning: journal_mode=WAL, synchronous=NORMAL, temp_store=MEMORY, mmap_size (configurable), busy_timeout=5000, auto_vacuum=INCREMENTAL.</li>
+<li>[x] Connection pool: single writer + per-thread readers, BEGIN IMMEDIATE transaction context manager.</li>
+<li>[x] Retention: event pruning daemon + shutdown prune; incident archival to separate database.</li>
+<li>[x] Integrity: startup PRAGMA integrity_check, CLI <code>inferra storage verify/vacuum/backup</code>.</li>
+<li>[x] CLI: <code>inferra init-db</code> idempotently creates or upgrades schemas.</li>
+<li>[x] No raw SQL outside src/storage/.</li>
+<li>
+<p>[x] Tests: migration from empty to current, v1-&gt;current, v2-&gt;current fixture, retention, integrity check failure, concurrent 4-thread insert.</p>
+</li>
+<li>
+<p>[x] Event deduplication and noise filtering.</p>
+</li>
+<li>[x] DedupTracker: sliding window by fingerprint with count, first/last timestamp.</li>
+<li>[x] Severity escalation splits: INFO-&gt;WARN-&gt;ERROR starts a new window.</li>
+<li>[x] Periodic SUMMARY events every configurable interval with count and sample event id.</li>
+<li>[x] Bounded memory: max_tracked_fingerprints with LRU eviction via OrderedDict.</li>
+<li>[x] NoiseFilter: static blocklist with severity_max guard.</li>
+<li>[x] Static allowlist overrides blocklist and adaptive filter.</li>
+<li>[x] Adaptive filter: per-fingerprint rate and coefficient-of-variation, demote stable high-rate to routine.</li>
+<li>[x] Severity &gt;= always_keep_severity never demoted (ERROR/CRITICAL protected).</li>
+<li>[x] Noise registry: persist learned routines to disk, expire after registry_expiry_days.</li>
+<li>[x] Integration: InferraRuntime.ingest_raw pipeline: normalize -&gt; dedup.check -&gt; noise_filter.annotate -&gt; should_store -&gt; event_store.</li>
+<li>[x] Dashboard /api/dashboard exposes dedup suppressed counts and noise routine counts.</li>
+<li>[x] Determinism tests: same fixture produces identical stored event ids across 100 runs.</li>
+<li>[x] 1000 identical INFO events collapse to first + periodic summaries.</li>
+<li>[x] ERROR never demoted even under adaptive filter.</li>
+<li>
+<p>[x] Allowlist always wins over blocklist.</p>
+</li>
+<li>
+<p>[x] Correlation engine and incident lifecycle: temporal half-life decay, topology-aware edges (dependency_propagation, shared_fate), shared-service edges, cascade detection, persisted clusters with correlation edges and reason codes; <code>IncidentLifecycleManager</code> replaces the ad-hoc analyzer with OPEN through INVESTIGATING/EXPLAINED/RESOLVED/MERGED, merge candidates by overlapping services and time proximity, staleness to RESOLVED, auto-split on oversized clusters; deterministic <code>primary_service</code> (severity weighted by topology centrality) and sorted <code>affected_services</code>; <code>GET /api/incidents/{id}/state-log</code>; cascade and no-topology fixtures plus staleness and 100-run incident id determinism tests.</p>
+</li>
+<li>
+<p>[x] Explanation layer (no-LLM path): structured template payload with stable <code>explanation_id</code>, <code>sanitize_plaintext</code> + <code>SanitizationReport</code>, guardrails (services, timestamps, causal phrases, overconfidence), SQLite explanation rows keyed by <code>hypotheses_hash</code> + <code>events_hash_head</code>, and API cache hits before regenerating.</p>
+</li>
+<li>[x] AI presentation layer: per-surface prompt contracts with Pydantic JSON validation and schema-fallback to template explanations; streaming Ollama aggregation; persisted AI audit traces and chat history in <code>incidents.db</code>; natural-language event search via <code>GET /api/search/natural</code> with configurable confidence threshold and <code>422</code> suggestions when confidence is low.</li>
+</ul>
+<h2 id="operating-rules">Operating Rules<a class="headerlink" href="#operating-rules" title="Permanent link">&para;</a></h2>
+<ul>
+<li>CI gates documented in <code>docs/operations/ci.md</code>: matrix-marked pytest on Ubuntu/macOS/Windows, dedicated perf job with <code>perf_report.json</code>, coverage thresholds on reasoning/analysis/storage/normalization/ai via <code>[tool.coverage.report]</code> in <code>pyproject.toml</code>.</li>
+<li>Determinism hashes live under <code>tests/determinism/</code>; performance budgets under <code>tests/perf/</code> (<code>pytest.mark.perf</code>).</li>
+<li>AI is guided only: it explains, summarizes, chats, and suggests checks.</li>
+<li>Deterministic evidence, scoring, and incident ranking remain authoritative.</li>
+<li>No model weight is pulled automatically without explicit CLI confirmation or <code>--yes --pull</code>.</li>
+<li>Remote AI means an Ollama-compatible HTTP server configured by base URL and optional token environment variable.</li>
+</ul>
+              
+            </div>
+          </div><footer>
+
+  <hr/>
+
+  <div role="contentinfo">
+    <!-- Copyright etc -->
+  </div>
+
+  Built with <a href="https://www.mkdocs.org/">MkDocs</a> using a <a href="https://github.com/readthedocs/sphinx_rtd_theme">theme</a> provided by <a href="https://readthedocs.org">Read the Docs</a>.
+</footer>
+          
+        </div>
+      </div>
+
+    </section>
+
+  </div>
+
+  <div class="rst-versions" role="note" aria-label="Versions">
+  <span class="rst-current-version" data-toggle="rst-current-version">
+    
+    
+    
+  </span>
+</div>
+    <script src="../js/jquery-3.6.0.min.js"></script>
+    <script>var base_url = "..";</script>
+    <script src="../js/theme_extra.js"></script>
+    <script src="../js/theme.js"></script>
+      <script src="../search/main.js"></script>
+    <script>
+        jQuery(function () {
+            SphinxRtdTheme.Navigation.enable(true);
+        });
+    </script>
+
+</body>
+</html>

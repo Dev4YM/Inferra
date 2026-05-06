@@ -1,45 +1,86 @@
+from __future__ import annotations
+
+import pytest
+from aioresponses import aioresponses
+from yarl import URL
+
+from ai.ollama import AsyncOllamaProvider, OllamaRemoteDisabledError
 from config.model import AIConfig
-from ai.ollama import OllamaProvider
 
 
-class FakeOllamaProvider(OllamaProvider):
-    def __init__(self, config):
-        super().__init__(config)
-        self.calls = []
-
-    def _request_json(self, method, path, payload=None, timeout=30.0):
-        self.calls.append((method, path, payload, timeout, self._headers()))
-        if path == "/api/tags":
-            return {"models": [{"name": "gemma4:e4b"}, {"name": "llama3.2"}]}
-        if path == "/api/chat":
-            return {"message": {"content": "ready"}}
-        if path == "/api/pull":
-            return {"status": "success"}
-        if path == "/api/show":
-            return {"model": payload["model"]}
-        return {}
+BASE_URL = "http://127.0.0.1:11434"
 
 
-def test_ollama_provider_lists_models_and_status(monkeypatch):
+@pytest.mark.asyncio
+async def test_ollama_provider_streaming_chat_collects_content() -> None:
+    provider = AsyncOllamaProvider(AIConfig(enabled=True, model="gemma4:e4b"))
+    body = (
+        b'{"message":{"content":"ready"},"done":false}\n'
+        b'{"message":{"content":" now"},"done":false}\n'
+        b'{"message":{"content":""},"done":true}\n'
+    )
+    with aioresponses() as mocked:
+        mocked.post(f"{BASE_URL}/api/chat", body=body)
+
+        chunks = [chunk async for chunk in provider.chat_stream([{"role": "user", "content": "hello"}])]
+
+    assert "".join(chunk.content for chunk in chunks) == "ready now"
+    assert chunks[-1].done is True
+
+
+@pytest.mark.asyncio
+async def test_ollama_provider_pull_progress_emits_incremental_events() -> None:
+    provider = AsyncOllamaProvider(AIConfig(enabled=True, model="gemma4:e4b"))
+    body = (
+        b'{"status":"pulling manifest"}\n'
+        b'{"status":"downloading","digest":"sha256:abc","total":100,"completed":25}\n'
+        b'{"status":"downloading","digest":"sha256:abc","total":100,"completed":100}\n'
+        b'{"status":"success"}\n'
+    )
+    with aioresponses() as mocked:
+        mocked.post(f"{BASE_URL}/api/pull", body=body)
+
+        progress = [event async for event in provider.pull_model_stream("gemma4:e4b")]
+
+    assert [event.status for event in progress] == ["pulling manifest", "downloading", "downloading", "success"]
+    assert progress[1].percent == 25.0
+    assert progress[2].percent == 100.0
+
+
+@pytest.mark.asyncio
+async def test_ollama_provider_status_unavailable_when_connection_refused() -> None:
+    provider = AsyncOllamaProvider(AIConfig(enabled=True, base_url="http://127.0.0.1:9"))
+
+    status = await provider.status()
+
+    assert status.available is False
+    assert status.reason == "connection_error"
+    assert "Could not connect to Ollama" in (status.error or "")
+
+
+@pytest.mark.asyncio
+async def test_bearer_token_injected_only_when_env_is_configured_and_populated(monkeypatch: pytest.MonkeyPatch) -> None:
+    monkeypatch.delenv("OLLAMA_TOKEN", raising=False)
+    provider = AsyncOllamaProvider(AIConfig(enabled=True, token_env="OLLAMA_TOKEN"))
+    with aioresponses() as mocked:
+        mocked.get(f"{BASE_URL}/api/tags", payload={"models": []})
+
+        assert await provider.list_models() == []
+
+        request = mocked.requests[("GET", URL(f"{BASE_URL}/api/tags"))][0]
+        assert "Authorization" not in request.kwargs["headers"]
+
     monkeypatch.setenv("OLLAMA_TOKEN", "secret-token")
-    provider = FakeOllamaProvider(AIConfig(enabled=True, token_env="OLLAMA_TOKEN"))
+    provider = AsyncOllamaProvider(AIConfig(enabled=True, token_env="OLLAMA_TOKEN"))
+    with aioresponses() as mocked:
+        mocked.get(f"{BASE_URL}/api/tags", payload={"models": []})
 
-    assert provider.list_models() == ["gemma4:e4b", "llama3.2"]
-    status = provider.status()
+        assert await provider.list_models() == []
 
-    assert status.available is True
-    assert status.installed is True
-    assert provider.calls[-1][-1]["Authorization"] == "Bearer secret-token"
+        request = mocked.requests[("GET", URL(f"{BASE_URL}/api/tags"))][0]
+        assert request.kwargs["headers"]["Authorization"] == "Bearer secret-token"
 
 
-def test_ollama_provider_chat_and_pull_payloads():
-    provider = FakeOllamaProvider(AIConfig(enabled=True, model="gemma4:e2b"))
-
-    assert provider.chat([{"role": "user", "content": "hello"}]) == "ready"
-    assert provider.pull_model()["status"] == "success"
-
-    chat_call = provider.calls[0]
-    pull_call = provider.calls[1]
-    assert chat_call[2]["model"] == "gemma4:e2b"
-    assert chat_call[2]["stream"] is False
-    assert pull_call[2] == {"model": "gemma4:e2b", "stream": False}
+def test_allow_remote_false_blocks_non_local_base_url() -> None:
+    with pytest.raises(OllamaRemoteDisabledError):
+        AsyncOllamaProvider(AIConfig(enabled=True, base_url="https://ollama.example.com", allow_remote=False))

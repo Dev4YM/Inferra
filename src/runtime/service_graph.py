@@ -9,6 +9,7 @@ import json
 class ServiceGraph:
     dependencies: dict[str, set[str]] = field(default_factory=dict)
     dependents: dict[str, set[str]] = field(default_factory=dict)
+    colocated: dict[str, set[str]] = field(default_factory=dict)
 
     def add_relation(self, source: str, target: str, relation_type: str = "depends_on") -> None:
         source = source.strip().lower()
@@ -18,6 +19,17 @@ class ServiceGraph:
         self.dependencies.setdefault(source, set()).add(target)
         self.dependents.setdefault(target, set()).add(source)
 
+    def add_colocation(self, left: str, right: str) -> None:
+        left = left.strip().lower()
+        right = right.strip().lower()
+        if not left or not right or left == right:
+            return
+        self.colocated.setdefault(left, set()).add(right)
+        self.colocated.setdefault(right, set()).add(left)
+
+    def get_colocated(self, service_id: str) -> set[str]:
+        return set(self.colocated.get(service_id, set()))
+
     def get_dependencies(self, service_id: str) -> set[str]:
         return set(self.dependencies.get(service_id, set()))
 
@@ -25,7 +37,11 @@ class ServiceGraph:
         return set(self.dependents.get(service_id, set()))
 
     def related_services(self, service_id: str) -> set[str]:
-        return {service_id} | self.get_dependencies(service_id) | self.get_dependents(service_id)
+        related = {service_id} | self.get_dependencies(service_id) | self.get_dependents(service_id)
+        related |= self.get_colocated(service_id)
+        for dep in list(self.get_dependencies(service_id)):
+            related |= self.get_dependencies(dep)
+        return related
 
     def edges(self) -> list[dict[str, str]]:
         rows: list[dict[str, str]] = []
@@ -56,6 +72,7 @@ class ServiceGraph:
         path.parent.mkdir(parents=True, exist_ok=True)
         data = {
             "dependencies": {key: sorted(value) for key, value in self.dependencies.items()},
+            "colocated": {key: sorted(value) for key, value in self.colocated.items()},
         }
         path.write_text(json.dumps(data, indent=2, sort_keys=True), encoding="utf-8")
 
@@ -68,4 +85,7 @@ class ServiceGraph:
         for source, targets in data.get("dependencies", {}).items():
             for target in targets:
                 graph.add_relation(source, target)
+        for left, peers in data.get("colocated", {}).items():
+            for right in peers:
+                graph.add_colocation(left, right)
         return graph

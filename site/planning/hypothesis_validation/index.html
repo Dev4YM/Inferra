@@ -1,0 +1,367 @@
+<!DOCTYPE html>
+<html class="writer-html5" lang="en" >
+<head>
+    <meta charset="utf-8" />
+    <meta http-equiv="X-UA-Compatible" content="IE=edge" />
+    <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+      <link rel="shortcut icon" href="../../img/favicon.ico" />
+    <title>Hypothesis Validation - Inferra</title>
+    <link rel="stylesheet" href="../../css/theme.css" />
+    <link rel="stylesheet" href="../../css/theme_extra.css" />
+        <link rel="stylesheet" href="https://cdnjs.cloudflare.com/ajax/libs/highlight.js/11.8.0/styles/github.min.css" />
+    
+      <script>
+        // Current page data
+        var mkdocs_page_name = "Hypothesis Validation";
+        var mkdocs_page_input_path = "planning\\hypothesis_validation.md";
+        var mkdocs_page_url = null;
+      </script>
+    
+    <!--[if lt IE 9]>
+      <script src="../../js/html5shiv.min.js"></script>
+    <![endif]-->
+      <script src="https://cdnjs.cloudflare.com/ajax/libs/highlight.js/11.8.0/highlight.min.js"></script>
+      <script>hljs.highlightAll();</script> 
+</head>
+
+<body class="wy-body-for-nav" role="document">
+
+  <div class="wy-grid-for-nav">
+    <nav data-toggle="wy-nav-shift" class="wy-nav-side stickynav">
+    <div class="wy-side-scroll">
+      <div class="wy-side-nav-search">
+          <a href="../.." class="icon icon-home"> Inferra
+        </a><div role="search">
+  <form id ="rtd-search-form" class="wy-form" action="../../search.html" method="get">
+      <input type="text" name="q" placeholder="Search docs" aria-label="Search docs" title="Type search term here" />
+  </form>
+</div>
+      </div>
+
+      <div class="wy-menu wy-menu-vertical" data-spy="affix" role="navigation" aria-label="Navigation menu">
+              <ul>
+                <li class="toctree-l1"><a class="reference internal" href="../..">Home</a>
+                </li>
+              </ul>
+              <p class="caption"><span class="caption-text">Operator guides</span></p>
+              <ul>
+                  <li class="toctree-l1"><a class="reference internal" href="../../operations/install/">Install</a>
+                  </li>
+                  <li class="toctree-l1"><a class="reference internal" href="../../operations/ai_provider/">AI provider</a>
+                  </li>
+                  <li class="toctree-l1"><a class="reference internal" href="../../operations/collectors/">Collectors</a>
+                  </li>
+                  <li class="toctree-l1"><a class="reference internal" href="../../operations/tuning/">Tuning</a>
+                  </li>
+                  <li class="toctree-l1"><a class="reference internal" href="../../operations/upgrade/">Upgrade</a>
+                  </li>
+                  <li class="toctree-l1"><a class="reference internal" href="../../operations/troubleshooting/">Troubleshooting</a>
+                  </li>
+                  <li class="toctree-l1"><a class="reference internal" href="../../operations/ci/">CI</a>
+                  </li>
+                  <li class="toctree-l1"><a class="reference internal" href="../../operations/release_signing/">Release signing</a>
+                  </li>
+              </ul>
+              <p class="caption"><span class="caption-text">Architecture Decision Records</span></p>
+              <ul>
+                  <li class="toctree-l1"><a class="reference internal" href="../../adr/0001-local-first-guided-ai/">ADR 0001 — Local-first guided AI</a>
+                  </li>
+                  <li class="toctree-l1"><a class="reference internal" href="../../adr/0002-flat-src-layout/">ADR 0002 — Flat src layout</a>
+                  </li>
+                  <li class="toctree-l1"><a class="reference internal" href="../../adr/0003-storage-protocols/">ADR 0003 — Storage protocols</a>
+                  </li>
+                  <li class="toctree-l1"><a class="reference internal" href="../../adr/0004-windows-first-collectors/">ADR 0004 — Windows-first collectors</a>
+                  </li>
+                  <li class="toctree-l1"><a class="reference internal" href="../../adr/0005-ai-presentation-only/">ADR 0005 — AI presentation-only</a>
+                  </li>
+                  <li class="toctree-l1"><a class="reference internal" href="../../adr/0006-ollama-gemma-default/">ADR 0006 — Ollama Gemma default</a>
+                  </li>
+              </ul>
+              <p class="caption"><span class="caption-text">Planning</span></p>
+              <ul>
+                  <li class="toctree-l1"><a class="reference internal" href="../architecture_overview/">Architecture overview</a>
+                  </li>
+                  <li class="toctree-l1"><a class="reference internal" href="../full_build_architecture_plan/">Full build architecture plan</a>
+                  </li>
+                  <li class="toctree-l1"><a class="reference internal" href="../data_flow_contracts/">Data flow contracts</a>
+                  </li>
+                  <li class="toctree-l1"><a class="reference internal" href="../implementation_index/">Implementation index</a>
+                  </li>
+              </ul>
+      </div>
+    </div>
+    </nav>
+
+    <section data-toggle="wy-nav-shift" class="wy-nav-content-wrap">
+      <nav class="wy-nav-top" role="navigation" aria-label="Mobile navigation menu">
+          <i data-toggle="wy-nav-top" class="fa fa-bars"></i>
+          <a href="../..">Inferra</a>
+        
+      </nav>
+      <div class="wy-nav-content">
+        <div class="rst-content"><div role="navigation" aria-label="breadcrumbs navigation">
+  <ul class="wy-breadcrumbs">
+    <li><a href="../.." class="icon icon-home" aria-label="Docs"></a></li>
+      <li class="breadcrumb-item active">Hypothesis Validation</li>
+    <li class="wy-breadcrumbs-aside">
+    </li>
+  </ul>
+  <hr/>
+</div>
+          <div role="main" class="document" itemscope="itemscope" itemtype="http://schema.org/Article">
+            <div class="section" itemprop="articleBody">
+              
+                <h1 id="hypothesis-validation">Hypothesis Validation<a class="headerlink" href="#hypothesis-validation" title="Permanent link">&para;</a></h1>
+<h2 id="purpose">Purpose<a class="headerlink" href="#purpose" title="Permanent link">&para;</a></h2>
+<p>The hypothesis validator is a gate between the hypothesis engine and the scoring engine. It examines each hypothesis for internal consistency, evidence sufficiency, and logical soundness. Invalid hypotheses are rejected or downgraded before scoring.</p>
+<p>This prevents the system from presenting logically impossible or unsupported explanations to the operator.</p>
+<hr />
+<h2 id="validation-pipeline">Validation Pipeline<a class="headerlink" href="#validation-pipeline" title="Permanent link">&para;</a></h2>
+<p>Each hypothesis passes through a sequence of validators. Each validator returns PASS, WARN, or FAIL:</p>
+<pre><code>Hypothesis
+    │
+    ├── V1: Evidence Existence Check
+    ├── V2: Temporal Consistency Check
+    ├── V3: Scope Consistency Check
+    ├── V4: Contradiction Ratio Check
+    ├── V5: Root Cause Plausibility Check
+    ├── V6: Tautology Check
+    │
+    ▼
+Validated Hypothesis (is_valid, invalidation_reasons)
+</code></pre>
+<p><strong>Result aggregation</strong>:
+- Any FAIL → <code>is_valid = False</code>, hypothesis rejected from scoring
+- Any WARN → <code>is_valid = True</code>, but <code>invalidation_reasons</code> populated and <code>generation_confidence</code> reduced by 20% per warning</p>
+<hr />
+<h2 id="validator-1-evidence-existence">Validator 1: Evidence Existence<a class="headerlink" href="#validator-1-evidence-existence" title="Permanent link">&para;</a></h2>
+<p><strong>Check</strong>: Every event_id referenced in <code>supporting_events</code> and <code>contradicting_events</code> must exist in the event store.</p>
+<pre><code class="language-python">def validate_evidence_existence(hypothesis: Hypothesis, event_store: EventStore) -&gt; ValidationResult:
+    missing = []
+    for eid in hypothesis.supporting_events + hypothesis.contradicting_events:
+        if event_store.get_event(eid) is None:
+            missing.append(eid)
+
+    if missing:
+        return ValidationResult(
+            status=&quot;FAIL&quot;,
+            reason=f&quot;References {len(missing)} non-existent events: {missing[:3]}...&quot;
+        )
+
+    if len(hypothesis.supporting_events) == 0:
+        return ValidationResult(
+            status=&quot;FAIL&quot;,
+            reason=&quot;No supporting evidence&quot;
+        )
+
+    return ValidationResult(status=&quot;PASS&quot;)
+</code></pre>
+<p><strong>Rationale</strong>: A hypothesis referencing deleted or pruned events is unverifiable. A hypothesis with zero evidence is speculative.</p>
+<hr />
+<h2 id="validator-2-temporal-consistency">Validator 2: Temporal Consistency<a class="headerlink" href="#validator-2-temporal-consistency" title="Permanent link">&para;</a></h2>
+<p><strong>Check</strong>: The hypothesized root cause event must not occur after the majority of its claimed effects.</p>
+<pre><code class="language-python">def validate_temporal_consistency(hypothesis: Hypothesis,
+                                    events: dict[str, NormalizedEvent]) -&gt; ValidationResult:
+    if hypothesis.root_cause_event_id is None:
+        return ValidationResult(status=&quot;PASS&quot;)  # no root cause claimed
+
+    root = events[hypothesis.root_cause_event_id]
+    effects = [events[eid] for eid in hypothesis.supporting_events
+               if eid != hypothesis.root_cause_event_id and eid in events]
+
+    if not effects:
+        return ValidationResult(status=&quot;PASS&quot;)
+
+    effects_before_root = sum(1 for e in effects if e.timestamp &lt; root.timestamp)
+    ratio = effects_before_root / len(effects)
+
+    if ratio &gt; 0.5:
+        return ValidationResult(
+            status=&quot;FAIL&quot;,
+            reason=f&quot;{effects_before_root}/{len(effects)} effect events occur before the claimed root cause&quot;
+        )
+    elif ratio &gt; 0.2:
+        return ValidationResult(
+            status=&quot;WARN&quot;,
+            reason=f&quot;{effects_before_root}/{len(effects)} effect events occur before root cause (possible clock skew)&quot;
+        )
+
+    return ValidationResult(status=&quot;PASS&quot;)
+</code></pre>
+<p><strong>Rationale</strong>: If the majority of "effects" precede the "cause", the causal direction is likely wrong.</p>
+<hr />
+<h2 id="validator-3-scope-consistency">Validator 3: Scope Consistency<a class="headerlink" href="#validator-3-scope-consistency" title="Permanent link">&para;</a></h2>
+<p><strong>Check</strong>: The hypothesis's affected services should match the events it references.</p>
+<pre><code class="language-python">def validate_scope_consistency(hypothesis: Hypothesis,
+                                 events: dict[str, NormalizedEvent]) -&gt; ValidationResult:
+    evidence_services = {events[eid].service_id for eid in hypothesis.supporting_events if eid in events}
+    claimed_services = set(hypothesis.affected_services)
+
+    # Services claimed but with no evidence
+    unsupported = claimed_services - evidence_services
+    # Services with evidence but not claimed
+    unclaimed = evidence_services - claimed_services
+
+    issues = []
+    if unsupported:
+        issues.append(f&quot;Claims affect on {unsupported} but has no evidence for them&quot;)
+    if unclaimed and len(unclaimed) &gt; len(claimed_services):
+        issues.append(f&quot;Evidence references {unclaimed} but they are not in affected_services&quot;)
+
+    if issues:
+        return ValidationResult(status=&quot;WARN&quot;, reason=&quot;; &quot;.join(issues))
+
+    return ValidationResult(status=&quot;PASS&quot;)
+</code></pre>
+<p><strong>Rationale</strong>: A hypothesis claiming to affect 5 services but only having evidence from 1 is overreaching.</p>
+<hr />
+<h2 id="validator-4-contradiction-ratio">Validator 4: Contradiction Ratio<a class="headerlink" href="#validator-4-contradiction-ratio" title="Permanent link">&para;</a></h2>
+<p><strong>Check</strong>: If contradicting evidence significantly outweighs supporting evidence, the hypothesis is suspect.</p>
+<pre><code class="language-python">def validate_contradiction_ratio(hypothesis: Hypothesis) -&gt; ValidationResult:
+    supporting = len(hypothesis.supporting_events)
+    contradicting = len(hypothesis.contradicting_events)
+
+    if supporting == 0:
+        return ValidationResult(status=&quot;FAIL&quot;, reason=&quot;No supporting evidence&quot;)
+
+    ratio = contradicting / (supporting + contradicting)
+
+    if ratio &gt; 0.6:
+        return ValidationResult(
+            status=&quot;FAIL&quot;,
+            reason=f&quot;Contradiction ratio {ratio:.0%}: {contradicting} contradicting vs {supporting} supporting&quot;
+        )
+    elif ratio &gt; 0.3:
+        return ValidationResult(
+            status=&quot;WARN&quot;,
+            reason=f&quot;High contradiction ratio {ratio:.0%}: hypothesis may be partially incorrect&quot;
+        )
+
+    return ValidationResult(status=&quot;PASS&quot;)
+</code></pre>
+<p><strong>Rationale</strong>: A hypothesis contradicted by more events than it's supported by is likely wrong.</p>
+<hr />
+<h2 id="validator-5-root-cause-plausibility">Validator 5: Root Cause Plausibility<a class="headerlink" href="#validator-5-root-cause-plausibility" title="Permanent link">&para;</a></h2>
+<p><strong>Check</strong>: The claimed root cause event should have characteristics consistent with being a root cause.</p>
+<pre><code class="language-python">def validate_root_cause_plausibility(hypothesis: Hypothesis,
+                                       events: dict[str, NormalizedEvent],
+                                       inference_graph: InferenceGraph | None) -&gt; ValidationResult:
+    if hypothesis.root_cause_event_id is None:
+        return ValidationResult(status=&quot;PASS&quot;)
+
+    root = events.get(hypothesis.root_cause_event_id)
+    if root is None:
+        return ValidationResult(status=&quot;FAIL&quot;, reason=&quot;Root cause event does not exist&quot;)
+
+    issues = []
+
+    # Root cause should not be a low-severity event
+    if root.severity &lt; Severity.WARN:
+        issues.append(f&quot;Root cause event has severity {root.severity.name} (expected WARN+)&quot;)
+
+    # Root cause should be among the earliest events in the incident
+    all_timestamps = sorted(events[eid].timestamp for eid in hypothesis.supporting_events if eid in events)
+    if all_timestamps:
+        root_position = sum(1 for t in all_timestamps if t &lt; root.timestamp) / len(all_timestamps)
+        if root_position &gt; 0.7:
+            issues.append(f&quot;Root cause event is in the latest 30% of events (position: {root_position:.0%})&quot;)
+
+    # If inference graph exists, root cause should have no or few incoming edges
+    if inference_graph and hypothesis.root_cause_event_id in inference_graph.nodes:
+        node = inference_graph.nodes[hypothesis.root_cause_event_id]
+        if node.in_degree &gt; 2:
+            issues.append(f&quot;Root cause has {node.in_degree} incoming causal edges (expected to be a source node)&quot;)
+
+    if issues:
+        return ValidationResult(status=&quot;WARN&quot;, reason=&quot;; &quot;.join(issues))
+
+    return ValidationResult(status=&quot;PASS&quot;)
+</code></pre>
+<hr />
+<h2 id="validator-6-tautology-check">Validator 6: Tautology Check<a class="headerlink" href="#validator-6-tautology-check" title="Permanent link">&para;</a></h2>
+<p><strong>Check</strong>: The hypothesis must not be trivially circular (e.g., "service X failed because service X failed").</p>
+<pre><code class="language-python">def validate_not_tautological(hypothesis: Hypothesis) -&gt; ValidationResult:
+    # Check: root cause service is the only affected service, and description
+    # doesn't actually explain anything beyond restating the error
+    if (hypothesis.root_cause_event_id and
+        len(hypothesis.affected_services) == 1 and
+        hypothesis.cause_type == CauseType.UNKNOWN):
+        return ValidationResult(
+            status=&quot;WARN&quot;,
+            reason=&quot;Hypothesis may be tautological: restates the failure without explaining cause&quot;
+        )
+
+    return ValidationResult(status=&quot;PASS&quot;)
+</code></pre>
+<hr />
+<h2 id="validation-output">Validation Output<a class="headerlink" href="#validation-output" title="Permanent link">&para;</a></h2>
+<pre><code class="language-python">@dataclass
+class ValidationResult:
+    status: str        # &quot;PASS&quot; | &quot;WARN&quot; | &quot;FAIL&quot;
+    reason: str = &quot;&quot;
+
+@dataclass
+class ValidatedHypothesis:
+    hypothesis: Hypothesis
+    is_valid: bool
+    validation_results: list[ValidationResult]
+    invalidation_reasons: list[str]   # populated from FAIL/WARN results
+    adjusted_confidence: float        # generation_confidence reduced by warnings
+</code></pre>
+<hr />
+<h2 id="post-validation-filtering">Post-Validation Filtering<a class="headerlink" href="#post-validation-filtering" title="Permanent link">&para;</a></h2>
+<p>After validation:
+1. Hypotheses with <code>is_valid = False</code> are stored but not scored (available for debugging in the UI with an "invalidated" badge).
+2. Hypotheses with warnings have their <code>generation_confidence</code> reduced, which feeds into the scoring engine as a multiplicative factor.
+3. If all hypotheses are invalidated, the <code>anomaly_only</code> template is forced to generate a fallback hypothesis (see <code>hypothesis_engine.md</code> Template 7).</p>
+<hr />
+<h2 id="configuration">Configuration<a class="headerlink" href="#configuration" title="Permanent link">&para;</a></h2>
+<pre><code class="language-toml">[hypothesis_validation]
+enabled = true
+temporal_consistency_threshold = 0.5     # &gt;50% effects before cause = FAIL
+temporal_consistency_warn = 0.2          # &gt;20% = WARN
+contradiction_ratio_fail = 0.6
+contradiction_ratio_warn = 0.3
+min_root_cause_severity = &quot;WARN&quot;
+confidence_reduction_per_warning = 0.2   # 20% reduction per WARN
+</code></pre>
+              
+            </div>
+          </div><footer>
+
+  <hr/>
+
+  <div role="contentinfo">
+    <!-- Copyright etc -->
+  </div>
+
+  Built with <a href="https://www.mkdocs.org/">MkDocs</a> using a <a href="https://github.com/readthedocs/sphinx_rtd_theme">theme</a> provided by <a href="https://readthedocs.org">Read the Docs</a>.
+</footer>
+          
+        </div>
+      </div>
+
+    </section>
+
+  </div>
+
+  <div class="rst-versions" role="note" aria-label="Versions">
+  <span class="rst-current-version" data-toggle="rst-current-version">
+    
+    
+    
+  </span>
+</div>
+    <script src="../../js/jquery-3.6.0.min.js"></script>
+    <script>var base_url = "../..";</script>
+    <script src="../../js/theme_extra.js"></script>
+    <script src="../../js/theme.js"></script>
+      <script src="../../search/main.js"></script>
+    <script>
+        jQuery(function () {
+            SphinxRtdTheme.Navigation.enable(true);
+        });
+    </script>
+
+</body>
+</html>

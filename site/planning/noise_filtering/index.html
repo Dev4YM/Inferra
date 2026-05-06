@@ -1,0 +1,447 @@
+<!DOCTYPE html>
+<html class="writer-html5" lang="en" >
+<head>
+    <meta charset="utf-8" />
+    <meta http-equiv="X-UA-Compatible" content="IE=edge" />
+    <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+      <link rel="shortcut icon" href="../../img/favicon.ico" />
+    <title>Noise Filtering - Inferra</title>
+    <link rel="stylesheet" href="../../css/theme.css" />
+    <link rel="stylesheet" href="../../css/theme_extra.css" />
+        <link rel="stylesheet" href="https://cdnjs.cloudflare.com/ajax/libs/highlight.js/11.8.0/styles/github.min.css" />
+    
+      <script>
+        // Current page data
+        var mkdocs_page_name = "Noise Filtering";
+        var mkdocs_page_input_path = "planning\\noise_filtering.md";
+        var mkdocs_page_url = null;
+      </script>
+    
+    <!--[if lt IE 9]>
+      <script src="../../js/html5shiv.min.js"></script>
+    <![endif]-->
+      <script src="https://cdnjs.cloudflare.com/ajax/libs/highlight.js/11.8.0/highlight.min.js"></script>
+      <script>hljs.highlightAll();</script> 
+</head>
+
+<body class="wy-body-for-nav" role="document">
+
+  <div class="wy-grid-for-nav">
+    <nav data-toggle="wy-nav-shift" class="wy-nav-side stickynav">
+    <div class="wy-side-scroll">
+      <div class="wy-side-nav-search">
+          <a href="../.." class="icon icon-home"> Inferra
+        </a><div role="search">
+  <form id ="rtd-search-form" class="wy-form" action="../../search.html" method="get">
+      <input type="text" name="q" placeholder="Search docs" aria-label="Search docs" title="Type search term here" />
+  </form>
+</div>
+      </div>
+
+      <div class="wy-menu wy-menu-vertical" data-spy="affix" role="navigation" aria-label="Navigation menu">
+              <ul>
+                <li class="toctree-l1"><a class="reference internal" href="../..">Home</a>
+                </li>
+              </ul>
+              <p class="caption"><span class="caption-text">Operator guides</span></p>
+              <ul>
+                  <li class="toctree-l1"><a class="reference internal" href="../../operations/install/">Install</a>
+                  </li>
+                  <li class="toctree-l1"><a class="reference internal" href="../../operations/ai_provider/">AI provider</a>
+                  </li>
+                  <li class="toctree-l1"><a class="reference internal" href="../../operations/collectors/">Collectors</a>
+                  </li>
+                  <li class="toctree-l1"><a class="reference internal" href="../../operations/tuning/">Tuning</a>
+                  </li>
+                  <li class="toctree-l1"><a class="reference internal" href="../../operations/upgrade/">Upgrade</a>
+                  </li>
+                  <li class="toctree-l1"><a class="reference internal" href="../../operations/troubleshooting/">Troubleshooting</a>
+                  </li>
+                  <li class="toctree-l1"><a class="reference internal" href="../../operations/ci/">CI</a>
+                  </li>
+                  <li class="toctree-l1"><a class="reference internal" href="../../operations/release_signing/">Release signing</a>
+                  </li>
+              </ul>
+              <p class="caption"><span class="caption-text">Architecture Decision Records</span></p>
+              <ul>
+                  <li class="toctree-l1"><a class="reference internal" href="../../adr/0001-local-first-guided-ai/">ADR 0001 — Local-first guided AI</a>
+                  </li>
+                  <li class="toctree-l1"><a class="reference internal" href="../../adr/0002-flat-src-layout/">ADR 0002 — Flat src layout</a>
+                  </li>
+                  <li class="toctree-l1"><a class="reference internal" href="../../adr/0003-storage-protocols/">ADR 0003 — Storage protocols</a>
+                  </li>
+                  <li class="toctree-l1"><a class="reference internal" href="../../adr/0004-windows-first-collectors/">ADR 0004 — Windows-first collectors</a>
+                  </li>
+                  <li class="toctree-l1"><a class="reference internal" href="../../adr/0005-ai-presentation-only/">ADR 0005 — AI presentation-only</a>
+                  </li>
+                  <li class="toctree-l1"><a class="reference internal" href="../../adr/0006-ollama-gemma-default/">ADR 0006 — Ollama Gemma default</a>
+                  </li>
+              </ul>
+              <p class="caption"><span class="caption-text">Planning</span></p>
+              <ul>
+                  <li class="toctree-l1"><a class="reference internal" href="../architecture_overview/">Architecture overview</a>
+                  </li>
+                  <li class="toctree-l1"><a class="reference internal" href="../full_build_architecture_plan/">Full build architecture plan</a>
+                  </li>
+                  <li class="toctree-l1"><a class="reference internal" href="../data_flow_contracts/">Data flow contracts</a>
+                  </li>
+                  <li class="toctree-l1"><a class="reference internal" href="../implementation_index/">Implementation index</a>
+                  </li>
+              </ul>
+      </div>
+    </div>
+    </nav>
+
+    <section data-toggle="wy-nav-shift" class="wy-nav-content-wrap">
+      <nav class="wy-nav-top" role="navigation" aria-label="Mobile navigation menu">
+          <i data-toggle="wy-nav-top" class="fa fa-bars"></i>
+          <a href="../..">Inferra</a>
+        
+      </nav>
+      <div class="wy-nav-content">
+        <div class="rst-content"><div role="navigation" aria-label="breadcrumbs navigation">
+  <ul class="wy-breadcrumbs">
+    <li><a href="../.." class="icon icon-home" aria-label="Docs"></a></li>
+      <li class="breadcrumb-item active">Noise Filtering</li>
+    <li class="wy-breadcrumbs-aside">
+    </li>
+  </ul>
+  <hr/>
+</div>
+          <div role="main" class="document" itemscope="itemscope" itemtype="http://schema.org/Article">
+            <div class="section" itemprop="articleBody">
+              
+                <h1 id="noise-filtering">Noise Filtering<a class="headerlink" href="#noise-filtering" title="Permanent link">&para;</a></h1>
+<h2 id="problem">Problem<a class="headerlink" href="#problem" title="Permanent link">&para;</a></h2>
+<p>Not all events are diagnostically useful. Many systems emit high volumes of routine log lines that obscure actual failure signals. Examples:</p>
+<ul>
+<li>Periodic health check passes ("GET /healthz 200 OK" every 5 seconds)</li>
+<li>Debug-level logging left enabled in production</li>
+<li>Informational startup banners repeated on each restart</li>
+<li>Scheduled job completion messages ("Cron job XYZ completed successfully")</li>
+<li>Metric heartbeats</li>
+</ul>
+<p>Without filtering, these events:</p>
+<ol>
+<li>Waste storage and query performance</li>
+<li>Dilute correlation signals (noise co-occurs with everything)</li>
+<li>Inflate frequency counts, distorting hypothesis scoring</li>
+<li>Clutter the timeline view for operators</li>
+</ol>
+<hr />
+<h2 id="filtering-strategy">Filtering Strategy<a class="headerlink" href="#filtering-strategy" title="Permanent link">&para;</a></h2>
+<p>Noise filtering operates at three levels, applied in order after deduplication:</p>
+<pre><code>NormalizedEvent (post-dedup)
+    │
+    ├── Level 1: Static Rules (blocklist / allowlist)
+    │
+    ├── Level 2: Adaptive Frequency Filter
+    │
+    ├── Level 3: Diagnostic Relevance Scorer
+    │
+    ▼
+Event stored (with noise_score metadata)
+   or
+Event suppressed (counted but not stored)
+</code></pre>
+<hr />
+<h2 id="level-1-static-rules">Level 1: Static Rules<a class="headerlink" href="#level-1-static-rules" title="Permanent link">&para;</a></h2>
+<p>User-defined and built-in rules that unconditionally include or exclude events.</p>
+<h3 id="blocklist">Blocklist<a class="headerlink" href="#blocklist" title="Permanent link">&para;</a></h3>
+<p>Events matching blocklist patterns are suppressed. Suppressed events are counted (for volume metrics) but not stored or analyzed.</p>
+<pre><code class="language-toml">[[noise_filter.blocklist]]
+pattern = &quot;GET /healthz&quot;
+reason = &quot;routine health check&quot;
+
+[[noise_filter.blocklist]]
+pattern = &quot;^\\s*$&quot;
+reason = &quot;empty log lines&quot;
+
+[[noise_filter.blocklist]]
+service_id = &quot;envoy&quot;
+severity_max = &quot;DEBUG&quot;
+reason = &quot;envoy debug logging too verbose&quot;
+</code></pre>
+<h3 id="allowlist">Allowlist<a class="headerlink" href="#allowlist" title="Permanent link">&para;</a></h3>
+<p>Events matching allowlist patterns are always stored, regardless of other filtering. This prevents important events from being accidentally filtered.</p>
+<pre><code class="language-toml">[[noise_filter.allowlist]]
+severity_min = &quot;ERROR&quot;
+reason = &quot;always keep errors and above&quot;
+
+[[noise_filter.allowlist]]
+tags = [&quot;oom&quot;, &quot;crash&quot;, &quot;restart&quot;]
+reason = &quot;always keep critical system events&quot;
+
+[[noise_filter.allowlist]]
+pattern = &quot;FATAL|panic|segfault&quot;
+reason = &quot;always keep fatal signals&quot;
+</code></pre>
+<p><strong>Rule evaluation order</strong>:</p>
+<ol>
+<li>Check allowlist first. If any allowlist rule matches → STORE unconditionally.</li>
+<li>Check blocklist. If any blocklist rule matches → SUPPRESS.</li>
+<li>Proceed to Level 2.</li>
+</ol>
+<hr />
+<h2 id="level-2-adaptive-frequency-filter">Level 2: Adaptive Frequency Filter<a class="headerlink" href="#level-2-adaptive-frequency-filter" title="Permanent link">&para;</a></h2>
+<p>Filters events that appear at a predictably high, stable rate — they are routine, not anomalous.</p>
+<h3 id="mechanism">Mechanism<a class="headerlink" href="#mechanism" title="Permanent link">&para;</a></h3>
+<p>For each fingerprint, the system tracks a rolling rate (events per minute over the last 30 minutes). If the rate is:</p>
+<ul>
+<li><strong>Stable</strong> (coefficient of variation &lt; 0.3) AND</li>
+<li><strong>High</strong> (above a configurable threshold, default: 10 per minute)</li>
+</ul>
+<p>Then the fingerprint is classified as <strong>routine noise</strong>. Subsequent events with this fingerprint are sampled rather than stored individually:</p>
+<ul>
+<li>1 in N events is stored (where N = rate / target_rate, and target_rate default = 1/min)</li>
+<li>Stored events are tagged <code>_noise_sampled: true</code> and <code>_noise_sample_rate: N</code></li>
+</ul>
+<h3 id="rate-tracking">Rate Tracking<a class="headerlink" href="#rate-tracking" title="Permanent link">&para;</a></h3>
+<pre><code class="language-python">class FrequencyTracker:
+    &quot;&quot;&quot;Track per-fingerprint event rates using sliding windows.&quot;&quot;&quot;
+
+    def __init__(self, window_minutes: int = 30, bucket_seconds: int = 60):
+        self.window_minutes = window_minutes
+        self.bucket_seconds = bucket_seconds
+        self._rates: dict[str, RateWindow] = {}
+
+    def record(self, fingerprint: str, timestamp: datetime) -&gt; None:
+        &quot;&quot;&quot;Record an event occurrence.&quot;&quot;&quot;
+        ...
+
+    def is_routine(self, fingerprint: str) -&gt; tuple[bool, float]:
+        &quot;&quot;&quot;Returns (is_routine, rate_per_minute).&quot;&quot;&quot;
+        rate = self._rates.get(fingerprint)
+        if rate is None:
+            return False, 0.0
+
+        mean_rate = rate.mean_per_minute()
+        cv = rate.coefficient_of_variation()
+
+        if mean_rate &gt; self.high_rate_threshold and cv &lt; self.stability_threshold:
+            return True, mean_rate
+        return False, mean_rate
+</code></pre>
+<h3 id="adaptation-behavior">Adaptation Behavior<a class="headerlink" href="#adaptation-behavior" title="Permanent link">&para;</a></h3>
+<ul>
+<li>New fingerprints are never classified as routine (need at least <code>window_minutes</code> of data).</li>
+<li>If a previously routine fingerprint's rate spikes (CV exceeds threshold), it is reclassified as non-routine. This catches anomalous bursts of normally-routine events.</li>
+<li>If a previously routine fingerprint stops appearing, its tracker expires after 2× <code>window_minutes</code> and is removed.</li>
+</ul>
+<hr />
+<h2 id="level-3-diagnostic-relevance-scorer">Level 3: Diagnostic Relevance Scorer<a class="headerlink" href="#level-3-diagnostic-relevance-scorer" title="Permanent link">&para;</a></h2>
+<p>For events that pass Levels 1 and 2, a relevance score is computed. This score does not suppress events, but it annotates them with a <code>noise_score</code> in structured_data (0.0 = pure noise, 1.0 = highly relevant). Downstream systems (correlation, scoring) can use this to weight events.</p>
+<h3 id="scoring-factors">Scoring Factors<a class="headerlink" href="#scoring-factors" title="Permanent link">&para;</a></h3>
+<table>
+<thead>
+<tr>
+<th>Factor</th>
+<th>Weight</th>
+<th>Description</th>
+</tr>
+</thead>
+<tbody>
+<tr>
+<td>Severity</td>
+<td>0.30</td>
+<td>ERROR=1.0, CRITICAL=1.0, WARN=0.6, INFO=0.2, DEBUG=0.1</td>
+</tr>
+<tr>
+<td>Temporal novelty</td>
+<td>0.25</td>
+<td>Is this event occurring at an unusual time? (vs. baseline)</td>
+</tr>
+<tr>
+<td>Rate anomaly</td>
+<td>0.20</td>
+<td>Is this fingerprint occurring at an unusual rate?</td>
+</tr>
+<tr>
+<td>Tag relevance</td>
+<td>0.15</td>
+<td>Events with failure-indicating tags score higher</td>
+</tr>
+<tr>
+<td>Co-occurrence</td>
+<td>0.10</td>
+<td>Does this event co-occur with other anomalous events?</td>
+</tr>
+</tbody>
+</table>
+<pre><code class="language-python">def compute_noise_score(event: NormalizedEvent, context: FilterContext) -&gt; float:
+    severity_score = {
+        Severity.DEBUG: 0.1,
+        Severity.INFO: 0.2,
+        Severity.WARN: 0.6,
+        Severity.ERROR: 1.0,
+        Severity.CRITICAL: 1.0,
+    }[event.severity]
+
+    temporal_score = context.temporal_novelty(event.fingerprint, event.timestamp)
+    rate_score = context.rate_anomaly(event.fingerprint)
+
+    FAILURE_TAGS = {&quot;oom&quot;, &quot;crash&quot;, &quot;restart&quot;, &quot;connection_refused&quot;, &quot;timeout&quot;, &quot;disk_full&quot;}
+    tag_score = 1.0 if event.tags &amp; FAILURE_TAGS else 0.2
+
+    cooccurrence_score = context.cooccurrence_anomaly(event.timestamp, event.service_id)
+
+    return (
+        0.30 * severity_score
+        + 0.25 * temporal_score
+        + 0.20 * rate_score
+        + 0.15 * tag_score
+        + 0.10 * cooccurrence_score
+    )
+</code></pre>
+<h3 id="storage-decision">Storage Decision<a class="headerlink" href="#storage-decision" title="Permanent link">&para;</a></h3>
+<p>Events with <code>noise_score &lt; noise_threshold</code> (default: 0.15) may be downsampled at the storage layer during high-volume periods. Under normal volume, all events are stored regardless of noise score. The threshold only activates when event volume exceeds <code>high_volume_threshold</code> (default: 100 events/sec).</p>
+<hr />
+<h2 id="known-noise-registry">Known Noise Registry<a class="headerlink" href="#known-noise-registry" title="Permanent link">&para;</a></h2>
+<p>A persistent registry of fingerprints that have been consistently classified as routine noise over multiple sessions. Stored in <code>./data/noise_registry.json</code>:</p>
+<pre><code class="language-json">{
+    &quot;schema_version&quot;: 1,
+    &quot;entries&quot;: [
+        {
+            &quot;fingerprint&quot;: &quot;a1b2c3d4...&quot;,
+            &quot;template&quot;: &quot;GET &lt;PATH&gt; &lt;NUM&gt; &lt;STR&gt;&quot;,
+            &quot;service_id&quot;: &quot;nginx&quot;,
+            &quot;mean_rate_per_minute&quot;: 12.5,
+            &quot;first_seen&quot;: &quot;2026-04-28T10:00:00Z&quot;,
+            &quot;last_confirmed&quot;: &quot;2026-05-01T15:00:00Z&quot;,
+            &quot;confidence&quot;: 0.95
+        }
+    ]
+}
+</code></pre>
+<p>On startup, the frequency tracker is seeded with registry data, allowing it to immediately classify known-noise fingerprints without waiting for the full window to populate.</p>
+<p>The registry is updated hourly. Entries not confirmed in 7 days are removed (the noise pattern may no longer apply).</p>
+<hr />
+<h2 id="configuration">Configuration<a class="headerlink" href="#configuration" title="Permanent link">&para;</a></h2>
+<pre><code class="language-toml">[noise_filter]
+enabled = true
+
+# Level 1
+blocklist_enabled = true
+allowlist_enabled = true
+
+# Level 2
+adaptive_enabled = true
+frequency_window_minutes = 30
+high_rate_threshold_per_minute = 10.0
+stability_threshold_cv = 0.3
+routine_sample_target_per_minute = 1.0
+
+# Level 3
+relevance_scoring_enabled = true
+noise_threshold = 0.15
+high_volume_events_per_second = 100
+
+# Registry
+registry_enabled = true
+registry_expiry_days = 7
+</code></pre>
+<hr />
+<h2 id="failure-modes">Failure Modes<a class="headerlink" href="#failure-modes" title="Permanent link">&para;</a></h2>
+<table>
+<thead>
+<tr>
+<th>Failure</th>
+<th>Impact</th>
+<th>Mitigation</th>
+</tr>
+</thead>
+<tbody>
+<tr>
+<td>Blocklist rule too broad</td>
+<td>Important events suppressed</td>
+<td>Allowlist takes precedence; ERROR+ always stored</td>
+</tr>
+<tr>
+<td>Adaptive filter misclassifies a burst</td>
+<td>Anomalous events filtered as routine</td>
+<td>CV check reclassifies when rate pattern changes</td>
+</tr>
+<tr>
+<td>Noise score miscalculated</td>
+<td>Low-relevance events stored, high-relevance events underweighted</td>
+<td>Score is advisory, not suppressive (under normal volume)</td>
+</tr>
+<tr>
+<td>Registry stale after config change</td>
+<td>Old noise patterns applied to new service</td>
+<td>7-day expiry limits staleness</td>
+</tr>
+</tbody>
+</table>
+<hr />
+<h2 id="metrics">Metrics<a class="headerlink" href="#metrics" title="Permanent link">&para;</a></h2>
+<table>
+<thead>
+<tr>
+<th>Metric</th>
+<th>Description</th>
+</tr>
+</thead>
+<tbody>
+<tr>
+<td><code>noise_filter_suppressed_total</code></td>
+<td>Events suppressed by static rules</td>
+</tr>
+<tr>
+<td><code>noise_filter_sampled_total</code></td>
+<td>Events downsampled by adaptive filter</td>
+</tr>
+<tr>
+<td><code>noise_filter_passed_total</code></td>
+<td>Events that passed all filters</td>
+</tr>
+<tr>
+<td><code>noise_filter_routine_fingerprints</code></td>
+<td>Count of fingerprints classified as routine</td>
+</tr>
+<tr>
+<td><code>noise_score_histogram</code></td>
+<td>Distribution of noise scores (p50, p90, p99)</td>
+</tr>
+</tbody>
+</table>
+              
+            </div>
+          </div><footer>
+
+  <hr/>
+
+  <div role="contentinfo">
+    <!-- Copyright etc -->
+  </div>
+
+  Built with <a href="https://www.mkdocs.org/">MkDocs</a> using a <a href="https://github.com/readthedocs/sphinx_rtd_theme">theme</a> provided by <a href="https://readthedocs.org">Read the Docs</a>.
+</footer>
+          
+        </div>
+      </div>
+
+    </section>
+
+  </div>
+
+  <div class="rst-versions" role="note" aria-label="Versions">
+  <span class="rst-current-version" data-toggle="rst-current-version">
+    
+    
+    
+  </span>
+</div>
+    <script src="../../js/jquery-3.6.0.min.js"></script>
+    <script>var base_url = "../..";</script>
+    <script src="../../js/theme_extra.js"></script>
+    <script src="../../js/theme.js"></script>
+      <script src="../../search/main.js"></script>
+    <script>
+        jQuery(function () {
+            SphinxRtdTheme.Navigation.enable(true);
+        });
+    </script>
+
+</body>
+</html>

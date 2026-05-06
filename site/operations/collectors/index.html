@@ -1,0 +1,355 @@
+<!DOCTYPE html>
+<html class="writer-html5" lang="en" >
+<head>
+    <meta charset="utf-8" />
+    <meta http-equiv="X-UA-Compatible" content="IE=edge" />
+    <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+      <link rel="shortcut icon" href="../../img/favicon.ico" />
+    <title>Collectors - Inferra</title>
+    <link rel="stylesheet" href="../../css/theme.css" />
+    <link rel="stylesheet" href="../../css/theme_extra.css" />
+        <link rel="stylesheet" href="https://cdnjs.cloudflare.com/ajax/libs/highlight.js/11.8.0/styles/github.min.css" />
+    
+      <script>
+        // Current page data
+        var mkdocs_page_name = "Collectors";
+        var mkdocs_page_input_path = "operations\\collectors.md";
+        var mkdocs_page_url = null;
+      </script>
+    
+    <!--[if lt IE 9]>
+      <script src="../../js/html5shiv.min.js"></script>
+    <![endif]-->
+      <script src="https://cdnjs.cloudflare.com/ajax/libs/highlight.js/11.8.0/highlight.min.js"></script>
+      <script>hljs.highlightAll();</script> 
+</head>
+
+<body class="wy-body-for-nav" role="document">
+
+  <div class="wy-grid-for-nav">
+    <nav data-toggle="wy-nav-shift" class="wy-nav-side stickynav">
+    <div class="wy-side-scroll">
+      <div class="wy-side-nav-search">
+          <a href="../.." class="icon icon-home"> Inferra
+        </a><div role="search">
+  <form id ="rtd-search-form" class="wy-form" action="../../search.html" method="get">
+      <input type="text" name="q" placeholder="Search docs" aria-label="Search docs" title="Type search term here" />
+  </form>
+</div>
+      </div>
+
+      <div class="wy-menu wy-menu-vertical" data-spy="affix" role="navigation" aria-label="Navigation menu">
+              <ul>
+                <li class="toctree-l1"><a class="reference internal" href="../..">Home</a>
+                </li>
+              </ul>
+              <p class="caption"><span class="caption-text">Operator guides</span></p>
+              <ul class="current">
+                  <li class="toctree-l1"><a class="reference internal" href="../install/">Install</a>
+                  </li>
+                  <li class="toctree-l1"><a class="reference internal" href="../ai_provider/">AI provider</a>
+                  </li>
+                  <li class="toctree-l1 current"><a class="reference internal current" href="#">Collectors</a>
+    <ul class="current">
+    <li class="toctree-l2"><a class="reference internal" href="#supervised-collection">Supervised collection</a>
+    </li>
+    <li class="toctree-l2"><a class="reference internal" href="#one-shot-collection">One-shot collection</a>
+    </li>
+    <li class="toctree-l2"><a class="reference internal" href="#host-metrics">Host metrics</a>
+    </li>
+    <li class="toctree-l2"><a class="reference internal" href="#process-snapshot">Process snapshot</a>
+    </li>
+    <li class="toctree-l2"><a class="reference internal" href="#windows-services">Windows services</a>
+    </li>
+    <li class="toctree-l2"><a class="reference internal" href="#windows-event-log">Windows Event Log</a>
+    </li>
+    <li class="toctree-l2"><a class="reference internal" href="#linux-syslog-files">Linux syslog files</a>
+    </li>
+    <li class="toctree-l2"><a class="reference internal" href="#journald">journald</a>
+    </li>
+    <li class="toctree-l2"><a class="reference internal" href="#file-glob-multiline">File glob / multiline</a>
+    </li>
+    <li class="toctree-l2"><a class="reference internal" href="#docker-engine">Docker Engine</a>
+    </li>
+    <li class="toctree-l2"><a class="reference internal" href="#kubernetes">Kubernetes</a>
+    </li>
+    <li class="toctree-l2"><a class="reference internal" href="#application-http-ingest">Application HTTP ingest</a>
+    </li>
+    <li class="toctree-l2"><a class="reference internal" href="#presets">Presets</a>
+    </li>
+    </ul>
+                  </li>
+                  <li class="toctree-l1"><a class="reference internal" href="../tuning/">Tuning</a>
+                  </li>
+                  <li class="toctree-l1"><a class="reference internal" href="../upgrade/">Upgrade</a>
+                  </li>
+                  <li class="toctree-l1"><a class="reference internal" href="../troubleshooting/">Troubleshooting</a>
+                  </li>
+                  <li class="toctree-l1"><a class="reference internal" href="../ci/">CI</a>
+                  </li>
+                  <li class="toctree-l1"><a class="reference internal" href="../release_signing/">Release signing</a>
+                  </li>
+              </ul>
+              <p class="caption"><span class="caption-text">Architecture Decision Records</span></p>
+              <ul>
+                  <li class="toctree-l1"><a class="reference internal" href="../../adr/0001-local-first-guided-ai/">ADR 0001 — Local-first guided AI</a>
+                  </li>
+                  <li class="toctree-l1"><a class="reference internal" href="../../adr/0002-flat-src-layout/">ADR 0002 — Flat src layout</a>
+                  </li>
+                  <li class="toctree-l1"><a class="reference internal" href="../../adr/0003-storage-protocols/">ADR 0003 — Storage protocols</a>
+                  </li>
+                  <li class="toctree-l1"><a class="reference internal" href="../../adr/0004-windows-first-collectors/">ADR 0004 — Windows-first collectors</a>
+                  </li>
+                  <li class="toctree-l1"><a class="reference internal" href="../../adr/0005-ai-presentation-only/">ADR 0005 — AI presentation-only</a>
+                  </li>
+                  <li class="toctree-l1"><a class="reference internal" href="../../adr/0006-ollama-gemma-default/">ADR 0006 — Ollama Gemma default</a>
+                  </li>
+              </ul>
+              <p class="caption"><span class="caption-text">Planning</span></p>
+              <ul>
+                  <li class="toctree-l1"><a class="reference internal" href="../../planning/architecture_overview/">Architecture overview</a>
+                  </li>
+                  <li class="toctree-l1"><a class="reference internal" href="../../planning/full_build_architecture_plan/">Full build architecture plan</a>
+                  </li>
+                  <li class="toctree-l1"><a class="reference internal" href="../../planning/data_flow_contracts/">Data flow contracts</a>
+                  </li>
+                  <li class="toctree-l1"><a class="reference internal" href="../../planning/implementation_index/">Implementation index</a>
+                  </li>
+              </ul>
+      </div>
+    </div>
+    </nav>
+
+    <section data-toggle="wy-nav-shift" class="wy-nav-content-wrap">
+      <nav class="wy-nav-top" role="navigation" aria-label="Mobile navigation menu">
+          <i data-toggle="wy-nav-top" class="fa fa-bars"></i>
+          <a href="../..">Inferra</a>
+        
+      </nav>
+      <div class="wy-nav-content">
+        <div class="rst-content"><div role="navigation" aria-label="breadcrumbs navigation">
+  <ul class="wy-breadcrumbs">
+    <li><a href="../.." class="icon icon-home" aria-label="Docs"></a></li>
+          <li class="breadcrumb-item">Operator guides</li>
+      <li class="breadcrumb-item active">Collectors</li>
+    <li class="wy-breadcrumbs-aside">
+    </li>
+  </ul>
+  <hr/>
+</div>
+          <div role="main" class="document" itemscope="itemscope" itemtype="http://schema.org/Article">
+            <div class="section" itemprop="articleBody">
+              
+                <h1 id="collector-commands">Collector Commands<a class="headerlink" href="#collector-commands" title="Permanent link">&para;</a></h1>
+<p>Inferra collectors are read-only toward observed systems. Implementation lives under <code>src/collectors/</code> with factories in <code>src/collectors/factory.py</code>.</p>
+<h2 id="supervised-collection">Supervised collection<a class="headerlink" href="#supervised-collection" title="Permanent link">&para;</a></h2>
+<p>Supervisors run inside <code>inferra run</code> / <code>inferra serve</code> or standalone <code>inferra run-collectors</code>. Example sequences:</p>
+<p>Windows:</p>
+<pre><code class="language-powershell">inferra --config inferra.toml config preset windows-server
+inferra --config inferra.toml run-collectors --help
+inferra --config inferra.toml collectors status
+inferra --config inferra.toml collectors start --help
+inferra --config inferra.toml collectors stop --help
+</code></pre>
+<p>Linux:</p>
+<pre><code class="language-bash">inferra --config inferra.toml config preset linux-node
+inferra --config inferra.toml run-collectors --help
+inferra --config inferra.toml collectors status
+</code></pre>
+<p>Docker host:</p>
+<pre><code class="language-bash">inferra --config inferra.toml config preset docker-host
+inferra --config inferra.toml run-collectors --help
+inferra --config inferra.toml collectors status
+</code></pre>
+<p>Kubernetes:</p>
+<pre><code class="language-bash">python -m pip install &quot;.[kubernetes]&quot;
+inferra --config inferra.toml config preset kubernetes
+inferra --config inferra.toml run-collectors --help
+inferra --config inferra.toml collectors status
+</code></pre>
+<p><code>inferra collectors status</code> prefers live daemon status. If no daemon is running, it reports configured collectors as <code>not_running</code> and hints to start <code>inferra run</code>. <code>collectors start</code> and <code>collectors stop</code> require a running API (see <a href="../troubleshooting/">Troubleshooting</a>).</p>
+<h2 id="one-shot-collection">One-shot collection<a class="headerlink" href="#one-shot-collection" title="Permanent link">&para;</a></h2>
+<p>Single pass plus normalization drain:</p>
+<p>Windows:</p>
+<pre><code class="language-powershell">inferra --config inferra.toml collect-host
+inferra --config inferra.toml collect-processes
+inferra --config inferra.toml collect-services
+inferra --config inferra.toml collect-eventlog
+</code></pre>
+<p>Linux:</p>
+<pre><code class="language-bash">inferra --config inferra.toml collect-host
+inferra --config inferra.toml collect-processes
+inferra --config inferra.toml collect-syslog
+inferra --config inferra.toml collect-journald
+</code></pre>
+<p>Kubernetes:</p>
+<pre><code class="language-bash">inferra --config inferra.toml collect-kubernetes
+</code></pre>
+<p>Use <code>--json</code> for machine-readable summaries.</p>
+<hr />
+<h2 id="host-metrics">Host metrics<a class="headerlink" href="#host-metrics" title="Permanent link">&para;</a></h2>
+<p>Polls CPU/memory/disk thresholds and emits metric-style events and ringbuffer snapshots.</p>
+<pre><code class="language-toml">[collectors.host_metrics]
+enabled = true
+poll_interval_seconds = 10.0
+warn_cpu_percent = 85.0
+warn_memory_percent = 85.0
+warn_disk_percent = 90.0
+</code></pre>
+<h2 id="process-snapshot">Process snapshot<a class="headerlink" href="#process-snapshot" title="Permanent link">&para;</a></h2>
+<p>Tracks watched processes and PID lists with CPU/memory thresholds and disk paths.</p>
+<pre><code class="language-toml">[collectors.process]
+enabled = true
+poll_interval_seconds = 10.0
+watch_processes = [&quot;nginx&quot;, &quot;postgres&quot;, &quot;python&quot;, &quot;node&quot;, &quot;java&quot;]
+watch_pids = []
+disk_paths = [&quot;/&quot;, &quot;/var/log&quot;, &quot;/data&quot;]
+top_n = 20
+min_cpu_percent = 75.0
+min_memory_mb = 512.0
+</code></pre>
+<h2 id="windows-services">Windows services<a class="headerlink" href="#windows-services" title="Permanent link">&para;</a></h2>
+<p>Emits state-change events for service status transitions.</p>
+<pre><code class="language-toml">[collectors.windows_service]
+enabled = true
+poll_interval_seconds = 30.0
+include_stopped = false
+names = []
+</code></pre>
+<h2 id="windows-event-log">Windows Event Log<a class="headerlink" href="#windows-event-log" title="Permanent link">&para;</a></h2>
+<p>Bookmarked channel polling (pywin32 when available).</p>
+<pre><code class="language-toml">[collectors.windows_eventlog]
+enabled = true
+channels = [&quot;Application&quot;, &quot;System&quot;]
+poll_interval_seconds = 5.0
+</code></pre>
+<h2 id="linux-syslog-files">Linux syslog files<a class="headerlink" href="#linux-syslog-files" title="Permanent link">&para;</a></h2>
+<p>File-follow with rotation awareness.</p>
+<pre><code class="language-toml">[collectors.linux_syslog]
+enabled = true
+paths = [&quot;/var/log/syslog&quot;, &quot;/var/log/messages&quot;]
+poll_interval_seconds = 2.0
+start_at_end = true
+</code></pre>
+<h2 id="journald">journald<a class="headerlink" href="#journald" title="Permanent link">&para;</a></h2>
+<p>Native bindings or <code>journalctl</code> fallback.</p>
+<pre><code class="language-toml">[collectors.journald]
+enabled = true
+units = []
+exclude_units = [&quot;systemd-resolved.service&quot;, &quot;systemd-timesyncd.service&quot;]
+min_priority = 6
+poll_interval_seconds = 5.0
+since = &quot;-1 hour&quot;
+limit = 200
+</code></pre>
+<h2 id="file-glob-multiline">File glob / multiline<a class="headerlink" href="#file-glob-multiline" title="Permanent link">&para;</a></h2>
+<p>Long-lived file tails with optional service identity from paths.</p>
+<pre><code class="language-toml">[collectors.file]
+enabled = true
+paths = []
+poll_interval_seconds = 1.0
+start_at_end = false
+
+[[collectors.file.entries]]
+path = &quot;./logs/app.log&quot;
+glob = &quot;&quot;
+service_id = &quot;app&quot;
+service_id_from_filename = false
+multiline_pattern = &quot;&quot;
+</code></pre>
+<h2 id="docker-engine">Docker Engine<a class="headerlink" href="#docker-engine" title="Permanent link">&para;</a></h2>
+<p>Events and container logs via the Docker HTTP API.</p>
+<pre><code class="language-toml">[collectors.docker]
+enabled = true
+socket = &quot;/var/run/docker.sock&quot;
+include_names = []
+include_labels = []
+exclude_names = [&quot;inferra-*&quot;]
+include_all = true
+</code></pre>
+<h2 id="kubernetes">Kubernetes<a class="headerlink" href="#kubernetes" title="Permanent link">&para;</a></h2>
+<p>Namespace-scoped events and workloads; requires Python kubernetes client when enabled.</p>
+<pre><code class="language-toml">[collectors.kubernetes]
+enabled = false
+poll_interval_seconds = 15.0
+namespaces = []
+all_namespaces = true
+label_selector = &quot;&quot;
+limit = 200
+include_pods = true
+include_events = true
+</code></pre>
+<h2 id="application-http-ingest">Application HTTP ingest<a class="headerlink" href="#application-http-ingest" title="Permanent link">&para;</a></h2>
+<p>Accepts JSON payloads over HTTP on the main app or a standalone listener.</p>
+<pre><code class="language-toml">[collectors.app]
+enabled = true
+listen = &quot;127.0.0.1:9876&quot;
+max_payload_bytes = 65536
+shared_token = &quot;&quot;
+mount_path = &quot;/api/ingest&quot;
+enable_main_api = true
+enable_standalone = false
+</code></pre>
+<p>When <code>shared_token</code> is set, clients must send <code>Authorization: Bearer &lt;token&gt;</code>.</p>
+<p>Example request:</p>
+<pre><code class="language-bash">curl -X POST http://127.0.0.1:7433/api/ingest \
+  -H &quot;Content-Type: application/json&quot; \
+  -d &quot;{\&quot;service\&quot;:\&quot;api\&quot;,\&quot;level\&quot;:\&quot;error\&quot;,\&quot;message\&quot;:\&quot;timeout calling postgres\&quot;}&quot;
+</code></pre>
+<h2 id="presets">Presets<a class="headerlink" href="#presets" title="Permanent link">&para;</a></h2>
+<p>Presets bundle collector toggles and <code>collectors.auto_start</code>:</p>
+<pre><code class="language-powershell">inferra config preset web-only
+inferra config preset windows-server
+inferra config preset linux-node
+inferra config preset kubernetes
+inferra config preset docker-host
+</code></pre>
+<p>Defaults are defined in <code>src/config/presets.py</code>.</p>
+              
+            </div>
+          </div><footer>
+    <div class="rst-footer-buttons" role="navigation" aria-label="Footer Navigation">
+        <a href="../ai_provider/" class="btn btn-neutral float-left" title="AI provider"><span class="icon icon-circle-arrow-left"></span> Previous</a>
+        <a href="../tuning/" class="btn btn-neutral float-right" title="Tuning">Next <span class="icon icon-circle-arrow-right"></span></a>
+    </div>
+
+  <hr/>
+
+  <div role="contentinfo">
+    <!-- Copyright etc -->
+  </div>
+
+  Built with <a href="https://www.mkdocs.org/">MkDocs</a> using a <a href="https://github.com/readthedocs/sphinx_rtd_theme">theme</a> provided by <a href="https://readthedocs.org">Read the Docs</a>.
+</footer>
+          
+        </div>
+      </div>
+
+    </section>
+
+  </div>
+
+  <div class="rst-versions" role="note" aria-label="Versions">
+  <span class="rst-current-version" data-toggle="rst-current-version">
+    
+    
+      <span><a href="../ai_provider/" style="color: #fcfcfc">&laquo; Previous</a></span>
+    
+    
+      <span><a href="../tuning/" style="color: #fcfcfc">Next &raquo;</a></span>
+    
+  </span>
+</div>
+    <script src="../../js/jquery-3.6.0.min.js"></script>
+    <script>var base_url = "../..";</script>
+    <script src="../../js/theme_extra.js"></script>
+    <script src="../../js/theme.js"></script>
+      <script src="../../search/main.js"></script>
+    <script>
+        jQuery(function () {
+            SphinxRtdTheme.Navigation.enable(true);
+        });
+    </script>
+
+</body>
+</html>

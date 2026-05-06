@@ -1,20 +1,24 @@
+FROM python:3.12-slim AS builder
+
+WORKDIR /build
+RUN pip install --no-cache-dir build
+COPY . .
+RUN python -m build --wheel --outdir /dist
+
 FROM python:3.12-slim
 
-ENV PYTHONUNBUFFERED=1 \
-    INFERRA_CONFIG=/etc/inferra/inferra.toml
+RUN useradd --system --uid 1000 --create-home inferra
+RUN mkdir -p /data && chown inferra:inferra /data
 
 WORKDIR /app
-COPY pyproject.toml README.md ./
-COPY src ./src
-
-RUN pip install --no-cache-dir .
-
-RUN useradd --create-home --uid 10001 inferra \
-    && mkdir -p /data /etc/inferra \
-    && chown -R inferra:inferra /data /etc/inferra
+COPY --from=builder /dist /dist
+RUN WHEEL="$(ls /dist/*.whl | head -n1)" && pip install --no-cache-dir "${WHEEL}[kubernetes]" && rm -rf /dist
 
 USER inferra
-EXPOSE 7433
-VOLUME ["/data", "/etc/inferra"]
+WORKDIR /home/inferra
 
-CMD ["inferra", "--config", "/etc/inferra/inferra.toml", "serve", "--host", "0.0.0.0", "--port", "7433"]
+EXPOSE 7433
+
+ENV INFERRA_CONFIG=/etc/inferra/inferra.toml
+
+CMD ["inferra", "--config", "/etc/inferra/inferra.toml", "serve", "--data-dir", "/data", "--host", "0.0.0.0", "--port", "7433"]

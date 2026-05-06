@@ -1,0 +1,8 @@
+{
+  "id": "application_bug",
+  "expected_cause_type": "application_bug",
+  "raw_payloads": [
+    "{\"service\":\"api\",\"level\":\"warn\",\"message\":\"container restart observed\"}",
+    "{\"service\":\"api\",\"level\":\"warn\",\"message\":\"second container restart observed\"}"
+  ]
+}

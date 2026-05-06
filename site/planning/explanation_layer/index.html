@@ -1,0 +1,679 @@
+<!DOCTYPE html>
+<html class="writer-html5" lang="en" >
+<head>
+    <meta charset="utf-8" />
+    <meta http-equiv="X-UA-Compatible" content="IE=edge" />
+    <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+      <link rel="shortcut icon" href="../../img/favicon.ico" />
+    <title>Explanation Layer - Inferra</title>
+    <link rel="stylesheet" href="../../css/theme.css" />
+    <link rel="stylesheet" href="../../css/theme_extra.css" />
+        <link rel="stylesheet" href="https://cdnjs.cloudflare.com/ajax/libs/highlight.js/11.8.0/styles/github.min.css" />
+    
+      <script>
+        // Current page data
+        var mkdocs_page_name = "Explanation Layer";
+        var mkdocs_page_input_path = "planning\\explanation_layer.md";
+        var mkdocs_page_url = null;
+      </script>
+    
+    <!--[if lt IE 9]>
+      <script src="../../js/html5shiv.min.js"></script>
+    <![endif]-->
+      <script src="https://cdnjs.cloudflare.com/ajax/libs/highlight.js/11.8.0/highlight.min.js"></script>
+      <script>hljs.highlightAll();</script> 
+</head>
+
+<body class="wy-body-for-nav" role="document">
+
+  <div class="wy-grid-for-nav">
+    <nav data-toggle="wy-nav-shift" class="wy-nav-side stickynav">
+    <div class="wy-side-scroll">
+      <div class="wy-side-nav-search">
+          <a href="../.." class="icon icon-home"> Inferra
+        </a><div role="search">
+  <form id ="rtd-search-form" class="wy-form" action="../../search.html" method="get">
+      <input type="text" name="q" placeholder="Search docs" aria-label="Search docs" title="Type search term here" />
+  </form>
+</div>
+      </div>
+
+      <div class="wy-menu wy-menu-vertical" data-spy="affix" role="navigation" aria-label="Navigation menu">
+              <ul>
+                <li class="toctree-l1"><a class="reference internal" href="../..">Home</a>
+                </li>
+              </ul>
+              <p class="caption"><span class="caption-text">Operator guides</span></p>
+              <ul>
+                  <li class="toctree-l1"><a class="reference internal" href="../../operations/install/">Install</a>
+                  </li>
+                  <li class="toctree-l1"><a class="reference internal" href="../../operations/ai_provider/">AI provider</a>
+                  </li>
+                  <li class="toctree-l1"><a class="reference internal" href="../../operations/collectors/">Collectors</a>
+                  </li>
+                  <li class="toctree-l1"><a class="reference internal" href="../../operations/tuning/">Tuning</a>
+                  </li>
+                  <li class="toctree-l1"><a class="reference internal" href="../../operations/upgrade/">Upgrade</a>
+                  </li>
+                  <li class="toctree-l1"><a class="reference internal" href="../../operations/troubleshooting/">Troubleshooting</a>
+                  </li>
+                  <li class="toctree-l1"><a class="reference internal" href="../../operations/ci/">CI</a>
+                  </li>
+                  <li class="toctree-l1"><a class="reference internal" href="../../operations/release_signing/">Release signing</a>
+                  </li>
+              </ul>
+              <p class="caption"><span class="caption-text">Architecture Decision Records</span></p>
+              <ul>
+                  <li class="toctree-l1"><a class="reference internal" href="../../adr/0001-local-first-guided-ai/">ADR 0001 — Local-first guided AI</a>
+                  </li>
+                  <li class="toctree-l1"><a class="reference internal" href="../../adr/0002-flat-src-layout/">ADR 0002 — Flat src layout</a>
+                  </li>
+                  <li class="toctree-l1"><a class="reference internal" href="../../adr/0003-storage-protocols/">ADR 0003 — Storage protocols</a>
+                  </li>
+                  <li class="toctree-l1"><a class="reference internal" href="../../adr/0004-windows-first-collectors/">ADR 0004 — Windows-first collectors</a>
+                  </li>
+                  <li class="toctree-l1"><a class="reference internal" href="../../adr/0005-ai-presentation-only/">ADR 0005 — AI presentation-only</a>
+                  </li>
+                  <li class="toctree-l1"><a class="reference internal" href="../../adr/0006-ollama-gemma-default/">ADR 0006 — Ollama Gemma default</a>
+                  </li>
+              </ul>
+              <p class="caption"><span class="caption-text">Planning</span></p>
+              <ul>
+                  <li class="toctree-l1"><a class="reference internal" href="../architecture_overview/">Architecture overview</a>
+                  </li>
+                  <li class="toctree-l1"><a class="reference internal" href="../full_build_architecture_plan/">Full build architecture plan</a>
+                  </li>
+                  <li class="toctree-l1"><a class="reference internal" href="../data_flow_contracts/">Data flow contracts</a>
+                  </li>
+                  <li class="toctree-l1"><a class="reference internal" href="../implementation_index/">Implementation index</a>
+                  </li>
+              </ul>
+      </div>
+    </div>
+    </nav>
+
+    <section data-toggle="wy-nav-shift" class="wy-nav-content-wrap">
+      <nav class="wy-nav-top" role="navigation" aria-label="Mobile navigation menu">
+          <i data-toggle="wy-nav-top" class="fa fa-bars"></i>
+          <a href="../..">Inferra</a>
+        
+      </nav>
+      <div class="wy-nav-content">
+        <div class="rst-content"><div role="navigation" aria-label="breadcrumbs navigation">
+  <ul class="wy-breadcrumbs">
+    <li><a href="../.." class="icon icon-home" aria-label="Docs"></a></li>
+      <li class="breadcrumb-item active">Explanation Layer</li>
+    <li class="wy-breadcrumbs-aside">
+    </li>
+  </ul>
+  <hr/>
+</div>
+          <div role="main" class="document" itemscope="itemscope" itemtype="http://schema.org/Article">
+            <div class="section" itemprop="articleBody">
+              
+                <h1 id="explanation-layer">Explanation Layer<a class="headerlink" href="#explanation-layer" title="Permanent link">&para;</a></h1>
+<h2 id="purpose">Purpose<a class="headerlink" href="#purpose" title="Permanent link">&para;</a></h2>
+<p>The explanation layer converts structured hypothesis data into human-readable narratives. It is the only component in Inferra that uses an LLM, and it is strictly constrained: the LLM explains what the deterministic engine already decided. It does not influence scoring, ranking, or hypothesis generation.</p>
+<hr />
+<h2 id="architectural-position">Architectural Position<a class="headerlink" href="#architectural-position" title="Permanent link">&para;</a></h2>
+<pre><code>Scoring Engine → Ranked Hypotheses (structured data)
+                          │
+                          ▼
+              ┌───────────────────────┐
+              │ Explanation Layer      │
+              │                       │
+              │ 1. Build prompt        │
+              │ 2. Call LLM            │
+              │ 3. Validate response   │
+              │ 4. Apply guardrails    │
+              │ 5. Return explanation  │
+              └───────────┬───────────┘
+                          │
+                          ▼
+              ExplanationResult (human-readable text)
+</code></pre>
+<p>If the LLM is unavailable, the system falls back to template-based explanations. The UI displays "structured summary" instead of a natural language narrative. All functionality except the explanation quality is unaffected.</p>
+<hr />
+<h2 id="llm-provider-strategy">LLM Provider Strategy<a class="headerlink" href="#llm-provider-strategy" title="Permanent link">&para;</a></h2>
+<p>The explanation layer supports multiple LLM backends through a provider abstraction:</p>
+<pre><code class="language-python">class LLMProvider(Protocol):
+    async def generate(self, prompt: str, max_tokens: int = 2000,
+                        temperature: float = 0.3) -&gt; str:
+        ...
+
+    def is_available(self) -&gt; bool:
+        ...
+
+    @property
+    def model_name(self) -&gt; str:
+        ...
+</code></pre>
+<h3 id="supported-providers">Supported Providers<a class="headerlink" href="#supported-providers" title="Permanent link">&para;</a></h3>
+<table>
+<thead>
+<tr>
+<th>Provider</th>
+<th>Configuration</th>
+<th>Notes</th>
+</tr>
+</thead>
+<tbody>
+<tr>
+<td>Local Ollama</td>
+<td><code>ollama://localhost:11434/model_name</code></td>
+<td>Preferred. Fully local, no data leaves machine.</td>
+</tr>
+<tr>
+<td>OpenAI-compatible API</td>
+<td><code>openai://api.openai.com/v1</code></td>
+<td>Requires API key. Data sent to remote server (sanitized).</td>
+</tr>
+<tr>
+<td>Template fallback</td>
+<td><code>template://</code></td>
+<td>Always available. No LLM, structured text templates.</td>
+</tr>
+</tbody>
+</table>
+<p><strong>Provider selection order</strong>:
+1. User-configured provider (from <code>inferra.toml</code>)
+2. Auto-detect local Ollama (check if port 11434 responds)
+3. Template fallback (always succeeds)</p>
+<pre><code class="language-toml">[explanation]
+provider = &quot;ollama://localhost:11434/llama3&quot;
+# provider = &quot;openai://api.openai.com/v1&quot;
+# api_key_env = &quot;OPENAI_API_KEY&quot;
+fallback = &quot;template://&quot;
+timeout_seconds = 30
+max_retries = 2
+temperature = 0.3         # low temperature for factual, consistent output
+max_tokens = 2000
+</code></pre>
+<hr />
+<h2 id="llm-boundary-enforcement">LLM Boundary Enforcement<a class="headerlink" href="#llm-boundary-enforcement" title="Permanent link">&para;</a></h2>
+<h3 id="what-the-llm-receives-explicitly-defined">What the LLM Receives (Explicitly Defined)<a class="headerlink" href="#what-the-llm-receives-explicitly-defined" title="Permanent link">&para;</a></h3>
+<p>The LLM prompt is constructed from a <strong>fixed schema</strong>. The system never passes raw, unstructured data directly to the LLM. Everything is filtered through the <code>ExplanationRequest</code> contract (see <code>data_flow_contracts.md</code>).</p>
+<p><strong>Allowed in prompt</strong>:
+| Data | Format | Example |
+|---|---|---|
+| Incident ID | String | <code>"inc-abc123"</code> |
+| Time range | ISO 8601 timestamps | <code>"14:30:00Z to 14:35:00Z"</code> |
+| Service names | Canonical identifiers | <code>"api-gateway"</code>, <code>"postgres"</code> |
+| Severity levels | Enum names | <code>"ERROR"</code>, <code>"CRITICAL"</code> |
+| Event summaries | Sanitized 1-line strings (max 200 chars each) | <code>"connection refused: too many clients"</code> |
+| Hypothesis descriptions | Structured text from hypothesis engine | <code>"postgres failure cascaded to 3 services"</code> |
+| Score breakdowns | Float values | <code>"temporal_alignment: 0.92"</code> |
+| Contradictions | Structured descriptions | <code>"health check passed at 14:32"</code> |
+| Topology edges | Service-to-service relations | <code>"api-gateway calls postgres"</code> |
+| Resource summary | Summarized metrics | <code>"memory: 72%, CPU: 45%"</code> |</p>
+<p><strong>Forbidden — never included in prompt</strong>:
+| Data | Reason |
+|---|---|
+| Raw log lines | May contain secrets, credentials, PII |
+| IP addresses | Stripped during sanitization |
+| Environment variable values | Stripped; only keys may appear |
+| File paths (full) | Stripped to basenames only |
+| API keys, passwords, tokens | Stripped by regex + known patterns |
+| Structured data values from events | May contain request bodies, user data |
+| Raw SQL queries from logs | May contain user data |
+| Container environment blocks | Contains secrets |</p>
+<h3 id="context-budget">Context Budget<a class="headerlink" href="#context-budget" title="Permanent link">&para;</a></h3>
+<p>The prompt has a hard token budget to prevent context window overflow and reduce hallucination surface:</p>
+<pre><code class="language-python">MAX_PROMPT_TOKENS = 4000  # conservative; works with 7B local models
+MAX_TIMELINE_ENTRIES = 30  # show top-30 events, not all 500
+MAX_ALTERNATIVES = 3       # top 3 alternative hypotheses
+MAX_CONTRADICTIONS = 5     # top 5 contradictions
+MAX_TOPOLOGY_EDGES = 20    # topology summary, not full graph
+</code></pre>
+<p>Events included in the timeline are selected by: (1) key events flagged by the hypothesis, (2) highest severity, (3) one per service minimum, (4) chronological order. The selection algorithm is deterministic.</p>
+<h3 id="drift-prevention">Drift Prevention<a class="headerlink" href="#drift-prevention" title="Permanent link">&para;</a></h3>
+<p>Prompt drift occurs when the prompt template is modified (accidentally or intentionally) to include information that leaks structured data back into the reasoning pipeline.</p>
+<p><strong>Enforced boundaries</strong>:
+1. The LLM response is <strong>never parsed for structured data</strong>. The <code>ExplanationResult</code> has text-only fields (<code>summary</code>, <code>primary_hypothesis_text</code>, etc.). No field is extracted from the LLM response and fed back into scoring, hypothesis generation, or incident state.
+2. The prompt template is <strong>version-controlled and frozen per release</strong>. Changes to <code>EXPLANATION_PROMPT</code> require explicit review.
+3. The LLM call is <strong>fire-and-forget with respect to analysis state</strong>. If the LLM call fails, times out, or returns garbage, the analysis pipeline is completely unaffected. The UI falls back to the template explanation.
+4. <strong>No multi-turn conversation</strong>. Each explanation is a single prompt → single response. The LLM has no memory of previous incidents or explanations.</p>
+<hr />
+<h2 id="prompt-construction">Prompt Construction<a class="headerlink" href="#prompt-construction" title="Permanent link">&para;</a></h2>
+<h3 id="input-sanitization">Input Sanitization<a class="headerlink" href="#input-sanitization" title="Permanent link">&para;</a></h3>
+<p>Before constructing the prompt, all data is sanitized:</p>
+<pre><code class="language-python">def sanitize_for_llm(request: ExplanationRequest) -&gt; ExplanationRequest:
+    &quot;&quot;&quot;Strip sensitive data before sending to LLM.&quot;&quot;&quot;
+    sanitized = deepcopy(request)
+
+    for entry in sanitized.timeline:
+        entry.summary = strip_ips(entry.summary)
+        entry.summary = strip_env_values(entry.summary)
+        entry.summary = strip_file_paths(entry.summary, keep_basename=True)
+
+    # Service names are kept (they are canonical identifiers, not secrets)
+    # Timestamps are kept (needed for timeline narrative)
+    # Severity levels are kept
+
+    return sanitized
+</code></pre>
+<h3 id="prompt-template">Prompt Template<a class="headerlink" href="#prompt-template" title="Permanent link">&para;</a></h3>
+<pre><code class="language-python">EXPLANATION_PROMPT = &quot;&quot;&quot;You are a systems reliability engineer analyzing an infrastructure incident.
+You must explain what happened based ONLY on the evidence provided below. Do not invent or assume
+any information not present in the data.
+
+## Incident Summary
+- Incident ID: {incident_id}
+- Time range: {time_range_start} to {time_range_end}
+- Affected services: {affected_services}
+- Severity: {severity}
+
+## Top Hypothesis (Rank 1, Score: {top_score})
+- Type: {cause_type} / {cause_subtype}
+- Description: {description}
+- Confidence: {confidence_label}
+- Supporting evidence: {supporting_count} events
+- Contradicting evidence: {contradicting_count} events
+
+## Evidence Timeline
+{timeline_entries}
+
+## Service Topology
+{topology_description}
+
+## Runtime Context
+{runtime_summary}
+
+## Contradictions
+{contradictions_list}
+
+## Alternative Hypotheses
+{alternatives_list}
+
+---
+
+Produce the following sections:
+
+### Summary
+A 2-3 sentence overview of what happened and the most likely cause.
+
+### What Happened (Timeline)
+A chronological narrative of the incident. Reference specific timestamps and services.
+
+### Most Likely Cause
+Explain the top-ranked hypothesis in plain language. Describe the evidence chain from root cause to observed symptoms.
+
+### Evidence Assessment
+How strong is the evidence? What supports the hypothesis and what contradicts it?
+
+### Other Possibilities
+Brief mention of alternative hypotheses and why they ranked lower.
+
+### Recommended Actions
+Concrete next steps the operator should take to verify and resolve the issue.
+
+### Uncertainty Notes
+Where is the analysis uncertain? What additional data would help?
+
+RULES:
+- Only reference services, timestamps, and events present in the data above.
+- Do not invent causes, services, or events not in the evidence.
+- If evidence is weak or contradictions exist, say so explicitly.
+- Be concise. Each section should be 2-5 sentences maximum.
+- Do not use marketing language or vague qualifiers like &quot;leveraging AI&quot;.
+- Use technical terminology appropriate for a systems engineer audience.
+&quot;&quot;&quot;
+</code></pre>
+<h3 id="prompt-assembly">Prompt Assembly<a class="headerlink" href="#prompt-assembly" title="Permanent link">&para;</a></h3>
+<pre><code class="language-python">def build_prompt(request: ExplanationRequest) -&gt; str:
+    sanitized = sanitize_for_llm(request)
+    top_hyp = sanitized.top_hypotheses[0]
+
+    timeline_text = &quot;\n&quot;.join(
+        f&quot;- [{e.timestamp.strftime('%H:%M:%S')}] [{e.severity.name}] {e.service_id}: {e.summary}&quot;
+        + (&quot; ⭐&quot; if e.is_key_event else &quot;&quot;)
+        for e in sanitized.timeline
+    )
+
+    topology_text = &quot;\n&quot;.join(
+        f&quot;- {r.source} {r.relation_type} {r.target}&quot;
+        for r in sanitized.service_topology
+    )
+
+    contradictions_text = &quot;\n&quot;.join(
+        f&quot;- {c.contradiction_type}: {c.explanation}&quot;
+        for c in sanitized.contradictions
+    ) or &quot;None detected.&quot;
+
+    alternatives_text = &quot;\n&quot;.join(
+        f&quot;- (Rank {h.rank}, Score {h.total_score:.2f}) {h.cause_type.value}/{h.description[:100]}&quot;
+        for h in sanitized.top_hypotheses[1:]
+    ) or &quot;No alternatives.&quot;
+
+    return EXPLANATION_PROMPT.format(
+        incident_id=sanitized.incident_id,
+        time_range_start=sanitized.timeline[0].timestamp.isoformat() if sanitized.timeline else &quot;unknown&quot;,
+        time_range_end=sanitized.timeline[-1].timestamp.isoformat() if sanitized.timeline else &quot;unknown&quot;,
+        affected_services=&quot;, &quot;.join(top_hyp.affected_services),
+        severity=top_hyp.cause_type.value,
+        top_score=f&quot;{top_hyp.total_score:.2f}&quot;,
+        cause_type=top_hyp.cause_type.value,
+        cause_subtype=getattr(top_hyp, &quot;cause_subtype&quot;, &quot;&quot;),
+        description=top_hyp.description,
+        confidence_label=top_hyp.confidence_label,
+        supporting_count=len(top_hyp.supporting_events),
+        contradicting_count=len(top_hyp.contradicting_events),
+        timeline_entries=timeline_text,
+        topology_description=topology_text,
+        runtime_summary=format_runtime_summary(sanitized.runtime_context_summary),
+        contradictions_list=contradictions_text,
+        alternatives_list=alternatives_text,
+    )
+</code></pre>
+<hr />
+<h2 id="response-validation-guardrails">Response Validation (Guardrails)<a class="headerlink" href="#response-validation-guardrails" title="Permanent link">&para;</a></h2>
+<p>The LLM response is post-processed through a guardrail pipeline before being presented to the user.</p>
+<h3 id="guardrail-1-service-name-verification">Guardrail 1: Service Name Verification<a class="headerlink" href="#guardrail-1-service-name-verification" title="Permanent link">&para;</a></h3>
+<p>Every service name mentioned in the response must exist in the input data.</p>
+<pre><code class="language-python">def verify_service_names(response: str, known_services: set[str]) -&gt; tuple[str, list[str]]:
+    &quot;&quot;&quot;Check that all service references in the response are valid.&quot;&quot;&quot;
+    violations = []
+    words = set(re.findall(r'\b[\w\-\.]+\b', response))
+    # Heuristic: words that look like service names but aren't in known set
+    for word in words:
+        if (looks_like_service_name(word) and
+            word not in known_services and
+            word.lower() not in COMMON_TECHNICAL_TERMS):
+            violations.append(f&quot;Unknown service reference: '{word}'&quot;)
+            response = response.replace(word, f&quot;[unknown: {word}]&quot;)
+    return response, violations
+</code></pre>
+<h3 id="guardrail-2-timestamp-verification">Guardrail 2: Timestamp Verification<a class="headerlink" href="#guardrail-2-timestamp-verification" title="Permanent link">&para;</a></h3>
+<p>Timestamps mentioned in the response should correspond to actual events.</p>
+<pre><code class="language-python">def verify_timestamps(response: str, event_timestamps: set[str]) -&gt; tuple[str, list[str]]:
+    &quot;&quot;&quot;Check that timestamps in the response correspond to real events.&quot;&quot;&quot;
+    violations = []
+    mentioned_times = re.findall(r'\d{2}:\d{2}:\d{2}', response)
+    for ts in mentioned_times:
+        if not any(ts in evt_ts for evt_ts in event_timestamps):
+            violations.append(f&quot;Timestamp {ts} not found in event data&quot;)
+    return response, violations
+</code></pre>
+<h3 id="guardrail-3-causation-claim-verification">Guardrail 3: Causation Claim Verification<a class="headerlink" href="#guardrail-3-causation-claim-verification" title="Permanent link">&para;</a></h3>
+<p>Claims about what caused what must map to hypotheses that were actually scored.</p>
+<pre><code class="language-python">def verify_causal_claims(response: str, hypotheses: list[ScoredHypothesis]) -&gt; tuple[str, list[str]]:
+    &quot;&quot;&quot;Check that causal claims in the response correspond to scored hypotheses.&quot;&quot;&quot;
+    violations = []
+    CAUSAL_PHRASES = [&quot;caused by&quot;, &quot;led to&quot;, &quot;resulted in&quot;, &quot;triggered&quot;, &quot;root cause&quot;]
+
+    for phrase in CAUSAL_PHRASES:
+        if phrase in response.lower():
+            # Verify the claimed cause maps to a hypothesis
+            sentence = extract_sentence_containing(response, phrase)
+            if not any(matches_hypothesis(sentence, h) for h in hypotheses):
+                violations.append(f&quot;Causal claim not backed by hypothesis: '{sentence[:100]}'&quot;)
+
+    return response, violations
+</code></pre>
+<h3 id="guardrail-4-confidence-overstatement-check">Guardrail 4: Confidence Overstatement Check<a class="headerlink" href="#guardrail-4-confidence-overstatement-check" title="Permanent link">&para;</a></h3>
+<p>The LLM must not express more confidence than the scoring engine assigned.</p>
+<pre><code class="language-python">OVERCONFIDENCE_PHRASES = [
+    &quot;definitely&quot;, &quot;certainly&quot;, &quot;100%&quot;, &quot;guaranteed&quot;, &quot;proven&quot;,
+    &quot;without a doubt&quot;, &quot;clearly the cause&quot;, &quot;must be&quot;,
+]
+
+def check_overconfidence(response: str, confidence_label: str) -&gt; tuple[str, list[str]]:
+    violations = []
+    for phrase in OVERCONFIDENCE_PHRASES:
+        if phrase in response.lower():
+            violations.append(f&quot;Overconfidence phrase detected: '{phrase}'&quot;)
+            # Soften the language
+            response = response.replace(phrase, &quot;likely&quot;)
+    return response, violations
+</code></pre>
+<h3 id="guardrail-5-structural-diff-check">Guardrail 5: Structural Diff Check<a class="headerlink" href="#guardrail-5-structural-diff-check" title="Permanent link">&para;</a></h3>
+<p>The strongest guardrail. Instead of trying to catch hallucinations by pattern matching (which is fundamentally unreliable), verify that the explanation's <strong>claims</strong> are derivable from the input data.</p>
+<pre><code class="language-python">def structural_diff_check(response: str, request: ExplanationRequest,
+                            hypotheses: list[ScoredHypothesis]) -&gt; tuple[str, list[str]]:
+    &quot;&quot;&quot;Extract factual claims from the response and check each against input data.
+    This catches fabricated technical details that pass name/timestamp checks.&quot;&quot;&quot;
+    violations = []
+
+    # Extract claimed metric values (e.g., &quot;memory at 94%&quot;, &quot;CPU at 87%&quot;)
+    metric_claims = re.findall(r'(\w+)\s+(?:at|was|reached|hit)\s+(\d+(?:\.\d+)?)\s*%', response)
+    for metric_name, value in metric_claims:
+        if not value_exists_in_context(metric_name, float(value), request.runtime_context_summary):
+            violations.append(f&quot;Fabricated metric: '{metric_name} at {value}%' not in runtime context&quot;)
+
+    # Extract claimed event counts (e.g., &quot;12 connection errors&quot;)
+    count_claims = re.findall(r'(\d+)\s+(error|timeout|restart|connection|failure)s?', response, re.I)
+    for count, event_type in count_claims:
+        if not count_approximately_matches(int(count), event_type, request):
+            violations.append(f&quot;Fabricated count: '{count} {event_type}s' doesn't match evidence&quot;)
+
+    # Extract claimed configuration details (e.g., &quot;max_connections was reduced&quot;)
+    config_claims = re.findall(r'(max_connections|memory_limit|timeout|pool_size|workers)\s+(?:was|set to|changed to|reduced to)\s+(\S+)', response, re.I)
+    for config_key, config_value in config_claims:
+        violations.append(f&quot;Unverifiable config claim: '{config_key} = {config_value}' — no config data in evidence&quot;)
+
+    return response, violations
+</code></pre>
+<h3 id="guardrail-pipeline">Guardrail Pipeline<a class="headerlink" href="#guardrail-pipeline" title="Permanent link">&para;</a></h3>
+<pre><code class="language-python">async def apply_guardrails(response: str, request: ExplanationRequest,
+                             hypotheses: list[ScoredHypothesis]) -&gt; tuple[str, list[str]]:
+    all_violations = []
+    known_services = set()
+    for h in hypotheses:
+        known_services.update(h.affected_services)
+
+    response, v1 = verify_service_names(response, known_services)
+    all_violations.extend(v1)
+
+    timestamps = {e.timestamp.isoformat() for e in request.timeline}
+    response, v2 = verify_timestamps(response, timestamps)
+    all_violations.extend(v2)
+
+    response, v3 = verify_causal_claims(response, hypotheses)
+    all_violations.extend(v3)
+
+    response, v4 = check_overconfidence(response, hypotheses[0].confidence_label)
+    all_violations.extend(v4)
+
+    response, v5 = structural_diff_check(response, request, hypotheses)
+    all_violations.extend(v5)
+
+    return response, all_violations
+</code></pre>
+<h3 id="what-guardrails-catch-and-what-they-dont-honest-assessment">What Guardrails Catch and What They Don't (Honest Assessment)<a class="headerlink" href="#what-guardrails-catch-and-what-they-dont-honest-assessment" title="Permanent link">&para;</a></h3>
+<table>
+<thead>
+<tr>
+<th>Guardrail</th>
+<th>Catches</th>
+<th>Misses</th>
+</tr>
+</thead>
+<tbody>
+<tr>
+<td>Service name verification</td>
+<td>Hallucinated service names</td>
+<td>Correct names used in wrong context</td>
+</tr>
+<tr>
+<td>Timestamp verification</td>
+<td>Fabricated timestamps</td>
+<td>Real timestamps attributed to wrong events</td>
+</tr>
+<tr>
+<td>Causal claim verification</td>
+<td>Causal claims with no matching hypothesis</td>
+<td>Plausible causal chains using real entities</td>
+</tr>
+<tr>
+<td>Overconfidence check</td>
+<td>Obvious certainty language</td>
+<td>Subtle overconfidence ("this clearly shows...")</td>
+</tr>
+<tr>
+<td>Structural diff check</td>
+<td>Fabricated metrics, counts, config values</td>
+<td>Plausible-sounding details within ranges</td>
+</tr>
+</tbody>
+</table>
+<p><strong>Estimated overall hallucination catch rate: ~50–60%.</strong> The remaining 40% are fabrications that use correct entity names, plausible values, and legitimate-sounding technical details. No post-hoc regex system can catch these reliably.</p>
+<p><strong>Recommendation</strong>: For high-stakes debugging (production outages), prefer the template fallback over LLM explanations. The template output is less readable but guaranteed to contain only data that actually exists. The LLM mode is best for learning and exploration, not for situations where a fabricated detail could send an operator down a wrong investigative path.</p>
+<p>The UI should make this trade-off visible:</p>
+<pre><code>[LLM Explanation] — natural language, may contain inaccuracies
+[Structured Summary] — data only, guaranteed accurate
+</code></pre>
+<hr />
+<h2 id="template-fallback">Template Fallback<a class="headerlink" href="#template-fallback" title="Permanent link">&para;</a></h2>
+<p>When no LLM is available, explanations are generated from templates:</p>
+<pre><code class="language-python">def generate_template_explanation(request: ExplanationRequest) -&gt; ExplanationResult:
+    top = request.top_hypotheses[0]
+
+    summary = (
+        f&quot;Incident affecting {', '.join(top.affected_services)}. &quot;
+        f&quot;Most likely cause: {top.cause_type.value} ({top.description[:100]}). &quot;
+        f&quot;Confidence: {top.confidence_label}. Score: {top.total_score:.2f}.&quot;
+    )
+
+    timeline_text = &quot;\n&quot;.join(
+        f&quot;  [{e.timestamp.strftime('%H:%M:%S')}] {e.severity.name} | {e.service_id}: {e.summary}&quot;
+        for e in request.timeline
+    )
+
+    evidence_text = (
+        f&quot;Supporting evidence: {len(top.supporting_events)} events. &quot;
+        f&quot;Contradicting evidence: {len(top.contradicting_events)} events.&quot;
+    )
+
+    actions = &quot;\n&quot;.join(f&quot;  - {check}&quot; for check in top.suggested_checks)
+
+    alternatives = &quot;\n&quot;.join(
+        f&quot;  - Rank {h.rank} (score {h.total_score:.2f}): {h.description[:80]}&quot;
+        for h in request.top_hypotheses[1:]
+    )
+
+    return ExplanationResult(
+        incident_id=request.incident_id,
+        summary=summary,
+        primary_hypothesis_text=f&quot;{top.cause_type.value}: {top.description}&quot;,
+        evidence_narrative=evidence_text,
+        timeline_narrative=f&quot;Event timeline:\n{timeline_text}&quot;,
+        alternative_explanations=[h.description for h in request.top_hypotheses[1:]],
+        suggested_actions=top.suggested_checks,
+        uncertainty_notes=[&quot;LLM unavailable — showing structured summary&quot;],
+        generation_model=&quot;template_fallback&quot;,
+        guardrail_violations=[],
+    )
+</code></pre>
+<hr />
+<h2 id="caching">Caching<a class="headerlink" href="#caching" title="Permanent link">&para;</a></h2>
+<p>Explanations are cached per incident version. If the incident hasn't changed since the last explanation was generated, the cached explanation is returned:</p>
+<pre><code class="language-python">def should_regenerate(incident: Incident, existing: ExplanationResult | None) -&gt; bool:
+    if existing is None:
+        return True
+    if incident.updated_at &gt; existing.created_at:
+        return True  # incident has new data
+    return False
+</code></pre>
+<hr />
+<h2 id="performance-budget">Performance Budget<a class="headerlink" href="#performance-budget" title="Permanent link">&para;</a></h2>
+<table>
+<thead>
+<tr>
+<th>Operation</th>
+<th>Budget</th>
+<th>Notes</th>
+</tr>
+</thead>
+<tbody>
+<tr>
+<td>Prompt construction + sanitization</td>
+<td>&lt;50ms</td>
+<td>String formatting</td>
+</tr>
+<tr>
+<td>LLM API call (local ollama)</td>
+<td>2–15 seconds</td>
+<td>Depends on model size</td>
+</tr>
+<tr>
+<td>LLM API call (remote)</td>
+<td>1–10 seconds</td>
+<td>Network latency</td>
+</tr>
+<tr>
+<td>Guardrail pipeline</td>
+<td>&lt;100ms</td>
+<td>Regex scans</td>
+</tr>
+<tr>
+<td>Template fallback</td>
+<td>&lt;10ms</td>
+<td>String formatting only</td>
+</tr>
+</tbody>
+</table>
+<p>The explanation is generated asynchronously and does not block the analysis pipeline. The UI shows "Generating explanation..." while the LLM call is in-flight.</p>
+<hr />
+<h2 id="configuration">Configuration<a class="headerlink" href="#configuration" title="Permanent link">&para;</a></h2>
+<pre><code class="language-toml">[explanation]
+provider = &quot;ollama://localhost:11434/llama3&quot;
+fallback = &quot;template://&quot;
+timeout_seconds = 30
+max_retries = 2
+temperature = 0.3
+max_tokens = 2000
+cache_enabled = true
+
+[explanation.sanitization]
+strip_ips = true
+strip_env_values = true
+strip_paths = true
+keep_service_names = true
+keep_timestamps = true
+
+[explanation.guardrails]
+verify_service_names = true
+verify_timestamps = true
+verify_causal_claims = true
+check_overconfidence = true
+</code></pre>
+              
+            </div>
+          </div><footer>
+
+  <hr/>
+
+  <div role="contentinfo">
+    <!-- Copyright etc -->
+  </div>
+
+  Built with <a href="https://www.mkdocs.org/">MkDocs</a> using a <a href="https://github.com/readthedocs/sphinx_rtd_theme">theme</a> provided by <a href="https://readthedocs.org">Read the Docs</a>.
+</footer>
+          
+        </div>
+      </div>
+
+    </section>
+
+  </div>
+
+  <div class="rst-versions" role="note" aria-label="Versions">
+  <span class="rst-current-version" data-toggle="rst-current-version">
+    
+    
+    
+  </span>
+</div>
+    <script src="../../js/jquery-3.6.0.min.js"></script>
+    <script>var base_url = "../..";</script>
+    <script src="../../js/theme_extra.js"></script>
+    <script src="../../js/theme.js"></script>
+      <script src="../../search/main.js"></script>
+    <script>
+        jQuery(function () {
+            SphinxRtdTheme.Navigation.enable(true);
+        });
+    </script>
+
+</body>
+</html>

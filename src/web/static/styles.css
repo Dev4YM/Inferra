@@ -1,4 +1,8 @@
 :root {
+  --chart-bar: #0f766e;
+  --chart-warn: #b54708;
+  --chart-grid: #e2e8f0;
+  --chart-label: #475569;
   color-scheme: light;
   font-family: Inter, Segoe UI, Arial, sans-serif;
   background: #f1f5f9;
@@ -11,6 +15,7 @@
 
 body {
   margin: 0;
+  position: relative;
 }
 
 button,
@@ -348,6 +353,115 @@ button {
 
 .chat-message.assistant {
   background: #ffffff;
+}
+
+.progress-shell {
+  background: #e2e8f0;
+  border-radius: 999px;
+  height: 10px;
+  overflow: hidden;
+}
+
+.progress-fill {
+  background: #0f766e;
+  height: 100%;
+  transition: width 160ms ease;
+}
+
+@media (prefers-reduced-motion: reduce) {
+  .progress-fill {
+    transition: none;
+  }
+}
+
+html.dark {
+  color-scheme: dark;
+  --chart-bar: #14b8a6;
+  --chart-warn: #f59e0b;
+  --chart-grid: #334155;
+  --chart-label: #94a3b8;
+}
+
+html.dark body {
+  background: #020617;
+  color: #e2e8f0;
+}
+
+html.dark .surface {
+  background: #0f172a;
+  border-color: #334155;
+}
+
+html.dark .section-head p {
+  color: #94a3b8;
+}
+
+html.dark .nav-item:hover,
+html.dark .nav-item.active {
+  background: #1e293b;
+  color: #f8fafc;
+}
+
+html.dark .btn-secondary {
+  background: #1e293b;
+  border-color: #475569;
+  color: #e2e8f0;
+}
+
+html.dark .btn-secondary:hover {
+  background: #334155;
+}
+
+html.dark .field,
+html.dark .field-label input,
+html.dark .field-label select {
+  background: #0f172a;
+  border-color: #475569;
+  color: #e2e8f0;
+}
+
+html.dark .list-row,
+html.dark .incident-card,
+html.dark .service-card,
+html.dark .timeline-row {
+  background: #0f172a;
+  border-color: #334155;
+  color: inherit;
+}
+
+html.dark .drawer-panel {
+  background: #0f172a;
+  border-color: #334155;
+}
+
+html.dark .empty-state {
+  background: #020617;
+  border-color: #334155;
+  color: #94a3b8;
+}
+
+.skip-link {
+  background: #0f766e;
+  color: #fff;
+  left: 8px;
+  padding: 8px 12px;
+  position: absolute;
+  top: -40px;
+  transition: top 0.15s ease;
+  z-index: 100;
+}
+
+.skip-link:focus {
+  outline: 2px solid #fff;
+  top: 8px;
+}
+
+html.dark .chat-message.user {
+  background: #042f2e;
+}
+
+html.dark .chat-message.assistant {
+  background: #0f172a;
 }
 
 @media (max-width: 720px) {

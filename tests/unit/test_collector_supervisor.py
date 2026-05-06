@@ -1,15 +1,16 @@
 import asyncio
 
-from collectors.base import CollectorHealth
+from collectors.base import Collector, CollectorHealth
 from collectors.factory import build_collectors
 from collectors.supervisor import CollectorSupervisor
 from config.model import CollectorsConfig, InferraConfig, KubernetesCollectorConfig
 
 
-class FlakyCollector:
+class FlakyCollector(Collector):
     source_type = "flaky"
 
     def __init__(self):
+        super().__init__()
         self.starts = 0
         self.running = False
         self.events = 0
@@ -19,7 +20,7 @@ class FlakyCollector:
     def collector_id(self):
         return "flaky://test"
 
-    async def start(self, sink):
+    async def run(self, sink):
         self.starts += 1
         self.running = True
         if self.starts == 1:
@@ -28,9 +29,10 @@ class FlakyCollector:
         await asyncio.sleep(10)
 
     async def stop(self):
+        await super().stop()
         self.running = False
 
-    def health_check(self):
+    def health(self):
         return CollectorHealth(
             collector_id=self.collector_id,
             source_type=self.source_type,

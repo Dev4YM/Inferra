@@ -1,0 +1,7 @@
+{
+  "id": "infrastructure_failure",
+  "expected_cause_type": "infrastructure_failure",
+  "raw_payloads": [
+    "{\"service\":\"edge\",\"level\":\"error\",\"message\":\"dns resolution failed nxdomain for upstream\"}"
+  ]
+}

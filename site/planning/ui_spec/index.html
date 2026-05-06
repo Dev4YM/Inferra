@@ -1,0 +1,541 @@
+<!DOCTYPE html>
+<html class="writer-html5" lang="en" >
+<head>
+    <meta charset="utf-8" />
+    <meta http-equiv="X-UA-Compatible" content="IE=edge" />
+    <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+      <link rel="shortcut icon" href="../../img/favicon.ico" />
+    <title>UI Specification - Inferra</title>
+    <link rel="stylesheet" href="../../css/theme.css" />
+    <link rel="stylesheet" href="../../css/theme_extra.css" />
+        <link rel="stylesheet" href="https://cdnjs.cloudflare.com/ajax/libs/highlight.js/11.8.0/styles/github.min.css" />
+    
+      <script>
+        // Current page data
+        var mkdocs_page_name = "UI Specification";
+        var mkdocs_page_input_path = "planning\\ui_spec.md";
+        var mkdocs_page_url = null;
+      </script>
+    
+    <!--[if lt IE 9]>
+      <script src="../../js/html5shiv.min.js"></script>
+    <![endif]-->
+      <script src="https://cdnjs.cloudflare.com/ajax/libs/highlight.js/11.8.0/highlight.min.js"></script>
+      <script>hljs.highlightAll();</script> 
+</head>
+
+<body class="wy-body-for-nav" role="document">
+
+  <div class="wy-grid-for-nav">
+    <nav data-toggle="wy-nav-shift" class="wy-nav-side stickynav">
+    <div class="wy-side-scroll">
+      <div class="wy-side-nav-search">
+          <a href="../.." class="icon icon-home"> Inferra
+        </a><div role="search">
+  <form id ="rtd-search-form" class="wy-form" action="../../search.html" method="get">
+      <input type="text" name="q" placeholder="Search docs" aria-label="Search docs" title="Type search term here" />
+  </form>
+</div>
+      </div>
+
+      <div class="wy-menu wy-menu-vertical" data-spy="affix" role="navigation" aria-label="Navigation menu">
+              <ul>
+                <li class="toctree-l1"><a class="reference internal" href="../..">Home</a>
+                </li>
+              </ul>
+              <p class="caption"><span class="caption-text">Operator guides</span></p>
+              <ul>
+                  <li class="toctree-l1"><a class="reference internal" href="../../operations/install/">Install</a>
+                  </li>
+                  <li class="toctree-l1"><a class="reference internal" href="../../operations/ai_provider/">AI provider</a>
+                  </li>
+                  <li class="toctree-l1"><a class="reference internal" href="../../operations/collectors/">Collectors</a>
+                  </li>
+                  <li class="toctree-l1"><a class="reference internal" href="../../operations/tuning/">Tuning</a>
+                  </li>
+                  <li class="toctree-l1"><a class="reference internal" href="../../operations/upgrade/">Upgrade</a>
+                  </li>
+                  <li class="toctree-l1"><a class="reference internal" href="../../operations/troubleshooting/">Troubleshooting</a>
+                  </li>
+                  <li class="toctree-l1"><a class="reference internal" href="../../operations/ci/">CI</a>
+                  </li>
+                  <li class="toctree-l1"><a class="reference internal" href="../../operations/release_signing/">Release signing</a>
+                  </li>
+              </ul>
+              <p class="caption"><span class="caption-text">Architecture Decision Records</span></p>
+              <ul>
+                  <li class="toctree-l1"><a class="reference internal" href="../../adr/0001-local-first-guided-ai/">ADR 0001 — Local-first guided AI</a>
+                  </li>
+                  <li class="toctree-l1"><a class="reference internal" href="../../adr/0002-flat-src-layout/">ADR 0002 — Flat src layout</a>
+                  </li>
+                  <li class="toctree-l1"><a class="reference internal" href="../../adr/0003-storage-protocols/">ADR 0003 — Storage protocols</a>
+                  </li>
+                  <li class="toctree-l1"><a class="reference internal" href="../../adr/0004-windows-first-collectors/">ADR 0004 — Windows-first collectors</a>
+                  </li>
+                  <li class="toctree-l1"><a class="reference internal" href="../../adr/0005-ai-presentation-only/">ADR 0005 — AI presentation-only</a>
+                  </li>
+                  <li class="toctree-l1"><a class="reference internal" href="../../adr/0006-ollama-gemma-default/">ADR 0006 — Ollama Gemma default</a>
+                  </li>
+              </ul>
+              <p class="caption"><span class="caption-text">Planning</span></p>
+              <ul>
+                  <li class="toctree-l1"><a class="reference internal" href="../architecture_overview/">Architecture overview</a>
+                  </li>
+                  <li class="toctree-l1"><a class="reference internal" href="../full_build_architecture_plan/">Full build architecture plan</a>
+                  </li>
+                  <li class="toctree-l1"><a class="reference internal" href="../data_flow_contracts/">Data flow contracts</a>
+                  </li>
+                  <li class="toctree-l1"><a class="reference internal" href="../implementation_index/">Implementation index</a>
+                  </li>
+              </ul>
+      </div>
+    </div>
+    </nav>
+
+    <section data-toggle="wy-nav-shift" class="wy-nav-content-wrap">
+      <nav class="wy-nav-top" role="navigation" aria-label="Mobile navigation menu">
+          <i data-toggle="wy-nav-top" class="fa fa-bars"></i>
+          <a href="../..">Inferra</a>
+        
+      </nav>
+      <div class="wy-nav-content">
+        <div class="rst-content"><div role="navigation" aria-label="breadcrumbs navigation">
+  <ul class="wy-breadcrumbs">
+    <li><a href="../.." class="icon icon-home" aria-label="Docs"></a></li>
+      <li class="breadcrumb-item active">UI Specification</li>
+    <li class="wy-breadcrumbs-aside">
+    </li>
+  </ul>
+  <hr/>
+</div>
+          <div role="main" class="document" itemscope="itemscope" itemtype="http://schema.org/Article">
+            <div class="section" itemprop="articleBody">
+              
+                <h1 id="ui-specification">UI Specification<a class="headerlink" href="#ui-specification" title="Permanent link">&para;</a></h1>
+<h2 id="design-goal">Design Goal<a class="headerlink" href="#design-goal" title="Permanent link">&para;</a></h2>
+<p>The UI exists to answer one question: <strong>"Why is my system failing?"</strong></p>
+<p>Everything else is secondary. If the operator has to dig through logs, filter events, or mentally reconstruct timelines, the UI has failed.</p>
+<hr />
+<h2 id="primary-interaction-loop">Primary Interaction Loop<a class="headerlink" href="#primary-interaction-loop" title="Permanent link">&para;</a></h2>
+<p>This is the exact sequence the operator follows. Every screen, component, and layout decision serves this loop.</p>
+<pre><code>Step 1: GLANCE (Dashboard, &lt;3 seconds)
+  &quot;Is something wrong?&quot;
+  → Green header = no. Stop here.
+  → Red/yellow card = yes. Click it.
+
+Step 2: UNDERSTAND (Incident Detail, &lt;30 seconds)
+  &quot;What does the system think happened?&quot;
+  → Read the #1 hypothesis title and score.
+  → Glance at the evidence timeline.
+  → Check contradictions (if any).
+
+Step 3: VERIFY (Evidence + Suggested Checks, 1-5 minutes)
+  &quot;Do I believe this hypothesis?&quot;
+  → Review the score breakdown — which signals are strong, which are weak?
+  → Expand the inference graph — does the causal chain make sense?
+  → Copy-paste suggested diagnostic commands and run them.
+  → Read alternative hypotheses — is #2 or #3 more plausible?
+
+Step 4: ACT (Resolution, &lt;30 seconds)
+  &quot;What do I do about it?&quot;
+  → If hypothesis was right: click &quot;Resolve: Correct&quot; (feeds scoring calibration).
+  → If a different hypothesis was right: select it and click &quot;Resolve: This One&quot;.
+  → If none were right: click &quot;Resolve: None Correct&quot; (no calibration, incident archived).
+  → Optionally add a note about the actual root cause (free text, stored for future reference).
+</code></pre>
+<p><strong>Critical metric</strong>: Step 1 → Step 3 should take &lt;60 seconds for a straightforward incident. If it takes longer, the UI is too complex or the hypothesis is too vague.</p>
+<h3 id="what-this-means-for-ui-design">What This Means for UI Design<a class="headerlink" href="#what-this-means-for-ui-design" title="Permanent link">&para;</a></h3>
+<table>
+<thead>
+<tr>
+<th>Principle</th>
+<th>Implementation</th>
+</tr>
+</thead>
+<tbody>
+<tr>
+<td>No log digging by default</td>
+<td>Events are pre-filtered, sorted, and annotated by the hypothesis engine. Raw logs are a tab, not the default view.</td>
+</tr>
+<tr>
+<td>Answer first, evidence second</td>
+<td>The hypothesis title and score are visible before any evidence. The operator reads the conclusion first, then evaluates the evidence.</td>
+</tr>
+<tr>
+<td>Copy-paste debugging</td>
+<td>Every <code>suggested_check</code> is in a code block with a one-click copy button.</td>
+</tr>
+<tr>
+<td>Feedback is 2 clicks</td>
+<td>Resolution buttons are always visible at the bottom of the incident view. No modals, no multi-step forms.</td>
+</tr>
+<tr>
+<td>Progressive disclosure</td>
+<td>Dashboard → Incident → Hypothesis → Evidence → Raw Event. Each click adds one level of detail.</td>
+</tr>
+</tbody>
+</table>
+<hr />
+<h2 id="architecture">Architecture<a class="headerlink" href="#architecture" title="Permanent link">&para;</a></h2>
+<p>The UI is a local web application served by Inferra's built-in HTTP server.</p>
+<table>
+<thead>
+<tr>
+<th>Component</th>
+<th>Technology</th>
+<th>Rationale</th>
+</tr>
+</thead>
+<tbody>
+<tr>
+<td>Server</td>
+<td>FastAPI (Python)</td>
+<td>Consistent with backend; async WebSocket support</td>
+</tr>
+<tr>
+<td>Frontend</td>
+<td>Static HTML/JS/CSS (no build step)</td>
+<td>Zero toolchain, instant load, no node_modules</td>
+</tr>
+<tr>
+<td>Reactivity</td>
+<td>WebSocket for live updates, REST for initial load</td>
+<td>Incidents and events update in real-time</td>
+</tr>
+<tr>
+<td>Styling</td>
+<td>Minimal CSS framework (Pico CSS or similar)</td>
+<td>Clean, readable, no design system overhead</td>
+</tr>
+<tr>
+<td>Charts</td>
+<td>Lightweight charting (uPlot or Chart.js)</td>
+<td>Time-series visualization for metrics/timelines</td>
+</tr>
+</tbody>
+</table>
+<p><strong>Access</strong>: <code>http://localhost:{port}</code> (default port: 7433). No authentication (local-only tool).</p>
+<hr />
+<h2 id="page-structure">Page Structure<a class="headerlink" href="#page-structure" title="Permanent link">&para;</a></h2>
+<pre><code>┌─────────────────────────────────────────────────────────────────┐
+│ HEADER                                                           │
+│ Inferra ▪ Status: Observing ▪ Events: 142/sec ▪ Active: 3      │
+├─────────────────────────────────────────────────────────────────┤
+│                                                                  │
+│ ┌─── NAV ───┐ ┌────────────── MAIN CONTENT ─────────────────┐  │
+│ │ Dashboard  │ │                                              │  │
+│ │ Incidents  │ │  (varies by selected page)                   │  │
+│ │ Services   │ │                                              │  │
+│ │ Timeline   │ │                                              │  │
+│ │ Settings   │ │                                              │  │
+│ │            │ │                                              │  │
+│ │ ── Health ─│ │                                              │  │
+│ │ Collectors │ │                                              │  │
+│ │ Baselines  │ │                                              │  │
+│ │ Calibration│ │                                              │  │
+│ └────────────┘ └──────────────────────────────────────────────┘  │
+└─────────────────────────────────────────────────────────────────┘
+</code></pre>
+<hr />
+<h2 id="page-1-dashboard">Page 1: Dashboard<a class="headerlink" href="#page-1-dashboard" title="Permanent link">&para;</a></h2>
+<p>The landing page. Answers "Is something wrong?" at a glance.</p>
+<h3 id="components">Components<a class="headerlink" href="#components" title="Permanent link">&para;</a></h3>
+<p><strong>1. Status Bar</strong> (always visible in header)
+- System state: <code>Observing</code> (green) | <code>Degraded</code> (yellow) | <code>Collector Error</code> (red)
+- Event throughput: <code>142 events/sec</code>
+- Active incidents count: <code>3 active</code>
+- Baseline status: <code>Learning (4h remaining)</code> or <code>Stable</code></p>
+<p><strong>2. Incident Summary Cards</strong></p>
+<pre><code>┌────────────────────────────────────────────────┐
+│ 🔴 CRITICAL  api-gateway, postgres             │
+│ &quot;postgres failure cascaded to 3 services&quot;      │
+│ Started 5 min ago │ 47 events │ Score: 0.84    │
+│ [View Details →]                                │
+├────────────────────────────────────────────────┤
+│ 🟡 WARN  payment-service                       │
+│ &quot;Elevated error rate on payment-service&quot;        │
+│ Started 12 min ago │ 15 events │ Score: 0.52   │
+│ [View Details →]                                │
+└────────────────────────────────────────────────┘
+</code></pre>
+<p>Cards are sorted by severity, then by score. Maximum 10 cards on dashboard; older incidents accessible via Incidents page.</p>
+<p><strong>3. Service Health Grid</strong>
+A grid showing all known services with color-coded health:
+- Green: normal (anomaly score &lt; 0.3)
+- Yellow: elevated (anomaly score 0.3–0.6)
+- Red: anomalous (anomaly score &gt; 0.6)
+- Gray: no data / learning</p>
+<pre><code>┌──────────┬──────────┬──────────┬──────────┐
+│ api-gw   │ users    │ postgres │ redis    │
+│  ● OK    │  ● OK    │  ● CRIT  │  ● WARN  │
+│  2 ev/s  │  0.5/s   │  12/s    │  3/s     │
+└──────────┴──────────┴──────────┴──────────┘
+</code></pre>
+<p>Clicking a service navigates to the Service Detail page.</p>
+<p><strong>4. Event Rate Chart</strong>
+A time-series chart showing total event volume (stacked by severity) over the last 60 minutes. Anomalous regions are highlighted with a subtle red background.</p>
+<hr />
+<h2 id="page-2-incident-detail">Page 2: Incident Detail<a class="headerlink" href="#page-2-incident-detail" title="Permanent link">&para;</a></h2>
+<p>The primary analysis view. Answers "Why is it wrong?"</p>
+<h3 id="layout">Layout<a class="headerlink" href="#layout" title="Permanent link">&para;</a></h3>
+<pre><code>┌──────────────────────────────────────────────────────────┐
+│ INCIDENT: postgres failure cascaded to 3 services        │
+│ Status: INVESTIGATING │ Severity: CRITICAL │ 47 events   │
+├──────────────────────────────────────────────────────────┤
+│                                                           │
+│ ┌─── HYPOTHESES PANEL (left, 40%) ─────────────────────┐ │
+│ │                                                       │ │
+│ │ ▼ #1 (Score: 0.84, High Confidence)                  │ │
+│ │   postgres failure cascaded to 3 services             │ │
+│ │   Type: dependency_failure                            │ │
+│ │                                                       │ │
+│ │   Score Breakdown:                                    │ │
+│ │   ████████░░ temporal_alignment: 0.92                 │ │
+│ │   ███████░░░ correlation_strength: 0.78               │ │
+│ │   █████░░░░░ frequency_weight: 0.65                   │ │
+│ │   ████████░░ dependency_proximity: 0.88               │ │
+│ │   ██████░░░░ evidence_coverage: 0.71                  │ │
+│ │   ████░░░░░░ anomaly_severity: 0.55                   │ │
+│ │                                                       │ │
+│ │   ⚠ 1 contradiction: health check passed at 14:32    │ │
+│ │                                                       │ │
+│ │   Suggested checks:                                   │ │
+│ │   $ docker logs postgres_container --tail 100         │ │
+│ │   $ docker inspect postgres_container                 │ │
+│ │                                                       │ │
+│ │ ▷ #2 (Score: 0.52, Medium Confidence)                │ │
+│ │   Memory exhaustion on host                           │ │
+│ │                                                       │ │
+│ │ ▷ #3 (Score: 0.31, Low Confidence)                   │ │
+│ │   Configuration change on api-gateway                 │ │
+│ └───────────────────────────────────────────────────────┘ │
+│                                                           │
+│ ┌─── EVIDENCE PANEL (right, 60%) ──────────────────────┐ │
+│ │                                                       │ │
+│ │ [Timeline] [Logs] [Graph] [Explanation]  ← tabs       │ │
+│ │                                                       │ │
+│ │ (content varies by selected tab)                      │ │
+│ │                                                       │ │
+│ └───────────────────────────────────────────────────────┘ │
+│                                                           │
+│ ┌─── ACTIONS ──────────────────────────────────────────┐  │
+│ │ [Resolve: Correct ▾] [Resolve: None Correct] [Skip]  │  │
+│ └───────────────────────────────────────────────────────┘  │
+└──────────────────────────────────────────────────────────┘
+</code></pre>
+<h3 id="evidence-panel-tabs">Evidence Panel Tabs<a class="headerlink" href="#evidence-panel-tabs" title="Permanent link">&para;</a></h3>
+<p><strong>Timeline Tab</strong>
+A vertical timeline showing events in chronological order. Key events (flagged by hypothesis) are highlighted.</p>
+<pre><code>14:30:02  ● ERROR  postgres:     connection refused: too many clients
+14:30:03  ● ERROR  postgres:     connection refused: too many clients  (×12)
+14:30:05  ● ERROR  api-gateway:  upstream timeout: postgres
+14:30:06  ● ERROR  user-service: database connection failed
+14:30:08  ● WARN   api-gateway:  circuit breaker tripped for postgres
+14:30:10  ● ERROR  api-gateway:  HTTP 503 returned to client
+14:30:15  ○ INFO   postgres:     health check passed ⚠ (contradiction)
+</code></pre>
+<p>Each entry is clickable to expand the full event detail.</p>
+<p><strong>Logs Tab</strong>
+Raw event messages for the incident, filterable by service and severity.</p>
+<pre><code>Service: [All ▾]  Severity: [WARN+ ▾]  Search: [________]
+
+14:30:02 ERROR postgres     connection refused: too many clients already
+14:30:05 ERROR api-gateway  upstream service timeout after 5000ms: postgres:5432
+14:30:06 ERROR user-service  sqlalchemy.exc.OperationalError: could not connect to server
+...
+</code></pre>
+<p><strong>Graph Tab</strong>
+Visual representation of the inference graph. Nodes are events (colored by severity), edges are inferred sequences (thickness = plausibility). Each edge shows its assumptions on hover.</p>
+<pre><code>[postgres: conn refused] ──(0.92)──▶ [api-gw: timeout] ──(0.85)──▶ [api-gw: 503]
+                         ──(0.88)──▶ [user-svc: db conn failed]
+</code></pre>
+<p>Implementation: SVG-based graph rendered client-side. For incidents with &gt;50 events, only the top-20 events by severity are shown in the graph (with an "expand" option).</p>
+<p><strong>Explanation Tab</strong>
+The LLM-generated (or template-generated) explanation, rendered as formatted text.</p>
+<pre><code>## Summary
+A connection limit exhaustion on postgres caused cascading failures across
+api-gateway and user-service. The root cause appears to be an elevated number
+of database connections, likely from a connection leak or traffic spike.
+
+## What Happened
+At 14:30:02, postgres began rejecting new connections with &quot;too many clients&quot;
+errors. Within 3 seconds, api-gateway experienced upstream timeouts and began
+returning HTTP 503 errors. user-service also lost its database connection.
+
+## Evidence Assessment
+Strong evidence: 12 connection refused events from postgres precede all
+downstream errors. The temporal alignment is tight (3 seconds from root to
+symptoms). One contradiction noted: a health check passed at 14:30:15, suggesting
+the issue may have been intermittent.
+
+## Recommended Actions
+1. Check postgres connection count and limits
+2. Check for connection leaks in application code
+3. Review postgres max_connections setting
+</code></pre>
+<hr />
+<h2 id="page-3-services">Page 3: Services<a class="headerlink" href="#page-3-services" title="Permanent link">&para;</a></h2>
+<p>Overview of all discovered services and their current health.</p>
+<h3 id="components_1">Components<a class="headerlink" href="#components_1" title="Permanent link">&para;</a></h3>
+<p><strong>Service Table</strong>
+| Service | Status | Events/min | Error Rate | Anomaly Score | Last Incident |
+|---|---|---|---|---|---|
+| api-gateway | Healthy | 120 | 0.5% | 0.12 | 2h ago |
+| postgres | Critical | 840 | 45% | 0.94 | Active |
+| user-service | Degraded | 45 | 12% | 0.67 | Active |
+| redis | Healthy | 30 | 0% | 0.05 | Never |</p>
+<p><strong>Service Detail</strong> (on click)
+- Event volume chart (last 24h)
+- Error rate chart (last 24h)
+- Baseline comparison overlay
+- Related incidents list
+- Container details (from runtime context)
+- Service dependencies (from topology)</p>
+<hr />
+<h2 id="page-4-timeline">Page 4: Timeline<a class="headerlink" href="#page-4-timeline" title="Permanent link">&para;</a></h2>
+<p>A global timeline view across all services, showing events and incidents on a shared time axis. Useful for understanding cross-service failures.</p>
+<p><strong>Implementation</strong>: Horizontal scrolling timeline with swim lanes (one per service). Events are dots/markers colored by severity. Incidents are shaded regions spanning the affected time range.</p>
+<pre><code>Time:    14:28    14:29    14:30    14:31    14:32
+         │        │        │        │        │
+postgres ─────────────●●●●●●●──●●────────────────
+api-gw   ─────────────────●●●●●●──●──────────────
+user-svc ──────────────────●●●──●─────────────────
+redis    ─────────────────────────────────────────
+
+                    └──── Incident #7 ────┘
+</code></pre>
+<hr />
+<h2 id="page-5-settings">Page 5: Settings<a class="headerlink" href="#page-5-settings" title="Permanent link">&para;</a></h2>
+<p><strong>Configuration sections</strong>:
+- Collectors: enable/disable, configure paths/sockets
+- Normalization: custom log formats, tag rules
+- Analysis: correlation windows, anomaly thresholds
+- Explanation: LLM provider, model selection, API key
+- Display: theme (light/dark), refresh rate, max timeline events
+- About: version, license, system health</p>
+<hr />
+<h2 id="websocket-api">WebSocket API<a class="headerlink" href="#websocket-api" title="Permanent link">&para;</a></h2>
+<p>Live updates are pushed to the UI via WebSocket:</p>
+<pre><code class="language-python"># Server → Client messages
+{&quot;type&quot;: &quot;incident_created&quot;, &quot;incident&quot;: {...}}
+{&quot;type&quot;: &quot;incident_updated&quot;, &quot;incident_id&quot;: &quot;...&quot;, &quot;changes&quot;: {...}}
+{&quot;type&quot;: &quot;incident_resolved&quot;, &quot;incident_id&quot;: &quot;...&quot;}
+{&quot;type&quot;: &quot;event_count&quot;, &quot;events_per_second&quot;: 142, &quot;by_severity&quot;: {...}}
+{&quot;type&quot;: &quot;collector_health&quot;, &quot;collectors&quot;: [...]}
+{&quot;type&quot;: &quot;explanation_ready&quot;, &quot;incident_id&quot;: &quot;...&quot;, &quot;explanation&quot;: {...}}
+</code></pre>
+<pre><code class="language-python"># Client → Server messages
+{&quot;type&quot;: &quot;resolve_incident&quot;, &quot;incident_id&quot;: &quot;...&quot;, &quot;feedback&quot;: {...}}
+{&quot;type&quot;: &quot;subscribe_incident&quot;, &quot;incident_id&quot;: &quot;...&quot;}  # get detailed updates for one incident
+{&quot;type&quot;: &quot;unsubscribe_incident&quot;, &quot;incident_id&quot;: &quot;...&quot;}
+</code></pre>
+<hr />
+<h2 id="rest-api">REST API<a class="headerlink" href="#rest-api" title="Permanent link">&para;</a></h2>
+<pre><code>GET  /api/incidents                    # list active incidents
+GET  /api/incidents/{id}               # full incident detail
+GET  /api/incidents/{id}/hypotheses    # hypotheses for incident
+GET  /api/incidents/{id}/explanation   # explanation for incident
+GET  /api/incidents/{id}/events        # events in incident (paginated)
+POST /api/incidents/{id}/resolve       # resolve incident with feedback
+GET  /api/services                     # list known services
+GET  /api/services/{id}                # service detail with health
+GET  /api/services/{id}/events         # events for service (paginated)
+GET  /api/events?start=...&amp;end=...     # query events by time range
+GET  /api/health                       # system health (collectors, storage, baselines)
+GET  /api/config                       # current configuration
+PUT  /api/config                       # update configuration (selective)
+</code></pre>
+<hr />
+<h2 id="interaction-principles">Interaction Principles<a class="headerlink" href="#interaction-principles" title="Permanent link">&para;</a></h2>
+<ol>
+<li>
+<p><strong>No log digging</strong>: The primary path is Dashboard → Incident → Hypothesis → Explanation. The operator should reach understanding without ever opening a terminal.</p>
+</li>
+<li>
+<p><strong>Progressive disclosure</strong>: Dashboard shows summary. Clicking reveals hypotheses. Expanding reveals evidence. Clicking evidence shows raw event. Each level adds detail without overwhelming.</p>
+</li>
+<li>
+<p><strong>Copy-ready diagnostics</strong>: Every "suggested check" command is in a <code>&lt;code&gt;</code> block with a copy button. The operator can paste directly into a terminal.</p>
+</li>
+<li>
+<p><strong>Non-blocking feedback</strong>: The "Resolve" action is quick (2 clicks). Detailed feedback is optional. The system must not create friction around resolution.</p>
+</li>
+<li>
+<p><strong>Accessible offline</strong>: Since Inferra runs locally, the UI must work without any CDN-hosted resources. All CSS, JS, and fonts are bundled with the application.</p>
+</li>
+</ol>
+<hr />
+<h2 id="performance-targets">Performance Targets<a class="headerlink" href="#performance-targets" title="Permanent link">&para;</a></h2>
+<table>
+<thead>
+<tr>
+<th>Metric</th>
+<th>Target</th>
+</tr>
+</thead>
+<tbody>
+<tr>
+<td>Initial page load</td>
+<td>&lt;500ms</td>
+</tr>
+<tr>
+<td>WebSocket update latency</td>
+<td>&lt;100ms (local)</td>
+</tr>
+<tr>
+<td>Dashboard render with 10 incidents</td>
+<td>&lt;200ms</td>
+</tr>
+<tr>
+<td>Timeline render with 200 events</td>
+<td>&lt;500ms</td>
+</tr>
+<tr>
+<td>Graph render with 50 nodes</td>
+<td>&lt;300ms</td>
+</tr>
+</tbody>
+</table>
+<hr />
+<h2 id="responsive-design">Responsive Design<a class="headerlink" href="#responsive-design" title="Permanent link">&para;</a></h2>
+<p>The UI is designed for desktop use (1280px+ width). It degrades gracefully on smaller screens but is not optimized for mobile. This is a professional debugging tool, not a consumer product.</p>
+              
+            </div>
+          </div><footer>
+
+  <hr/>
+
+  <div role="contentinfo">
+    <!-- Copyright etc -->
+  </div>
+
+  Built with <a href="https://www.mkdocs.org/">MkDocs</a> using a <a href="https://github.com/readthedocs/sphinx_rtd_theme">theme</a> provided by <a href="https://readthedocs.org">Read the Docs</a>.
+</footer>
+          
+        </div>
+      </div>
+
+    </section>
+
+  </div>
+
+  <div class="rst-versions" role="note" aria-label="Versions">
+  <span class="rst-current-version" data-toggle="rst-current-version">
+    
+    
+    
+  </span>
+</div>
+    <script src="../../js/jquery-3.6.0.min.js"></script>
+    <script>var base_url = "../..";</script>
+    <script src="../../js/theme_extra.js"></script>
+    <script src="../../js/theme.js"></script>
+      <script src="../../search/main.js"></script>
+    <script>
+        jQuery(function () {
+            SphinxRtdTheme.Navigation.enable(true);
+        });
+    </script>
+
+</body>
+</html>

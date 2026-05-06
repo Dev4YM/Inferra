@@ -1,5 +1,7 @@
 # Full Build and Architecture Plan
 
+Living module map: [implementation index](implementation_index.md).
+
 ## Purpose
 
 This plan consolidates the existing Inferra planning documents into an implementation architecture for a Python + SQLite product that runs first-class on Windows and Windows Server, while remaining portable to Linux, Kubernetes, and macOS.
@@ -185,7 +187,7 @@ docs/
     integration/
 ```
 
-The implementation intentionally keeps packages directly under `src/`. Do not introduce a root `inferra/` or nested `src/inferra/` package directory.
+The implementation intentionally keeps packages directly under `src/`. Do not introduce a root `inferra/` package or any nested implementation package under `src/`.
 
 ## Core Data Model
 

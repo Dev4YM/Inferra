@@ -1,8 +1,12 @@
 import asyncio
 
+import pytest
+
 from collectors.windows_service import WindowsServiceCollector
 from core.enums import EventType, Severity
 from normalization.pipeline import NormalizationPipeline
+
+pytestmark = pytest.mark.windows
 
 
 class FakeService:

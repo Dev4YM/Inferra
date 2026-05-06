@@ -1,0 +1,46 @@
+site_name: Inferra
+site_description: Local-first runtime failure explanation
+
+repo_url: ""
+edit_uri: ""
+
+docs_dir: docs
+site_dir: site
+
+theme:
+  name: readthedocs
+  highlightjs: true
+
+nav:
+  - Home: index.md
+  - Operator guides:
+      - Install: operations/install.md
+      - Windows exe — start here: operations/windows_exe_build.md
+      - AI provider: operations/ai_provider.md
+      - Collectors: operations/collectors.md
+      - Tuning: operations/tuning.md
+      - Upgrade: operations/upgrade.md
+      - Troubleshooting: operations/troubleshooting.md
+      - CI: operations/ci.md
+      - Release checklist: operations/release.md
+      - Release signing: operations/release_signing.md
+  - Security:
+      - Threat model: security/threat_model.md
+  - Architecture Decision Records:
+      - ADR 0001 — Local-first guided AI: adr/0001-local-first-guided-ai.md
+      - ADR 0002 — Flat src layout: adr/0002-flat-src-layout.md
+      - ADR 0003 — Storage protocols: adr/0003-storage-protocols.md
+      - ADR 0004 — Windows-first collectors: adr/0004-windows-first-collectors.md
+      - ADR 0005 — AI presentation-only: adr/0005-ai-presentation-only.md
+      - ADR 0006 — Ollama Gemma default: adr/0006-ollama-gemma-default.md
+  - Planning:
+      - Architecture overview: planning/architecture_overview.md
+      - Full build architecture plan: planning/full_build_architecture_plan.md
+      - Data flow contracts: planning/data_flow_contracts.md
+      - Implementation index: planning/implementation_index.md
+
+markdown_extensions:
+  - toc:
+      permalink: true
+  - fenced_code
+  - tables

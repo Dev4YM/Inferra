@@ -1,0 +1,8 @@
+{
+  "id": "unknown",
+  "expected_cause_type": "unknown",
+  "raw_payloads": [
+    "{\"service\":\"api\",\"level\":\"info\",\"message\":\"routine informational log line\"}",
+    "{\"service\":\"api\",\"level\":\"info\",\"message\":\"another informational log line\"}"
+  ]
+}

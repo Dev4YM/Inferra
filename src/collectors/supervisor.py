@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import asyncio
+import random
 from dataclasses import dataclass
 from datetime import datetime
 from typing import Any
@@ -58,10 +59,38 @@ class CollectorSupervisor:
             state.status = "stopped"
             state.last_stopped_at = utc_now()
 
+    async def start_collector(self, collector_id: str) -> bool:
+        if self._stopping:
+            return False
+        state = self._states.get(collector_id)
+        if state is None:
+            return False
+        if state.task is not None and not state.task.done():
+            return True
+        state.task = asyncio.create_task(self._run_collector(state), name=f"inferra:{collector_id}")
+        return True
+
+    async def stop_collector(self, collector_id: str) -> bool:
+        state = self._states.get(collector_id)
+        if state is None:
+            return False
+        await state.collector.stop()
+        task = state.task
+        if task is not None and not task.done():
+            task.cancel()
+            try:
+                await task
+            except asyncio.CancelledError:
+                pass
+        state.task = None
+        state.status = "stopped"
+        state.last_stopped_at = utc_now()
+        return True
+
     def health(self) -> list[dict[str, Any]]:
         rows: list[dict[str, Any]] = []
         for state in sorted(self._states.values(), key=lambda item: item.collector.collector_id):
-            collector_health = state.collector.health_check()
+            collector_health = state.collector.health()
             rows.append(
                 {
                     "collector_id": collector_health.collector_id,
@@ -72,10 +101,13 @@ class CollectorSupervisor:
                     "events_per_second": collector_health.events_per_second,
                     "last_event_at": to_iso(collector_health.last_event_at) if collector_health.last_event_at else None,
                     "error_count": collector_health.error_count,
+                    "dropped_events": collector_health.dropped_events,
+                    "queue_depth": collector_health.queue_depth,
                     "last_error": state.last_error or collector_health.last_error,
                     "lag_seconds": collector_health.lag_seconds,
                     "attempts": state.attempts,
                     "last_started_at": to_iso(state.last_started_at) if state.last_started_at else None,
+                    "last_stopped_at": to_iso(state.last_stopped_at) if state.last_stopped_at else None,
                     "next_retry_at": to_iso(state.next_retry_at) if state.next_retry_at else None,
                 }
             )
@@ -88,7 +120,7 @@ class CollectorSupervisor:
                 state.status = "running"
                 state.last_started_at = utc_now()
                 state.next_retry_at = None
-                await state.collector.start(self.sink)
+                await state.collector.run(self.sink)
                 if not self._stopping:
                     state.status = "retrying"
                     state.last_error = "collector exited unexpectedly"
@@ -101,6 +133,7 @@ class CollectorSupervisor:
                 state.last_error = str(exc)
             if not self._stopping:
                 state.next_retry_at = utc_now()
-                await asyncio.sleep(backoff)
+                jitter = 1.0 + random.random() * 0.25
+                await asyncio.sleep(backoff * jitter)
                 backoff = min(self.retry_max_seconds, backoff * 2)
         state.status = "stopped"

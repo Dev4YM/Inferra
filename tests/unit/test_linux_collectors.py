@@ -2,10 +2,14 @@ import asyncio
 import json
 from types import SimpleNamespace
 
+import pytest
+
 from collectors.journald import JournaldCollector
 from collectors.linux_syslog import LinuxSyslogCollector
 from core.enums import Severity
 from normalization.pipeline import NormalizationPipeline
+
+pytestmark = pytest.mark.linux
 
 
 class FakeStateStore:
@@ -66,7 +70,7 @@ def test_journald_collector_reads_json_and_persists_cursor():
     event = NormalizationPipeline().normalize(queue.get_nowait())
 
     assert emitted == 1
-    assert event.service_id == "postgresql.service"
+    assert event.service_id == "postgresql"
     assert event.severity == Severity.ERROR
     assert state.get_collector_state("linux_journald://postgresql.service", "cursor") == "cursor-1"
     assert "-u" in calls[0]

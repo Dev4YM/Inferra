@@ -1,0 +1,317 @@
+<!DOCTYPE html>
+<html class="writer-html5" lang="en" >
+<head>
+    <meta charset="utf-8" />
+    <meta http-equiv="X-UA-Compatible" content="IE=edge" />
+    <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+      <link rel="shortcut icon" href="../../img/favicon.ico" />
+    <title>System Limitations - Inferra</title>
+    <link rel="stylesheet" href="../../css/theme.css" />
+    <link rel="stylesheet" href="../../css/theme_extra.css" />
+        <link rel="stylesheet" href="https://cdnjs.cloudflare.com/ajax/libs/highlight.js/11.8.0/styles/github.min.css" />
+    
+      <script>
+        // Current page data
+        var mkdocs_page_name = "System Limitations";
+        var mkdocs_page_input_path = "planning\\system_limitations.md";
+        var mkdocs_page_url = null;
+      </script>
+    
+    <!--[if lt IE 9]>
+      <script src="../../js/html5shiv.min.js"></script>
+    <![endif]-->
+      <script src="https://cdnjs.cloudflare.com/ajax/libs/highlight.js/11.8.0/highlight.min.js"></script>
+      <script>hljs.highlightAll();</script> 
+</head>
+
+<body class="wy-body-for-nav" role="document">
+
+  <div class="wy-grid-for-nav">
+    <nav data-toggle="wy-nav-shift" class="wy-nav-side stickynav">
+    <div class="wy-side-scroll">
+      <div class="wy-side-nav-search">
+          <a href="../.." class="icon icon-home"> Inferra
+        </a><div role="search">
+  <form id ="rtd-search-form" class="wy-form" action="../../search.html" method="get">
+      <input type="text" name="q" placeholder="Search docs" aria-label="Search docs" title="Type search term here" />
+  </form>
+</div>
+      </div>
+
+      <div class="wy-menu wy-menu-vertical" data-spy="affix" role="navigation" aria-label="Navigation menu">
+              <ul>
+                <li class="toctree-l1"><a class="reference internal" href="../..">Home</a>
+                </li>
+              </ul>
+              <p class="caption"><span class="caption-text">Operator guides</span></p>
+              <ul>
+                  <li class="toctree-l1"><a class="reference internal" href="../../operations/install/">Install</a>
+                  </li>
+                  <li class="toctree-l1"><a class="reference internal" href="../../operations/ai_provider/">AI provider</a>
+                  </li>
+                  <li class="toctree-l1"><a class="reference internal" href="../../operations/collectors/">Collectors</a>
+                  </li>
+                  <li class="toctree-l1"><a class="reference internal" href="../../operations/tuning/">Tuning</a>
+                  </li>
+                  <li class="toctree-l1"><a class="reference internal" href="../../operations/upgrade/">Upgrade</a>
+                  </li>
+                  <li class="toctree-l1"><a class="reference internal" href="../../operations/troubleshooting/">Troubleshooting</a>
+                  </li>
+                  <li class="toctree-l1"><a class="reference internal" href="../../operations/ci/">CI</a>
+                  </li>
+                  <li class="toctree-l1"><a class="reference internal" href="../../operations/release_signing/">Release signing</a>
+                  </li>
+              </ul>
+              <p class="caption"><span class="caption-text">Architecture Decision Records</span></p>
+              <ul>
+                  <li class="toctree-l1"><a class="reference internal" href="../../adr/0001-local-first-guided-ai/">ADR 0001 — Local-first guided AI</a>
+                  </li>
+                  <li class="toctree-l1"><a class="reference internal" href="../../adr/0002-flat-src-layout/">ADR 0002 — Flat src layout</a>
+                  </li>
+                  <li class="toctree-l1"><a class="reference internal" href="../../adr/0003-storage-protocols/">ADR 0003 — Storage protocols</a>
+                  </li>
+                  <li class="toctree-l1"><a class="reference internal" href="../../adr/0004-windows-first-collectors/">ADR 0004 — Windows-first collectors</a>
+                  </li>
+                  <li class="toctree-l1"><a class="reference internal" href="../../adr/0005-ai-presentation-only/">ADR 0005 — AI presentation-only</a>
+                  </li>
+                  <li class="toctree-l1"><a class="reference internal" href="../../adr/0006-ollama-gemma-default/">ADR 0006 — Ollama Gemma default</a>
+                  </li>
+              </ul>
+              <p class="caption"><span class="caption-text">Planning</span></p>
+              <ul>
+                  <li class="toctree-l1"><a class="reference internal" href="../architecture_overview/">Architecture overview</a>
+                  </li>
+                  <li class="toctree-l1"><a class="reference internal" href="../full_build_architecture_plan/">Full build architecture plan</a>
+                  </li>
+                  <li class="toctree-l1"><a class="reference internal" href="../data_flow_contracts/">Data flow contracts</a>
+                  </li>
+                  <li class="toctree-l1"><a class="reference internal" href="../implementation_index/">Implementation index</a>
+                  </li>
+              </ul>
+      </div>
+    </div>
+    </nav>
+
+    <section data-toggle="wy-nav-shift" class="wy-nav-content-wrap">
+      <nav class="wy-nav-top" role="navigation" aria-label="Mobile navigation menu">
+          <i data-toggle="wy-nav-top" class="fa fa-bars"></i>
+          <a href="../..">Inferra</a>
+        
+      </nav>
+      <div class="wy-nav-content">
+        <div class="rst-content"><div role="navigation" aria-label="breadcrumbs navigation">
+  <ul class="wy-breadcrumbs">
+    <li><a href="../.." class="icon icon-home" aria-label="Docs"></a></li>
+      <li class="breadcrumb-item active">System Limitations</li>
+    <li class="wy-breadcrumbs-aside">
+    </li>
+  </ul>
+  <hr/>
+</div>
+          <div role="main" class="document" itemscope="itemscope" itemtype="http://schema.org/Article">
+            <div class="section" itemprop="articleBody">
+              
+                <h1 id="system-limitations">System Limitations<a class="headerlink" href="#system-limitations" title="Permanent link">&para;</a></h1>
+<p>This document is an honest accounting of what Inferra cannot do, where it will fail, and what assumptions it makes that may not hold. Every limitation listed here is a known trade-off, not a bug.</p>
+<hr />
+<h2 id="1-scale-limitations">1. Scale Limitations<a class="headerlink" href="#1-scale-limitations" title="Permanent link">&para;</a></h2>
+<h3 id="11-single-machine-only">1.1 Single-Machine Only<a class="headerlink" href="#11-single-machine-only" title="Permanent link">&para;</a></h3>
+<p>Inferra is designed for a single machine with up to ~50 services. It cannot monitor distributed clusters spanning multiple hosts.</p>
+<p><strong>Why</strong>: Local-first design. Adding multi-host support would require a networking layer, consensus protocol, and distributed storage — fundamentally changing the architecture. However, the architecture preserves extensibility: all inter-module communication uses typed protocols, storage is abstracted behind interfaces, and no module holds unrecoverable in-memory state. See architecture_overview.md "Scaling Path" section.</p>
+<p><strong>Workaround</strong>: Run one Inferra instance per host. Cross-host correlation is not supported.</p>
+<h3 id="12-event-throughput-ceiling">1.2 Event Throughput Ceiling<a class="headerlink" href="#12-event-throughput-ceiling" title="Permanent link">&para;</a></h3>
+<p>Designed for 1–100 events/second sustained. At &gt;100 events/second, sampling kicks in and some events are dropped.</p>
+<p><strong>Why</strong>: Single-process Python architecture with SQLite storage. These choices optimize for simplicity and local-first operation, not throughput.</p>
+<p><strong>Impact</strong>: In high-volume environments (&gt;50 services, verbose logging), the system may miss low-severity events during peak periods. ERROR/CRITICAL events are always preserved.</p>
+<h3 id="13-incident-count-ceiling">1.3 Incident Count Ceiling<a class="headerlink" href="#13-incident-count-ceiling" title="Permanent link">&para;</a></h3>
+<p>Maximum 200 concurrent active incidents. Beyond this, new incidents are rejected with a warning.</p>
+<p><strong>Why</strong>: Each incident requires analysis, hypothesis generation, and scoring. 200 incidents × 50 hypotheses × scoring passes would exceed the CPU budget.</p>
+<hr />
+<h2 id="2-analytical-limitations">2. Analytical Limitations<a class="headerlink" href="#2-analytical-limitations" title="Permanent link">&para;</a></h2>
+<h3 id="21-no-cross-host-correlation">2.1 No Cross-Host Correlation<a class="headerlink" href="#21-no-cross-host-correlation" title="Permanent link">&para;</a></h3>
+<p>Inferra running on Host 1 only sees Host 1's perspective. If Service A on Host 1 fails because Service B on Host 2 is down, Inferra can observe A's symptoms but cannot trace the root cause to B.</p>
+<h3 id="22-no-distributed-tracing">2.2 No Distributed Tracing<a class="headerlink" href="#22-no-distributed-tracing" title="Permanent link">&para;</a></h3>
+<p>Inferra works with logs, not trace spans (OpenTelemetry, Jaeger, Zipkin). Request-level causation ("this specific request caused that specific error") is not available. Correlation is based on temporal proximity, service topology, and pattern matching.</p>
+<h3 id="221-data-quality-varies">2.2.1 Data Quality Varies<a class="headerlink" href="#221-data-quality-varies" title="Permanent link">&para;</a></h3>
+<p>Log quality directly determines analysis quality. Each event carries a <code>DataQuality</code> score (0.0–1.0) computed during normalization, reflecting confidence in parsed fields (timestamp, service identity, severity, structured data). Low-quality events (score &lt; 0.5) contribute at a 50% discount to hypothesis evidence. Events with quality &lt; 0.3 are excluded from correlation edge generation entirely. This prevents garbage-parsed data from corrupting the analysis pipeline — but it also means that services with poorly structured logs are underrepresented in hypotheses.</p>
+<h3 id="23-inference-not-causation">2.3 Inference, Not Causation<a class="headerlink" href="#23-inference-not-causation" title="Permanent link">&para;</a></h3>
+<p>The inference graph constructs plausible event sequences based on temporal ordering and service topology. <strong>This is not causal inference.</strong> "A happened before B on a connected service" is evidence for, but not proof of, A causing B. Common pitfalls:
+- Coincidental temporal proximity on unrelated services
+- Reverse causation when clock skew exceeds 5 seconds
+- Confounding from a shared root cause not in the observation window</p>
+<p>The system names its constructs honestly: <code>InferenceGraph</code>, <code>InferenceEdge</code>, <code>plausibility</code> scores. The operator should treat these as structured starting points for investigation.</p>
+<h3 id="24-service-graph-accuracy">2.4 Service Graph Accuracy<a class="headerlink" href="#24-service-graph-accuracy" title="Permanent link">&para;</a></h3>
+<p>The service dependency graph must be configured explicitly for reliable analysis. Inferra offers auto-detection via Docker Compose labels and log pattern inference, but:
+- Docker Compose detection only works in Compose environments
+- Docker network membership tells you containers <em>can</em> talk, not that they <em>do</em>
+- Log pattern inference (disabled by default) produces false positives</p>
+<p><strong>Impact</strong>: 4+ signal detectors and the dependency_proximity scoring component depend on the service graph. An inaccurate graph is worse than no graph. Without explicit configuration, dependency-based analysis is disabled and the user is prompted to configure topology.</p>
+<h3 id="25-cold-start-period">2.5 Cold Start Period<a class="headerlink" href="#25-cold-start-period" title="Permanent link">&para;</a></h3>
+<p>For the first 6–168 hours, anomaly detection has no baseline. During this period:
+- Anomaly scores are unreliable
+- Confidence labels are conservative
+- The anomaly_severity scoring component contributes nothing (10% of score weight)</p>
+<p>The UI shows "Baseline: learning (X hours remaining)" during this period.</p>
+<h3 id="26-no-root-cause-guarantee">2.6 No Root Cause Guarantee<a class="headerlink" href="#26-no-root-cause-guarantee" title="Permanent link">&para;</a></h3>
+<p>Inferra identifies the most plausible root cause based on available evidence. It can be wrong. Common failure modes:
+- The actual root cause occurred before the observation window
+- The root cause did not produce log output (silent failure — see <code>failure_model.md</code> type 4)
+- The root cause is in a system Inferra doesn't observe (external API, hardware)
+- Multiple simultaneous failures are misattributed to a single cause</p>
+<h3 id="27-failure-detection-coverage">2.7 Failure Detection Coverage<a class="headerlink" href="#27-failure-detection-coverage" title="Permanent link">&para;</a></h3>
+<p>Inferra explicitly models 6 failure types (see <code>failure_model.md</code>): hard failure, partial failure, degraded performance, silent failure, cascading failure, and intermittent/flapping failure. Detection confidence varies significantly:
+- <strong>Hard failures, cascading failures</strong>: Well-detected (loud signals, clear patterns)
+- <strong>Partial failures, intermittent failures</strong>: Moderately detected (contradiction handler models these, but edge cases exist)
+- <strong>Degraded performance</strong>: Detectable through anomaly baselines if metric data exists, but may be invisible if the degraded service produces no error logs
+- <strong>Silent failures</strong>: Mostly undetectable — the biggest honest gap. Inferra can notice downstream symptoms but cannot verify that a service's output is correct</p>
+<h3 id="28-hypothesis-interaction">2.8 Hypothesis Interaction<a class="headerlink" href="#28-hypothesis-interaction" title="Permanent link">&para;</a></h3>
+<p>Hypotheses for the same incident are not independent. The scoring engine applies evidence overlap penalties: if hypothesis A (rank 1) and hypothesis B (rank 2) share 80% of their evidence, B's score is reduced because it adds little explanatory value beyond A. Competing root cause explanations for the same downstream symptoms also penalize the lower-scored alternative. This prevents redundant hypotheses from cluttering results but may occasionally suppress a valid alternative that happens to share evidence with a stronger hypothesis.</p>
+<hr />
+<h2 id="3-data-limitations">3. Data Limitations<a class="headerlink" href="#3-data-limitations" title="Permanent link">&para;</a></h2>
+<h3 id="31-log-dependent">3.1 Log-Dependent<a class="headerlink" href="#31-log-dependent" title="Permanent link">&para;</a></h3>
+<p>Inferra's analysis quality is directly proportional to log quality. If a service:
+- Emits no logs → invisible to Inferra
+- Emits unstructured, inconsistent logs → poor normalization, weak fingerprinting
+- Emits only DEBUG/INFO with no severity differentiation → severity-based analysis is useless</p>
+<h3 id="32-no-binary-protocol-inspection">3.2 No Binary Protocol Inspection<a class="headerlink" href="#32-no-binary-protocol-inspection" title="Permanent link">&para;</a></h3>
+<p>Inferra reads text logs and metrics. It cannot inspect binary protocols (gRPC, Thrift), read database query plans, inspect message queue payloads, or analyze network packet captures.</p>
+<h3 id="33-retention-limited-history">3.3 Retention-Limited History<a class="headerlink" href="#33-retention-limited-history" title="Permanent link">&para;</a></h3>
+<p>Default 72-hour event retention. Failures with longer root cause timelines (slow memory leak over days, gradual config drift over weeks) may not be diagnosable because early events have been pruned.</p>
+<hr />
+<h2 id="4-reasoning-limitations">4. Reasoning Limitations<a class="headerlink" href="#4-reasoning-limitations" title="Permanent link">&para;</a></h2>
+<h3 id="41-signal-based-not-learned">4.1 Signal-Based, Not Learned<a class="headerlink" href="#41-signal-based-not-learned" title="Permanent link">&para;</a></h3>
+<p>Hypothesis generation uses a composable signal detector + composition rule system (15 detectors, 12+ composition rules). This covers significantly more ground than a fixed template set, but:
+- Failure modes that produce no recognizable signals are missed
+- Novel signal combinations not covered by any composition rule fall through to standalone hypotheses (less useful)
+- Custom detectors require Python code; custom composition rules can be defined in TOML but the operator needs to understand the signal model</p>
+<h3 id="42-feedback-improves-scoring-not-detection">4.2 Feedback Improves Scoring, Not Detection<a class="headerlink" href="#42-feedback-improves-scoring-not-detection" title="Permanent link">&para;</a></h3>
+<p>Operator feedback adjusts scoring weights (bounded, auditable, reversible) so the system ranks hypotheses more accurately over time. However, feedback does NOT change:
+- Signal detector logic (what patterns are recognized)
+- Composition rules (how signals combine into hypotheses)
+- Inference graph construction rules</p>
+<p>This means: if a signal detector misses a pattern, no amount of feedback will teach it to recognize that pattern. The detection layer is static. The ranking layer adapts.</p>
+<p><strong>Trade-off</strong>: This preserves determinism and auditability in the detection layer while allowing improvement in the ranking layer. It limits long-term learning but prevents the system from drifting into unpredictable behavior.</p>
+<h3 id="43-scoring-weights-are-heuristic">4.3 Scoring Weights Are Heuristic<a class="headerlink" href="#43-scoring-weights-are-heuristic" title="Permanent link">&para;</a></h3>
+<p>The default scoring weights (temporal_alignment=0.25, correlation_strength=0.20, etc.) are starting guesses, not empirically derived values. The feedback-driven weight tuning mechanism can improve them over time (bounded by ±50% of defaults), but:
+- Tuning requires operator feedback (optional, may never be provided)
+- Small sample sizes mean weights may not converge for months
+- Selection bias: operators may only provide feedback on easy incidents</p>
+<h3 id="44-contradiction-detection-is-improved-but-not-complete">4.4 Contradiction Detection Is Improved but Not Complete<a class="headerlink" href="#44-contradiction-detection-is-improved-but-not-complete" title="Permanent link">&para;</a></h3>
+<p>The contradiction handler now models intermittent failures (health checks passing between failure bursts get "weak" severity instead of "strong"). However, it still misses:
+- Race conditions where cause and effect are nearly simultaneous
+- Contradictions that require domain-specific knowledge
+- Contradictions in multi-cause incidents</p>
+<hr />
+<h2 id="5-llm-limitations">5. LLM Limitations<a class="headerlink" href="#5-llm-limitations" title="Permanent link">&para;</a></h2>
+<h3 id="51-guardrails-catch-50-60-of-hallucinations">5.1 Guardrails Catch ~50-60% of Hallucinations<a class="headerlink" href="#51-guardrails-catch-50-60-of-hallucinations" title="Permanent link">&para;</a></h3>
+<p>The guardrail pipeline catches:
+- Hallucinated service names
+- Fabricated timestamps
+- Obvious overconfidence language
+- Fabricated metric values and event counts</p>
+<p>It does NOT reliably catch:
+- Plausible-sounding technical details using correct entity names
+- Correct names used in wrong context
+- Subtle causal fabrications</p>
+<p><strong>Recommendation</strong>: For production incidents, use the "Structured Summary" mode (template fallback) which contains only data that actually exists. Use LLM mode for exploration and learning.</p>
+<h3 id="52-explanation-quality-varies-by-model">5.2 Explanation Quality Varies by Model<a class="headerlink" href="#52-explanation-quality-varies-by-model" title="Permanent link">&para;</a></h3>
+<p>Smaller local models (7B parameters) produce noticeably worse explanations than larger models. The system works with any instruction-tuned model but quality correlates with model capability.</p>
+<h3 id="53-latency">5.3 Latency<a class="headerlink" href="#53-latency" title="Permanent link">&para;</a></h3>
+<p>LLM inference adds 2–15 seconds per explanation. This is asynchronous and does not block analysis, but it's noticeable in the UI.</p>
+<hr />
+<h2 id="6-operational-limitations">6. Operational Limitations<a class="headerlink" href="#6-operational-limitations" title="Permanent link">&para;</a></h2>
+<h3 id="61-no-high-availability">6.1 No High Availability<a class="headerlink" href="#61-no-high-availability" title="Permanent link">&para;</a></h3>
+<p>Single process. If it crashes, monitoring stops. Run under systemd/supervisor for automatic restart.</p>
+<h3 id="62-no-authentication">6.2 No Authentication<a class="headerlink" href="#62-no-authentication" title="Permanent link">&para;</a></h3>
+<p>The web UI has no login. Appropriate for single-user local use. Not appropriate for shared environments.</p>
+<h3 id="63-no-alerting">6.3 No Alerting<a class="headerlink" href="#63-no-alerting" title="Permanent link">&para;</a></h3>
+<p>Inferra does not send notifications. It is a passive observation tool that must be actively viewed.</p>
+<h3 id="64-no-data-export">6.4 No Data Export<a class="headerlink" href="#64-no-data-export" title="Permanent link">&para;</a></h3>
+<p>No built-in export to SIEM, ticketing, or dashboard systems. Data is accessible via the REST API.</p>
+<hr />
+<h2 id="7-platform-limitations">7. Platform Limitations<a class="headerlink" href="#7-platform-limitations" title="Permanent link">&para;</a></h2>
+<h3 id="71-linux-first">7.1 Linux-First<a class="headerlink" href="#71-linux-first" title="Permanent link">&para;</a></h3>
+<p>Full functionality requires Linux: procfs for system metrics, systemd journal for journald collector, Docker Unix socket for container monitoring. macOS and Windows support is partial via <code>psutil</code> and Docker Desktop, with reduced metric granularity and no journald/procfs collectors. The system is functional but limited on non-Linux platforms.</p>
+<h3 id="72-docker-centric">7.2 Docker-Centric<a class="headerlink" href="#72-docker-centric" title="Permanent link">&para;</a></h3>
+<p>Container monitoring assumes Docker. Podman and containerd are not natively supported (their logs can be collected via the file collector, but container-level metrics and topology discovery require Docker API).</p>
+<hr />
+<h2 id="summary-what-inferra-is-and-is-not">Summary: What Inferra Is and Is Not<a class="headerlink" href="#summary-what-inferra-is-and-is-not" title="Permanent link">&para;</a></h2>
+<table>
+<thead>
+<tr>
+<th>Inferra IS</th>
+<th>Inferra IS NOT</th>
+</tr>
+</thead>
+<tbody>
+<tr>
+<td>A local debugging assistant for devs and small teams</td>
+<td>A production monitoring platform (use Datadog/Grafana for that)</td>
+</tr>
+<tr>
+<td>A structured evidence presenter with plausible sequence inference</td>
+<td>An oracle that always finds the root cause</td>
+</tr>
+<tr>
+<td>A pattern matcher for common failure modes with composable signals</td>
+<td>A general-purpose AI reasoning engine</td>
+</tr>
+<tr>
+<td>Improvable via feedback (scoring weights adapt)</td>
+<td>Self-learning (detection rules don't change)</td>
+</tr>
+<tr>
+<td>Deterministic and auditable at any point in time</td>
+<td>Magically intelligent</td>
+</tr>
+<tr>
+<td>A starting point for investigation</td>
+<td>The final word on an outage</td>
+</tr>
+<tr>
+<td>Free, open-source, fully local, zero cloud dependency</td>
+<td>Enterprise software</td>
+</tr>
+</tbody>
+</table>
+<p>The goal is to get the operator to the right hypothesis faster than manual log triage. Not to replace the operator.</p>
+              
+            </div>
+          </div><footer>
+
+  <hr/>
+
+  <div role="contentinfo">
+    <!-- Copyright etc -->
+  </div>
+
+  Built with <a href="https://www.mkdocs.org/">MkDocs</a> using a <a href="https://github.com/readthedocs/sphinx_rtd_theme">theme</a> provided by <a href="https://readthedocs.org">Read the Docs</a>.
+</footer>
+          
+        </div>
+      </div>
+
+    </section>
+
+  </div>
+
+  <div class="rst-versions" role="note" aria-label="Versions">
+  <span class="rst-current-version" data-toggle="rst-current-version">
+    
+    
+    
+  </span>
+</div>
+    <script src="../../js/jquery-3.6.0.min.js"></script>
+    <script>var base_url = "../..";</script>
+    <script src="../../js/theme_extra.js"></script>
+    <script src="../../js/theme.js"></script>
+      <script src="../../search/main.js"></script>
+    <script>
+        jQuery(function () {
+            SphinxRtdTheme.Navigation.enable(true);
+        });
+    </script>
+
+</body>
+</html>

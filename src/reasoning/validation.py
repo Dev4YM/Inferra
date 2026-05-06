@@ -1,159 +1,137 @@
 from __future__ import annotations
 
-from dataclasses import dataclass
+from dataclasses import asdict, fields
 from datetime import timedelta
 from typing import Any
 
-from core.enums import CauseType, EventType, Severity
+from config.models import InferraConfig
+from core.enums import Severity
+from core.models import ScoreBreakdown
 from events.models import NormalizedEvent
+from reasoning.contradiction import ContradictionHandler
 
 
-@dataclass(frozen=True)
-class Contradiction:
-    event_id: str
-    contradiction_type: str
-    explanation: str
-    severity: str
+_SCORE_KEYS = tuple(field.name for field in fields(ScoreBreakdown))
 
 
 class HypothesisValidator:
+    def __init__(self, config: InferraConfig) -> None:
+        self._config = config
+        self._handler = ContradictionHandler(config.contradiction_handling)
+
     def validate(self, hypothesis: dict[str, Any], events: list[NormalizedEvent]) -> dict[str, Any]:
         by_id = {event.event_id: event for event in events}
+        val_cfg = self._config.hypothesis_validation
+        records = self._handler.detect(hypothesis, events)
+        penalty = self._handler.penalty_multiplier(records)
         supporting = [by_id[event_id] for event_id in hypothesis.get("supporting_events", []) if event_id in by_id]
-        contradictions = self._detect_contradictions(hypothesis, supporting, events)
-        penalty = self._contradiction_penalty(contradictions)
-        score = round(float(hypothesis.get("total_score") or 0.0) * penalty, 4)
+        contradicting_ids = sorted({item.event_id for item in records if item.event_id})
+        contradiction_ratio = len(contradicting_ids) / max(1, len(supporting) + len(contradicting_ids))
+
         invalidation_reasons = list(hypothesis.get("invalidation_reasons", []))
-        invalidation_reasons.extend(item.explanation for item in contradictions)
-        contradiction_ratio = len(contradictions) / max(1, len(supporting) + len(contradictions))
-        is_valid = bool(supporting) and contradiction_ratio <= 0.6
+        invalidation_reasons.extend(item.explanation for item in records)
+
+        validation_statuses: list[str] = []
+        if not val_cfg.enabled:
+            warnings = 0
+            temporal_ok = True
+            root_severity_ok = True
+            ratio_ok = True
+        else:
+            temporal_ok, temporal_msg = self._temporal_consistency(hypothesis, supporting, by_id)
+            if temporal_msg:
+                invalidation_reasons.append(temporal_msg)
+                validation_statuses.append("WARN" if temporal_ok else "FAIL")
+
+            root_severity_ok, root_msg = self._root_cause_severity(hypothesis, by_id)
+            if root_msg:
+                invalidation_reasons.append(root_msg)
+                validation_statuses.append("FAIL" if not root_severity_ok else "WARN")
+
+            ratio_ok, ratio_msg = self._contradiction_ratio(contradiction_ratio)
+            if ratio_msg:
+                invalidation_reasons.append(ratio_msg)
+                validation_statuses.append("FAIL" if not ratio_ok else "WARN")
+
+            warnings = sum(1 for item in validation_statuses if item == "WARN")
+
+        base_score = float(hypothesis.get("total_score") or 0.0)
+        base_score = round(base_score * penalty, 4)
+        warn_mult = max(0.0, 1.0 - warnings * float(val_cfg.confidence_reduction_per_warning))
+        score = round(base_score * warn_mult, 4) if val_cfg.enabled else base_score
+
+        is_valid = bool(supporting) and temporal_ok and root_severity_ok and ratio_ok
         if not supporting:
             invalidation_reasons.append("No supporting evidence exists for this hypothesis.")
-        if contradiction_ratio > 0.3:
-            invalidation_reasons.append(f"High contradiction ratio: {contradiction_ratio:.0%}.")
+
         updated = dict(hypothesis)
         updated["total_score"] = score
-        updated["contradicting_events"] = [item.event_id for item in contradictions if item.event_id]
+        updated["contradicting_events"] = contradicting_ids
         updated["is_valid"] = is_valid
         updated["invalidation_reasons"] = invalidation_reasons
-        breakdown = dict(updated.get("score_breakdown", {}))
-        breakdown["contradiction_penalty"] = penalty
-        breakdown["contradiction_count"] = len(contradictions)
-        updated["score_breakdown"] = breakdown
+        updated["score_breakdown"] = _six_component_breakdown(hypothesis.get("score_breakdown"))
+
+        if not is_valid:
+            updated["total_score"] = 0.0
         return updated
 
-    def _detect_contradictions(
+    def _temporal_consistency(
         self,
         hypothesis: dict[str, Any],
         supporting: list[NormalizedEvent],
-        all_events: list[NormalizedEvent],
-    ) -> list[Contradiction]:
-        contradictions: list[Contradiction] = []
-        contradictions.extend(self._health_check_contradictions(hypothesis, supporting, all_events))
-        contradictions.extend(self._resource_state_contradictions(hypothesis, all_events))
-        contradictions.extend(self._timeline_contradictions(hypothesis, supporting))
-        return contradictions
-
-    def _health_check_contradictions(
-        self,
-        hypothesis: dict[str, Any],
-        supporting: list[NormalizedEvent],
-        all_events: list[NormalizedEvent],
-    ) -> list[Contradiction]:
-        if not supporting:
-            return []
-        affected = set(hypothesis.get("affected_services") or [])
-        start = min(event.timestamp for event in supporting)
-        end = max(event.timestamp for event in supporting)
-        contradictions: list[Contradiction] = []
-        for event in all_events:
-            if event.event_type != EventType.HEALTH_CHECK or event.service_id not in affected:
-                continue
-            lower = event.message.lower()
-            if not any(token in lower for token in ("pass", "healthy", "ok", "success")):
-                continue
-            if not (start <= event.timestamp <= end):
-                continue
-            window_start = event.timestamp - timedelta(seconds=15)
-            window_end = event.timestamp + timedelta(seconds=15)
-            concurrent_failures = [
-                item
-                for item in supporting
-                if item.service_id == event.service_id and item.severity >= Severity.ERROR and window_start <= item.timestamp <= window_end
-            ]
-            severity = "weak" if concurrent_failures else "strong"
-            contradictions.append(
-                Contradiction(
-                    event.event_id,
-                    "health_check",
-                    f"Health check on {event.service_id} passed during the incident window.",
-                    severity,
-                )
-            )
-        return contradictions
-
-    def _resource_state_contradictions(
-        self,
-        hypothesis: dict[str, Any],
-        all_events: list[NormalizedEvent],
-    ) -> list[Contradiction]:
-        if hypothesis.get("cause_type") != CauseType.RESOURCE_EXHAUSTION.value:
-            return []
-        contradictions: list[Contradiction] = []
-        for event in all_events:
-            metrics = event.structured_data.get("metrics")
-            if not isinstance(metrics, dict):
-                continue
-            cpu = _as_float(metrics.get("cpu_percent"))
-            memory = _as_float(metrics.get("memory_percent"))
-            disk = _as_float(metrics.get("disk_percent"))
-            if cpu is not None and memory is not None and disk is not None and cpu < 50 and memory < 60 and disk < 75:
-                contradictions.append(
-                    Contradiction(
-                        event.event_id,
-                        "resource_state",
-                        "Host metrics show low CPU, memory, and disk usage during a resource exhaustion hypothesis.",
-                        "strong",
-                    )
-                )
-        return contradictions
-
-    def _timeline_contradictions(
-        self,
-        hypothesis: dict[str, Any],
-        supporting: list[NormalizedEvent],
-    ) -> list[Contradiction]:
+        by_id: dict[str, NormalizedEvent],
+    ) -> tuple[bool, str]:
         root_id = hypothesis.get("root_cause_event_id")
-        if not root_id:
-            return []
-        by_id = {event.event_id: event for event in supporting}
-        root = by_id.get(root_id)
-        if root is None:
-            return []
-        contradictions: list[Contradiction] = []
-        for event in supporting:
-            if event.event_id == root_id:
-                continue
-            latency = (root.timestamp - event.timestamp).total_seconds()
-            if latency > 5.0:
-                contradictions.append(
-                    Contradiction(
-                        event.event_id,
-                        "timeline_violation",
-                        f"Evidence event on {event.service_id} occurred {latency:.0f}s before the claimed root cause.",
-                        "strong" if latency > 30 else "weak",
-                    )
-                )
-        return contradictions
+        if not root_id or root_id not in by_id:
+            return True, ""
+        root = by_id[root_id]
+        tol = timedelta(seconds=float(self._config.contradiction_handling.timeline_tolerance_seconds))
+        effects = [event for event in supporting if event.event_id != root_id]
+        if not effects:
+            return True, ""
+        before = sum(1 for event in effects if event.timestamp + tol < root.timestamp)
+        ratio = before / len(effects)
+        thr = float(self._config.hypothesis_validation.temporal_consistency_threshold)
+        warn_thr = float(self._config.hypothesis_validation.temporal_consistency_warn)
+        if ratio > thr:
+            return False, f"Temporal consistency failed: {before}/{len(effects)} effects precede the root beyond tolerance."
+        if ratio > warn_thr:
+            return True, f"Temporal consistency warning: {before}/{len(effects)} effects precede the root (possible clock skew)."
+        return True, ""
 
-    def _contradiction_penalty(self, contradictions: list[Contradiction]) -> float:
-        strong = sum(1 for item in contradictions if item.severity == "strong")
-        weak = sum(1 for item in contradictions if item.severity == "weak")
-        return round(max(0.5, 1.0 - strong * 0.15 - weak * 0.05), 4)
+    def _root_cause_severity(self, hypothesis: dict[str, Any], by_id: dict[str, NormalizedEvent]) -> tuple[bool, str]:
+        root_id = hypothesis.get("root_cause_event_id")
+        if not root_id or root_id not in by_id:
+            return True, ""
+        root = by_id[root_id]
+        minimum = _severity_from_name(self._config.hypothesis_validation.min_root_cause_severity)
+        if root.severity < minimum:
+            return False, f"Root cause severity {root.severity.name} is below required {minimum.name}."
+        return True, ""
+
+    def _contradiction_ratio(self, ratio: float) -> tuple[bool, str]:
+        fail_at = float(self._config.hypothesis_validation.contradiction_ratio_fail)
+        warn_at = float(self._config.hypothesis_validation.contradiction_ratio_warn)
+        if ratio > fail_at:
+            return False, f"Contradiction ratio {ratio:.0%} exceeds failure threshold {fail_at:.0%}."
+        if ratio > warn_at:
+            return True, f"Contradiction ratio {ratio:.0%} exceeds warning threshold {warn_at:.0%}."
+        return True, ""
 
 
-def _as_float(value: Any) -> float | None:
-    try:
-        return float(value)
-    except (TypeError, ValueError):
-        return None
+def _six_component_breakdown(score_breakdown: Any) -> dict[str, float]:
+    if isinstance(score_breakdown, ScoreBreakdown):
+        raw = asdict(score_breakdown)
+    elif isinstance(score_breakdown, dict):
+        raw = score_breakdown
+    else:
+        raw = {}
+    return {key: round(float(raw.get(key, 0.0)), 4) for key in _SCORE_KEYS}
+
+
+def _severity_from_name(name: str) -> Severity:
+    upper = name.strip().upper()
+    for item in Severity:
+        if item.name == upper:
+            return item
+    return Severity.WARN

@@ -1,0 +1,219 @@
+<!DOCTYPE html>
+<html class="writer-html5" lang="en" >
+<head>
+    <meta charset="utf-8" />
+    <meta http-equiv="X-UA-Compatible" content="IE=edge" />
+    <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+      <link rel="shortcut icon" href="../../img/favicon.ico" />
+    <title>AI provider - Inferra</title>
+    <link rel="stylesheet" href="../../css/theme.css" />
+    <link rel="stylesheet" href="../../css/theme_extra.css" />
+        <link rel="stylesheet" href="https://cdnjs.cloudflare.com/ajax/libs/highlight.js/11.8.0/styles/github.min.css" />
+    
+      <script>
+        // Current page data
+        var mkdocs_page_name = "AI provider";
+        var mkdocs_page_input_path = "operations\\ai_provider.md";
+        var mkdocs_page_url = null;
+      </script>
+    
+    <!--[if lt IE 9]>
+      <script src="../../js/html5shiv.min.js"></script>
+    <![endif]-->
+      <script src="https://cdnjs.cloudflare.com/ajax/libs/highlight.js/11.8.0/highlight.min.js"></script>
+      <script>hljs.highlightAll();</script> 
+</head>
+
+<body class="wy-body-for-nav" role="document">
+
+  <div class="wy-grid-for-nav">
+    <nav data-toggle="wy-nav-shift" class="wy-nav-side stickynav">
+    <div class="wy-side-scroll">
+      <div class="wy-side-nav-search">
+          <a href="../.." class="icon icon-home"> Inferra
+        </a><div role="search">
+  <form id ="rtd-search-form" class="wy-form" action="../../search.html" method="get">
+      <input type="text" name="q" placeholder="Search docs" aria-label="Search docs" title="Type search term here" />
+  </form>
+</div>
+      </div>
+
+      <div class="wy-menu wy-menu-vertical" data-spy="affix" role="navigation" aria-label="Navigation menu">
+              <ul>
+                <li class="toctree-l1"><a class="reference internal" href="../..">Home</a>
+                </li>
+              </ul>
+              <p class="caption"><span class="caption-text">Operator guides</span></p>
+              <ul class="current">
+                  <li class="toctree-l1"><a class="reference internal" href="../install/">Install</a>
+                  </li>
+                  <li class="toctree-l1 current"><a class="reference internal current" href="#">AI provider</a>
+    <ul class="current">
+    <li class="toctree-l2"><a class="reference internal" href="#gemma-model-choice">Gemma model choice</a>
+    </li>
+    <li class="toctree-l2"><a class="reference internal" href="#local-ollama">Local Ollama</a>
+    </li>
+    <li class="toctree-l2"><a class="reference internal" href="#remote-ollama-compatible-servers">Remote Ollama-compatible servers</a>
+    </li>
+    <li class="toctree-l2"><a class="reference internal" href="#bearer-token-environment-variable">Bearer token environment variable</a>
+    </li>
+    <li class="toctree-l2"><a class="reference internal" href="#streaming">Streaming</a>
+    </li>
+    <li class="toctree-l2"><a class="reference internal" href="#troubleshooting">Troubleshooting</a>
+    </li>
+    </ul>
+                  </li>
+                  <li class="toctree-l1"><a class="reference internal" href="../collectors/">Collectors</a>
+                  </li>
+                  <li class="toctree-l1"><a class="reference internal" href="../tuning/">Tuning</a>
+                  </li>
+                  <li class="toctree-l1"><a class="reference internal" href="../upgrade/">Upgrade</a>
+                  </li>
+                  <li class="toctree-l1"><a class="reference internal" href="../troubleshooting/">Troubleshooting</a>
+                  </li>
+                  <li class="toctree-l1"><a class="reference internal" href="../ci/">CI</a>
+                  </li>
+                  <li class="toctree-l1"><a class="reference internal" href="../release_signing/">Release signing</a>
+                  </li>
+              </ul>
+              <p class="caption"><span class="caption-text">Architecture Decision Records</span></p>
+              <ul>
+                  <li class="toctree-l1"><a class="reference internal" href="../../adr/0001-local-first-guided-ai/">ADR 0001 — Local-first guided AI</a>
+                  </li>
+                  <li class="toctree-l1"><a class="reference internal" href="../../adr/0002-flat-src-layout/">ADR 0002 — Flat src layout</a>
+                  </li>
+                  <li class="toctree-l1"><a class="reference internal" href="../../adr/0003-storage-protocols/">ADR 0003 — Storage protocols</a>
+                  </li>
+                  <li class="toctree-l1"><a class="reference internal" href="../../adr/0004-windows-first-collectors/">ADR 0004 — Windows-first collectors</a>
+                  </li>
+                  <li class="toctree-l1"><a class="reference internal" href="../../adr/0005-ai-presentation-only/">ADR 0005 — AI presentation-only</a>
+                  </li>
+                  <li class="toctree-l1"><a class="reference internal" href="../../adr/0006-ollama-gemma-default/">ADR 0006 — Ollama Gemma default</a>
+                  </li>
+              </ul>
+              <p class="caption"><span class="caption-text">Planning</span></p>
+              <ul>
+                  <li class="toctree-l1"><a class="reference internal" href="../../planning/architecture_overview/">Architecture overview</a>
+                  </li>
+                  <li class="toctree-l1"><a class="reference internal" href="../../planning/full_build_architecture_plan/">Full build architecture plan</a>
+                  </li>
+                  <li class="toctree-l1"><a class="reference internal" href="../../planning/data_flow_contracts/">Data flow contracts</a>
+                  </li>
+                  <li class="toctree-l1"><a class="reference internal" href="../../planning/implementation_index/">Implementation index</a>
+                  </li>
+              </ul>
+      </div>
+    </div>
+    </nav>
+
+    <section data-toggle="wy-nav-shift" class="wy-nav-content-wrap">
+      <nav class="wy-nav-top" role="navigation" aria-label="Mobile navigation menu">
+          <i data-toggle="wy-nav-top" class="fa fa-bars"></i>
+          <a href="../..">Inferra</a>
+        
+      </nav>
+      <div class="wy-nav-content">
+        <div class="rst-content"><div role="navigation" aria-label="breadcrumbs navigation">
+  <ul class="wy-breadcrumbs">
+    <li><a href="../.." class="icon icon-home" aria-label="Docs"></a></li>
+          <li class="breadcrumb-item">Operator guides</li>
+      <li class="breadcrumb-item active">AI provider</li>
+    <li class="wy-breadcrumbs-aside">
+    </li>
+  </ul>
+  <hr/>
+</div>
+          <div role="main" class="document" itemscope="itemscope" itemtype="http://schema.org/Article">
+            <div class="section" itemprop="articleBody">
+              
+                <h1 id="ai-provider-setup">AI Provider Setup<a class="headerlink" href="#ai-provider-setup" title="Permanent link">&para;</a></h1>
+<p>Inferra uses AI as a guided explanation layer only; it does not change deterministic scoring or ranking (see <a href="../../adr/0005-ai-presentation-only/">ADR 0005</a>).</p>
+<h2 id="gemma-model-choice">Gemma model choice<a class="headerlink" href="#gemma-model-choice" title="Permanent link">&para;</a></h2>
+<p>The shipped default in <code>src/config/defaults.toml</code> is a Gemma 4 tag suitable for local workstations. Verified sizes, context windows, and modalities for Gemma 3 and Gemma 4 are recorded in <code>src/ai/registry.py</code>, sourced from the public Ollama library (<code>https://ollama.com/library/gemma3/tags</code>, <code>https://ollama.com/library/gemma4/tags</code>). As of the last registry refresh, Gemma 4 offers multiple quantized variants (for example <code>gemma4:e2b</code>, <code>gemma4:e4b</code>, <code>gemma4:26b</code>, <code>gemma4:31b</code>) with 128K or 256K context where listed.</p>
+<p>Alias resolution maps shorthand tags to concrete pulls (<code>GEMMA4_DEFAULT_ALIASES</code> / <code>GEMMA3_DEFAULT_ALIASES</code>). At runtime, <code>choose_available_gemma_model</code> can pick an installed digest if your daemon lacks a given alias.</p>
+<h2 id="local-ollama">Local Ollama<a class="headerlink" href="#local-ollama" title="Permanent link">&para;</a></h2>
+<p>Prepare config and probe the daemon:</p>
+<pre><code class="language-powershell">inferra --config inferra.toml config set ai.enabled false
+inferra --config inferra.toml config set ai.model gemma4:e4b
+inferra --config inferra.toml ai models
+inferra --config inferra.toml ai status
+</code></pre>
+<p>After <code>ai.enabled</code> is true and Ollama is reachable at <code>[ai].base_url</code>, pull and smoke-test:</p>
+<pre><code class="language-powershell">inferra --config inferra.toml config set ai.enabled true
+inferra --config inferra.toml ai pull --help
+inferra --config inferra.toml ai test --help
+</code></pre>
+<p>Run <code>inferra ai pull &lt;tag&gt;</code> once Ollama is running to download weights; streams progress to the terminal. Run <code>inferra ai test</code> for a short health prompt against the configured model.</p>
+<p><code>inferra setup --yes</code> enables AI and probes Ollama unless <code>--skip-connection-test</code> is set. No model downloads occur without an explicit <code>ai pull</code> or upstream <code>ollama pull</code>.</p>
+<h2 id="remote-ollama-compatible-servers">Remote Ollama-compatible servers<a class="headerlink" href="#remote-ollama-compatible-servers" title="Permanent link">&para;</a></h2>
+<pre><code class="language-powershell">inferra --config inferra.toml config set ai.enabled true
+inferra --config inferra.toml config set ai.base_url http://SERVER:11434
+inferra --config inferra.toml config set ai.allow_remote true
+inferra --config inferra.toml config set ai.model gemma4:e4b
+inferra --config inferra.toml ai status --help
+</code></pre>
+<p>When the remote endpoint is reachable, run <code>inferra ai status</code> without <code>--help</code> to probe availability.</p>
+<h2 id="bearer-token-environment-variable">Bearer token environment variable<a class="headerlink" href="#bearer-token-environment-variable" title="Permanent link">&para;</a></h2>
+<p>When the upstream expects <code>Authorization: Bearer …</code>, store the secret outside config files:</p>
+<pre><code class="language-powershell">$env:OLLAMA_TOKEN = &quot;...&quot;
+inferra --config inferra.toml config set ai.token_env OLLAMA_TOKEN
+</code></pre>
+<p>Inferra reads the variable name from <code>[ai].token_env</code> and resolves the value at request time.</p>
+<h2 id="streaming">Streaming<a class="headerlink" href="#streaming" title="Permanent link">&para;</a></h2>
+<p><code>[ai].stream = true</code> (default) streams chat and generate calls where supported (<code>src/ai/ollama.py</code>), including aggregated explanation paths in the web UI. Disable streaming for debugging unstable proxies by setting <code>stream = false</code> in <code>inferra.toml</code>.</p>
+<h2 id="troubleshooting">Troubleshooting<a class="headerlink" href="#troubleshooting" title="Permanent link">&para;</a></h2>
+<ul>
+<li><strong>Unreachable provider:</strong> check <code>[ai].base_url</code>, TLS mismatch, and firewall paths; set <code>allow_remote</code> when not using loopback.</li>
+<li><strong>Auth failures:</strong> confirm <code>token_env</code> names an exported variable in the service account environment (Windows Service / systemd / container).</li>
+<li><strong>Missing models:</strong> run <code>inferra ai models</code> and install a listed tag; aliases fall back when the daemon exposes resolved names via <code>/api/tags</code>.</li>
+<li><strong>Strict environments:</strong> keep <code>ai.enabled = false</code> and rely on template explanations; core pipelines stay offline.</li>
+</ul>
+<p>See <a href="../troubleshooting/">Troubleshooting</a> for Ollama-specific failure modes and collector issues.</p>
+              
+            </div>
+          </div><footer>
+    <div class="rst-footer-buttons" role="navigation" aria-label="Footer Navigation">
+        <a href="../install/" class="btn btn-neutral float-left" title="Install"><span class="icon icon-circle-arrow-left"></span> Previous</a>
+        <a href="../collectors/" class="btn btn-neutral float-right" title="Collectors">Next <span class="icon icon-circle-arrow-right"></span></a>
+    </div>
+
+  <hr/>
+
+  <div role="contentinfo">
+    <!-- Copyright etc -->
+  </div>
+
+  Built with <a href="https://www.mkdocs.org/">MkDocs</a> using a <a href="https://github.com/readthedocs/sphinx_rtd_theme">theme</a> provided by <a href="https://readthedocs.org">Read the Docs</a>.
+</footer>
+          
+        </div>
+      </div>
+
+    </section>
+
+  </div>
+
+  <div class="rst-versions" role="note" aria-label="Versions">
+  <span class="rst-current-version" data-toggle="rst-current-version">
+    
+    
+      <span><a href="../install/" style="color: #fcfcfc">&laquo; Previous</a></span>
+    
+    
+      <span><a href="../collectors/" style="color: #fcfcfc">Next &raquo;</a></span>
+    
+  </span>
+</div>
+    <script src="../../js/jquery-3.6.0.min.js"></script>
+    <script>var base_url = "../..";</script>
+    <script src="../../js/theme_extra.js"></script>
+    <script src="../../js/theme.js"></script>
+      <script src="../../search/main.js"></script>
+    <script>
+        jQuery(function () {
+            SphinxRtdTheme.Navigation.enable(true);
+        });
+    </script>
+
+</body>
+</html>

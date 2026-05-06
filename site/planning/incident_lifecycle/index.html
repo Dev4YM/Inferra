@@ -1,0 +1,479 @@
+<!DOCTYPE html>
+<html class="writer-html5" lang="en" >
+<head>
+    <meta charset="utf-8" />
+    <meta http-equiv="X-UA-Compatible" content="IE=edge" />
+    <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+      <link rel="shortcut icon" href="../../img/favicon.ico" />
+    <title>Incident Lifecycle - Inferra</title>
+    <link rel="stylesheet" href="../../css/theme.css" />
+    <link rel="stylesheet" href="../../css/theme_extra.css" />
+        <link rel="stylesheet" href="https://cdnjs.cloudflare.com/ajax/libs/highlight.js/11.8.0/styles/github.min.css" />
+    
+      <script>
+        // Current page data
+        var mkdocs_page_name = "Incident Lifecycle";
+        var mkdocs_page_input_path = "planning\\incident_lifecycle.md";
+        var mkdocs_page_url = null;
+      </script>
+    
+    <!--[if lt IE 9]>
+      <script src="../../js/html5shiv.min.js"></script>
+    <![endif]-->
+      <script src="https://cdnjs.cloudflare.com/ajax/libs/highlight.js/11.8.0/highlight.min.js"></script>
+      <script>hljs.highlightAll();</script> 
+</head>
+
+<body class="wy-body-for-nav" role="document">
+
+  <div class="wy-grid-for-nav">
+    <nav data-toggle="wy-nav-shift" class="wy-nav-side stickynav">
+    <div class="wy-side-scroll">
+      <div class="wy-side-nav-search">
+          <a href="../.." class="icon icon-home"> Inferra
+        </a><div role="search">
+  <form id ="rtd-search-form" class="wy-form" action="../../search.html" method="get">
+      <input type="text" name="q" placeholder="Search docs" aria-label="Search docs" title="Type search term here" />
+  </form>
+</div>
+      </div>
+
+      <div class="wy-menu wy-menu-vertical" data-spy="affix" role="navigation" aria-label="Navigation menu">
+              <ul>
+                <li class="toctree-l1"><a class="reference internal" href="../..">Home</a>
+                </li>
+              </ul>
+              <p class="caption"><span class="caption-text">Operator guides</span></p>
+              <ul>
+                  <li class="toctree-l1"><a class="reference internal" href="../../operations/install/">Install</a>
+                  </li>
+                  <li class="toctree-l1"><a class="reference internal" href="../../operations/ai_provider/">AI provider</a>
+                  </li>
+                  <li class="toctree-l1"><a class="reference internal" href="../../operations/collectors/">Collectors</a>
+                  </li>
+                  <li class="toctree-l1"><a class="reference internal" href="../../operations/tuning/">Tuning</a>
+                  </li>
+                  <li class="toctree-l1"><a class="reference internal" href="../../operations/upgrade/">Upgrade</a>
+                  </li>
+                  <li class="toctree-l1"><a class="reference internal" href="../../operations/troubleshooting/">Troubleshooting</a>
+                  </li>
+                  <li class="toctree-l1"><a class="reference internal" href="../../operations/ci/">CI</a>
+                  </li>
+                  <li class="toctree-l1"><a class="reference internal" href="../../operations/release_signing/">Release signing</a>
+                  </li>
+              </ul>
+              <p class="caption"><span class="caption-text">Architecture Decision Records</span></p>
+              <ul>
+                  <li class="toctree-l1"><a class="reference internal" href="../../adr/0001-local-first-guided-ai/">ADR 0001 — Local-first guided AI</a>
+                  </li>
+                  <li class="toctree-l1"><a class="reference internal" href="../../adr/0002-flat-src-layout/">ADR 0002 — Flat src layout</a>
+                  </li>
+                  <li class="toctree-l1"><a class="reference internal" href="../../adr/0003-storage-protocols/">ADR 0003 — Storage protocols</a>
+                  </li>
+                  <li class="toctree-l1"><a class="reference internal" href="../../adr/0004-windows-first-collectors/">ADR 0004 — Windows-first collectors</a>
+                  </li>
+                  <li class="toctree-l1"><a class="reference internal" href="../../adr/0005-ai-presentation-only/">ADR 0005 — AI presentation-only</a>
+                  </li>
+                  <li class="toctree-l1"><a class="reference internal" href="../../adr/0006-ollama-gemma-default/">ADR 0006 — Ollama Gemma default</a>
+                  </li>
+              </ul>
+              <p class="caption"><span class="caption-text">Planning</span></p>
+              <ul>
+                  <li class="toctree-l1"><a class="reference internal" href="../architecture_overview/">Architecture overview</a>
+                  </li>
+                  <li class="toctree-l1"><a class="reference internal" href="../full_build_architecture_plan/">Full build architecture plan</a>
+                  </li>
+                  <li class="toctree-l1"><a class="reference internal" href="../data_flow_contracts/">Data flow contracts</a>
+                  </li>
+                  <li class="toctree-l1"><a class="reference internal" href="../implementation_index/">Implementation index</a>
+                  </li>
+              </ul>
+      </div>
+    </div>
+    </nav>
+
+    <section data-toggle="wy-nav-shift" class="wy-nav-content-wrap">
+      <nav class="wy-nav-top" role="navigation" aria-label="Mobile navigation menu">
+          <i data-toggle="wy-nav-top" class="fa fa-bars"></i>
+          <a href="../..">Inferra</a>
+        
+      </nav>
+      <div class="wy-nav-content">
+        <div class="rst-content"><div role="navigation" aria-label="breadcrumbs navigation">
+  <ul class="wy-breadcrumbs">
+    <li><a href="../.." class="icon icon-home" aria-label="Docs"></a></li>
+      <li class="breadcrumb-item active">Incident Lifecycle</li>
+    <li class="wy-breadcrumbs-aside">
+    </li>
+  </ul>
+  <hr/>
+</div>
+          <div role="main" class="document" itemscope="itemscope" itemtype="http://schema.org/Article">
+            <div class="section" itemprop="articleBody">
+              
+                <h1 id="incident-lifecycle">Incident Lifecycle<a class="headerlink" href="#incident-lifecycle" title="Permanent link">&para;</a></h1>
+<h2 id="purpose">Purpose<a class="headerlink" href="#purpose" title="Permanent link">&para;</a></h2>
+<p>An incident is the central unit of analysis in Inferra. It represents a group of correlated events that collectively indicate a system problem. This document defines how incidents are created, progress through states, merge or split, and eventually resolve.</p>
+<hr />
+<h2 id="incident-states">Incident States<a class="headerlink" href="#incident-states" title="Permanent link">&para;</a></h2>
+<pre><code>                              ┌─────────────────────────────────┐
+                              │                                 │
+    ┌──────────┐         ┌────▼──────┐         ┌─────────────┐  │
+    │          │ cluster  │           │ hypotheses│             │  │
+    │  (none)  ├─────────▶│   OPEN    ├──────────▶│INVESTIGATING│──┘ new events
+    │          │ detected │           │ generated │             │   (re-analyze)
+    └──────────┘         └────┬──────┘         └──────┬──────┘
+                              │                       │
+                              │ no events for         │ explanation
+                              │ stale_timeout         │ generated
+                              │                       ▼
+                              │              ┌─────────────┐
+                              │              │  EXPLAINED   │
+                              │              │              │
+                              │              └──────┬──────┘
+                              │                     │
+                              │                     │ operator marks
+                              │                     │ as resolved
+                              ▼                     ▼
+                        ┌──────────┐         ┌─────────────┐
+                        │  STALE   │         │  RESOLVED   │
+                        │          │         │             │
+                        └──────────┘         └─────────────┘
+</code></pre>
+<h3 id="state-definitions">State Definitions<a class="headerlink" href="#state-definitions" title="Permanent link">&para;</a></h3>
+<table>
+<thead>
+<tr>
+<th>State</th>
+<th>Description</th>
+<th>Entry Condition</th>
+<th>Exit Condition</th>
+</tr>
+</thead>
+<tbody>
+<tr>
+<td><strong>OPEN</strong></td>
+<td>Cluster detected, incident created. Events are being collected.</td>
+<td>Correlation engine produces a new cluster</td>
+<td>Hypotheses generated → INVESTIGATING; no new events for <code>stale_timeout</code> → STALE</td>
+</tr>
+<tr>
+<td><strong>INVESTIGATING</strong></td>
+<td>Hypotheses have been generated and scored. Active analysis.</td>
+<td>Hypothesis engine produces ≥1 hypothesis</td>
+<td>Explanation generated → EXPLAINED; new events arrive → stay in INVESTIGATING (re-analyze)</td>
+</tr>
+<tr>
+<td><strong>EXPLAINED</strong></td>
+<td>Full analysis complete, explanation available.</td>
+<td>Explanation layer produces output</td>
+<td>Operator resolves → RESOLVED; new events arrive → back to INVESTIGATING</td>
+</tr>
+<tr>
+<td><strong>RESOLVED</strong></td>
+<td>Operator has acknowledged/resolved the incident.</td>
+<td>Operator action in UI</td>
+<td>Archived after retention period</td>
+</tr>
+<tr>
+<td><strong>STALE</strong></td>
+<td>No new events for <code>stale_timeout</code>. Incident likely self-resolved.</td>
+<td>No new events added for <code>stale_timeout</code> (default: 15 min)</td>
+<td>Archived after retention period</td>
+</tr>
+</tbody>
+</table>
+<hr />
+<h2 id="state-transitions">State Transitions<a class="headerlink" href="#state-transitions" title="Permanent link">&para;</a></h2>
+<pre><code class="language-python">ALLOWED_TRANSITIONS = {
+    IncidentState.OPEN: {IncidentState.INVESTIGATING, IncidentState.STALE},
+    IncidentState.INVESTIGATING: {IncidentState.EXPLAINED, IncidentState.INVESTIGATING, IncidentState.STALE},
+    IncidentState.EXPLAINED: {IncidentState.RESOLVED, IncidentState.INVESTIGATING},
+    IncidentState.RESOLVED: set(),  # terminal state
+    IncidentState.STALE: set(),     # terminal state
+}
+
+def transition(incident: Incident, new_state: IncidentState, reason: str) -&gt; None:
+    if new_state not in ALLOWED_TRANSITIONS[incident.state]:
+        raise InvalidTransition(f&quot;Cannot transition from {incident.state} to {new_state}&quot;)
+
+    incident.state = new_state
+    incident.updated_at = datetime.utcnow()
+    log_transition(incident.incident_id, incident.state, new_state, reason)
+</code></pre>
+<h3 id="transition-explained-investigating-re-analysis">Transition: EXPLAINED → INVESTIGATING (Re-analysis)<a class="headerlink" href="#transition-explained-investigating-re-analysis" title="Permanent link">&para;</a></h3>
+<p>When new events are added to an incident that was already explained:
+1. The incident moves back to INVESTIGATING
+2. The hypothesis engine re-runs with the expanded event set
+3. The scoring engine re-ranks hypotheses
+4. A new explanation is generated (the old one is kept in history)</p>
+<p>This handles evolving incidents where the initial analysis was based on partial data.</p>
+<hr />
+<h2 id="incident-creation">Incident Creation<a class="headerlink" href="#incident-creation" title="Permanent link">&para;</a></h2>
+<p>An incident is created when the correlation engine produces a new <code>EventCluster</code> that does not match any existing active incident.</p>
+<pre><code class="language-python">def maybe_create_incident(cluster: EventCluster, active_incidents: list[Incident]) -&gt; Incident | None:
+    # Check if this cluster should be merged into an existing incident
+    for incident in active_incidents:
+        if should_merge(cluster, incident):
+            merge_cluster_into_incident(cluster, incident)
+            return None  # no new incident, existing one updated
+
+    # New incident
+    return Incident(
+        incident_id=generate_incident_id(),
+        state=IncidentState.OPEN,
+        created_at=datetime.utcnow(),
+        updated_at=datetime.utcnow(),
+        clusters=[cluster.cluster_id],
+        events=cluster.events,
+        affected_services=cluster.affected_services,
+        primary_service=identify_primary_service(cluster),
+        time_range=cluster.time_range,
+        severity=cluster.primary_severity,
+        runtime_context=None,  # populated when analysis starts
+        inference_graph=None,  # populated by inference graph engine
+    )
+</code></pre>
+<h3 id="merge-criteria">Merge Criteria<a class="headerlink" href="#merge-criteria" title="Permanent link">&para;</a></h3>
+<p>A new cluster is merged into an existing incident if:</p>
+<pre><code class="language-python">def should_merge(cluster: EventCluster, incident: Incident) -&gt; bool:
+    # Shared services
+    service_overlap = cluster.affected_services &amp; incident.affected_services
+    if not service_overlap:
+        return False
+
+    # Temporal overlap or adjacency
+    time_gap = max(
+        (cluster.time_range[0] - incident.time_range[1]).total_seconds(),
+        (incident.time_range[0] - cluster.time_range[1]).total_seconds(),
+    )
+    if time_gap &gt; MERGE_TIME_THRESHOLD:  # default: 300 seconds (5 min)
+        return False
+
+    # At least one shared event
+    shared_events = set(cluster.events) &amp; set(incident.events)
+    if shared_events:
+        return True
+
+    # High service overlap ratio
+    overlap_ratio = len(service_overlap) / min(len(cluster.affected_services), len(incident.affected_services))
+    if overlap_ratio &gt;= 0.5 and time_gap &lt; 60:
+        return True
+
+    return False
+</code></pre>
+<hr />
+<h2 id="incident-splitting">Incident Splitting<a class="headerlink" href="#incident-splitting" title="Permanent link">&para;</a></h2>
+<p>Rarely, an incident may need to be split — when analysis reveals that two unrelated failures were incorrectly clustered together.</p>
+<p><strong>Trigger</strong>: The hypothesis engine generates hypotheses with completely disjoint affected service sets, AND the inference graph has disconnected components.</p>
+<pre><code class="language-python">def should_split(incident: Incident, hypotheses: list[Hypothesis],
+                   inference_graph: InferenceGraph | None) -&gt; bool:
+    if inference_graph is None:
+        return False
+
+    components = list(nx.weakly_connected_components(inference_graph.to_networkx()))
+    if len(components) &lt;= 1:
+        return False
+
+    # Check if hypothesis service sets are disjoint
+    service_sets = [set(h.affected_services) for h in hypotheses]
+    for i, s1 in enumerate(service_sets):
+        for s2 in service_sets[i+1:]:
+            if not s1 &amp; s2:
+                return True
+
+    return False
+</code></pre>
+<p><strong>Split operation</strong>:
+1. Identify disconnected components in the inference graph
+2. Create new incidents for each component
+3. Move events to the appropriate new incident
+4. Mark the original incident as <code>RESOLVED</code> with reason <code>"split into {new_ids}"</code></p>
+<p>Splitting is conservative — it only happens when there's strong evidence of independence.</p>
+<hr />
+<h2 id="staleness-detection">Staleness Detection<a class="headerlink" href="#staleness-detection" title="Permanent link">&para;</a></h2>
+<p>A background task checks for stale incidents every 60 seconds:</p>
+<pre><code class="language-python">async def check_staleness(incidents: list[Incident]) -&gt; None:
+    cutoff = datetime.utcnow() - timedelta(seconds=STALE_TIMEOUT)
+
+    for incident in incidents:
+        if incident.state in (IncidentState.OPEN, IncidentState.INVESTIGATING, IncidentState.EXPLAINED):
+            if incident.updated_at &lt; cutoff:
+                last_event_time = get_last_event_time(incident)
+                if last_event_time and last_event_time &lt; cutoff:
+                    transition(incident, IncidentState.STALE,
+                              f&quot;No new events for {STALE_TIMEOUT}s&quot;)
+</code></pre>
+<p><strong>Stale timeout</strong>: Default 15 minutes. Configurable.</p>
+<p>Stale incidents are not deleted — they are available for review and contribute to calibration data. They are archived after 7 days.</p>
+<hr />
+<h2 id="incident-deduplication">Incident Deduplication<a class="headerlink" href="#incident-deduplication" title="Permanent link">&para;</a></h2>
+<p>To prevent duplicate incidents for the same failure:</p>
+<ol>
+<li><strong>Fingerprint-based</strong>: Each incident has a fingerprint computed from <code>frozenset(affected_services) + primary_severity + time_bucket(created_at, resolution=5min)</code>.</li>
+<li>If a new incident's fingerprint matches an active incident's fingerprint, it is merged instead of created.</li>
+<li>This handles the case where the correlation engine produces slightly different clusters for the same ongoing failure on consecutive ticks.</li>
+</ol>
+<hr />
+<h2 id="event-addition">Event Addition<a class="headerlink" href="#event-addition" title="Permanent link">&para;</a></h2>
+<p>Events are added to incidents by the correlation engine on each analysis tick:</p>
+<pre><code class="language-python">def add_events_to_incident(incident: Incident, new_event_ids: list[str]) -&gt; bool:
+    &quot;&quot;&quot;Add events to incident. Returns True if any new events were added.&quot;&quot;&quot;
+    existing = set(incident.events)
+    added = [eid for eid in new_event_ids if eid not in existing]
+
+    if not added:
+        return False
+
+    incident.events.extend(added)
+    incident.updated_at = datetime.utcnow()
+
+    # Expand time range if needed
+    for eid in added:
+        event = event_store.get_event(eid)
+        if event:
+            incident.time_range = (
+                min(incident.time_range[0], event.timestamp),
+                max(incident.time_range[1], event.timestamp),
+            )
+
+    # Expand affected services
+    for eid in added:
+        event = event_store.get_event(eid)
+        if event:
+            incident.affected_services.add(event.service_id)
+
+    # Trigger re-analysis if incident was already explained
+    if incident.state == IncidentState.EXPLAINED:
+        transition(incident, IncidentState.INVESTIGATING, &quot;New events added&quot;)
+
+    return True
+</code></pre>
+<hr />
+<h2 id="resolution">Resolution<a class="headerlink" href="#resolution" title="Permanent link">&para;</a></h2>
+<p>Resolution is an operator action:</p>
+<pre><code class="language-python">@dataclass
+class ResolutionInfo:
+    resolved_by: str           # &quot;operator&quot; | &quot;auto_stale&quot;
+    correct_hypothesis_id: str | None
+    feedback_type: str         # &quot;confirmed&quot; | &quot;none_correct&quot; | &quot;skipped&quot;
+    notes: str = &quot;&quot;
+    resolved_at: datetime = field(default_factory=datetime.utcnow)
+
+def resolve_incident(incident: Incident, resolution: ResolutionInfo) -&gt; None:
+    transition(incident, IncidentState.RESOLVED, f&quot;Resolved by {resolution.resolved_by}&quot;)
+
+    # Store feedback for calibration
+    if resolution.feedback_type != &quot;skipped&quot;:
+        feedback = IncidentFeedback(
+            incident_id=incident.incident_id,
+            resolved_at=resolution.resolved_at,
+            correct_hypothesis_id=resolution.correct_hypothesis_id,
+            feedback_type=resolution.feedback_type,
+            operator_notes=resolution.notes,
+        )
+        calibration_model.update(feedback)
+</code></pre>
+<hr />
+<h2 id="archival">Archival<a class="headerlink" href="#archival" title="Permanent link">&para;</a></h2>
+<p>Resolved and stale incidents older than the archive threshold (default: 7 days) are moved to archive storage:</p>
+<ol>
+<li>Incident record + hypotheses + explanations → <code>./data/archive/incidents_YYYYMMDD.db</code></li>
+<li>Event references are preserved (events may still be in the event store if within retention)</li>
+<li>Active incident store entry is deleted</li>
+</ol>
+<p>Archived incidents are read-only. They contribute to trend analysis and calibration but are not visible in the active incident list.</p>
+<hr />
+<h2 id="configuration">Configuration<a class="headerlink" href="#configuration" title="Permanent link">&para;</a></h2>
+<pre><code class="language-toml">[incident_lifecycle]
+stale_timeout_seconds = 900          # 15 minutes
+merge_time_threshold_seconds = 300   # 5 minutes
+archive_after_days = 7
+enable_auto_split = true
+staleness_check_interval_seconds = 60
+
+[incident_lifecycle.limits]
+max_events_per_incident = 10000
+max_active_incidents = 200
+max_clusters_per_incident = 20
+</code></pre>
+<hr />
+<h2 id="metrics">Metrics<a class="headerlink" href="#metrics" title="Permanent link">&para;</a></h2>
+<table>
+<thead>
+<tr>
+<th>Metric</th>
+<th>Description</th>
+</tr>
+</thead>
+<tbody>
+<tr>
+<td><code>incidents_created_total</code></td>
+<td>Total incidents created</td>
+</tr>
+<tr>
+<td><code>incidents_resolved_total</code></td>
+<td>Total incidents resolved (by type: operator, auto_stale)</td>
+</tr>
+<tr>
+<td><code>incidents_merged_total</code></td>
+<td>Total merge operations</td>
+</tr>
+<tr>
+<td><code>incidents_split_total</code></td>
+<td>Total split operations</td>
+</tr>
+<tr>
+<td><code>incident_active_count</code></td>
+<td>Currently active (non-terminal) incidents</td>
+</tr>
+<tr>
+<td><code>incident_duration_seconds</code></td>
+<td>Histogram of incident duration (created → resolved/stale)</td>
+</tr>
+<tr>
+<td><code>incident_events_count</code></td>
+<td>Histogram of event count per incident</td>
+</tr>
+</tbody>
+</table>
+              
+            </div>
+          </div><footer>
+
+  <hr/>
+
+  <div role="contentinfo">
+    <!-- Copyright etc -->
+  </div>
+
+  Built with <a href="https://www.mkdocs.org/">MkDocs</a> using a <a href="https://github.com/readthedocs/sphinx_rtd_theme">theme</a> provided by <a href="https://readthedocs.org">Read the Docs</a>.
+</footer>
+          
+        </div>
+      </div>
+
+    </section>
+
+  </div>
+
+  <div class="rst-versions" role="note" aria-label="Versions">
+  <span class="rst-current-version" data-toggle="rst-current-version">
+    
+    
+    
+  </span>
+</div>
+    <script src="../../js/jquery-3.6.0.min.js"></script>
+    <script>var base_url = "../..";</script>
+    <script src="../../js/theme_extra.js"></script>
+    <script src="../../js/theme.js"></script>
+      <script src="../../search/main.js"></script>
+    <script>
+        jQuery(function () {
+            SphinxRtdTheme.Navigation.enable(true);
+        });
+    </script>
+
+</body>
+</html>

@@ -6,11 +6,24 @@ data:
   inferra.toml: |
     [server]
     host = "0.0.0.0"
-    port = 7433
+    port = {{ .Values.service.port }}
 
     [storage]
     data_dir = "/data"
     retention_hours = 72
+
+    [collectors]
+    auto_start = {{ .Values.config.collectors.auto_start }}
+
+    [collectors.kubernetes]
+    enabled = {{ .Values.config.collectors.kubernetes.enabled }}
+    poll_interval_seconds = {{ .Values.config.collectors.kubernetes.poll_interval_seconds }}
+    all_namespaces = {{ .Values.config.collectors.kubernetes.all_namespaces }}
+    label_selector = "{{ .Values.config.collectors.kubernetes.label_selector }}"
+    limit = {{ .Values.config.collectors.kubernetes.limit }}
+    include_pods = {{ .Values.config.collectors.kubernetes.include_pods }}
+    include_events = {{ .Values.config.collectors.kubernetes.include_events }}
+    namespaces = [{{- range $i, $n := .Values.config.collectors.kubernetes.namespaces }}{{ if $i }}, {{ end }}"{{ $n }}"{{- end }}]
 
     [ai]
     enabled = {{ .Values.config.ai.enabled }}

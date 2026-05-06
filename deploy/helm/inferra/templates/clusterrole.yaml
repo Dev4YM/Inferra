@@ -1,0 +1,12 @@
+{{- if and .Values.rbac.create .Values.config.collectors.kubernetes.enabled }}
+apiVersion: rbac.authorization.k8s.io/v1
+kind: ClusterRole
+metadata:
+  name: {{ include "inferra.fullname" . }}
+  labels:
+    app.kubernetes.io/name: {{ include "inferra.name" . }}
+rules:
+  - apiGroups: [""]
+    resources: ["events", "pods"]
+    verbs: ["get", "list", "watch"]
+{{- end }}

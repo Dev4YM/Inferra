@@ -5,6 +5,13 @@ image:
   tag: "0.1.0"
   pullPolicy: IfNotPresent
 
+serviceAccount:
+  create: true
+  name: ""
+
+rbac:
+  create: true
+
 service:
   type: ClusterIP
   port: 7433
@@ -12,11 +19,42 @@ service:
 storage:
   size: 5Gi
 
+podSecurityContext:
+  fsGroup: 1000
+  runAsNonRoot: true
+
+securityContext:
+  allowPrivilegeEscalation: false
+  capabilities:
+    drop:
+      - ALL
+  readOnlyRootFilesystem: false
+  runAsNonRoot: true
+  runAsUser: 1000
+
+serviceMonitor:
+  enabled: false
+  interval: 30s
+  scrapeTimeout: 10s
+  path: /api/metrics
+  labels: {}
+
 config:
   ai:
     enabled: false
     baseUrl: "http://ollama.default.svc.cluster.local:11434"
     model: "gemma4:e4b"
+  collectors:
+    auto_start: true
+    kubernetes:
+      enabled: true
+      poll_interval_seconds: 15.0
+      namespaces: []
+      all_namespaces: true
+      label_selector: ""
+      limit: 200
+      include_pods: true
+      include_events: true
 
 resources:
   requests:

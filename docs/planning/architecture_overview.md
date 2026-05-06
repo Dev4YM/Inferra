@@ -1,5 +1,7 @@
 # Architecture Overview
 
+Implementation mapping: see [implementation index](implementation_index.md) for planning documents linked to `src/` packages.
+
 ## Design Philosophy
 
 Inferra is a local-first runtime debugging system that operates on a strict separation of concerns:

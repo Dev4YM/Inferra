@@ -1,0 +1,8 @@
+{
+  "id": "dependency_failure",
+  "expected_cause_type": "dependency_failure",
+  "raw_payloads": [
+    "{\"service\":\"postgres\",\"level\":\"error\",\"message\":\"connection refused on database\"}",
+    "{\"service\":\"api\",\"level\":\"error\",\"message\":\"timeout calling postgres\"}"
+  ]
+}

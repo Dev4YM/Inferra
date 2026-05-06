@@ -1,0 +1,516 @@
+<!DOCTYPE html>
+<html class="writer-html5" lang="en" >
+<head>
+    <meta charset="utf-8" />
+    <meta http-equiv="X-UA-Compatible" content="IE=edge" />
+    <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+      <link rel="shortcut icon" href="../../img/favicon.ico" />
+    <title>Contradiction Handling - Inferra</title>
+    <link rel="stylesheet" href="../../css/theme.css" />
+    <link rel="stylesheet" href="../../css/theme_extra.css" />
+        <link rel="stylesheet" href="https://cdnjs.cloudflare.com/ajax/libs/highlight.js/11.8.0/styles/github.min.css" />
+    
+      <script>
+        // Current page data
+        var mkdocs_page_name = "Contradiction Handling";
+        var mkdocs_page_input_path = "planning\\contradiction_handling.md";
+        var mkdocs_page_url = null;
+      </script>
+    
+    <!--[if lt IE 9]>
+      <script src="../../js/html5shiv.min.js"></script>
+    <![endif]-->
+      <script src="https://cdnjs.cloudflare.com/ajax/libs/highlight.js/11.8.0/highlight.min.js"></script>
+      <script>hljs.highlightAll();</script> 
+</head>
+
+<body class="wy-body-for-nav" role="document">
+
+  <div class="wy-grid-for-nav">
+    <nav data-toggle="wy-nav-shift" class="wy-nav-side stickynav">
+    <div class="wy-side-scroll">
+      <div class="wy-side-nav-search">
+          <a href="../.." class="icon icon-home"> Inferra
+        </a><div role="search">
+  <form id ="rtd-search-form" class="wy-form" action="../../search.html" method="get">
+      <input type="text" name="q" placeholder="Search docs" aria-label="Search docs" title="Type search term here" />
+  </form>
+</div>
+      </div>
+
+      <div class="wy-menu wy-menu-vertical" data-spy="affix" role="navigation" aria-label="Navigation menu">
+              <ul>
+                <li class="toctree-l1"><a class="reference internal" href="../..">Home</a>
+                </li>
+              </ul>
+              <p class="caption"><span class="caption-text">Operator guides</span></p>
+              <ul>
+                  <li class="toctree-l1"><a class="reference internal" href="../../operations/install/">Install</a>
+                  </li>
+                  <li class="toctree-l1"><a class="reference internal" href="../../operations/ai_provider/">AI provider</a>
+                  </li>
+                  <li class="toctree-l1"><a class="reference internal" href="../../operations/collectors/">Collectors</a>
+                  </li>
+                  <li class="toctree-l1"><a class="reference internal" href="../../operations/tuning/">Tuning</a>
+                  </li>
+                  <li class="toctree-l1"><a class="reference internal" href="../../operations/upgrade/">Upgrade</a>
+                  </li>
+                  <li class="toctree-l1"><a class="reference internal" href="../../operations/troubleshooting/">Troubleshooting</a>
+                  </li>
+                  <li class="toctree-l1"><a class="reference internal" href="../../operations/ci/">CI</a>
+                  </li>
+                  <li class="toctree-l1"><a class="reference internal" href="../../operations/release_signing/">Release signing</a>
+                  </li>
+              </ul>
+              <p class="caption"><span class="caption-text">Architecture Decision Records</span></p>
+              <ul>
+                  <li class="toctree-l1"><a class="reference internal" href="../../adr/0001-local-first-guided-ai/">ADR 0001 — Local-first guided AI</a>
+                  </li>
+                  <li class="toctree-l1"><a class="reference internal" href="../../adr/0002-flat-src-layout/">ADR 0002 — Flat src layout</a>
+                  </li>
+                  <li class="toctree-l1"><a class="reference internal" href="../../adr/0003-storage-protocols/">ADR 0003 — Storage protocols</a>
+                  </li>
+                  <li class="toctree-l1"><a class="reference internal" href="../../adr/0004-windows-first-collectors/">ADR 0004 — Windows-first collectors</a>
+                  </li>
+                  <li class="toctree-l1"><a class="reference internal" href="../../adr/0005-ai-presentation-only/">ADR 0005 — AI presentation-only</a>
+                  </li>
+                  <li class="toctree-l1"><a class="reference internal" href="../../adr/0006-ollama-gemma-default/">ADR 0006 — Ollama Gemma default</a>
+                  </li>
+              </ul>
+              <p class="caption"><span class="caption-text">Planning</span></p>
+              <ul>
+                  <li class="toctree-l1"><a class="reference internal" href="../architecture_overview/">Architecture overview</a>
+                  </li>
+                  <li class="toctree-l1"><a class="reference internal" href="../full_build_architecture_plan/">Full build architecture plan</a>
+                  </li>
+                  <li class="toctree-l1"><a class="reference internal" href="../data_flow_contracts/">Data flow contracts</a>
+                  </li>
+                  <li class="toctree-l1"><a class="reference internal" href="../implementation_index/">Implementation index</a>
+                  </li>
+              </ul>
+      </div>
+    </div>
+    </nav>
+
+    <section data-toggle="wy-nav-shift" class="wy-nav-content-wrap">
+      <nav class="wy-nav-top" role="navigation" aria-label="Mobile navigation menu">
+          <i data-toggle="wy-nav-top" class="fa fa-bars"></i>
+          <a href="../..">Inferra</a>
+        
+      </nav>
+      <div class="wy-nav-content">
+        <div class="rst-content"><div role="navigation" aria-label="breadcrumbs navigation">
+  <ul class="wy-breadcrumbs">
+    <li><a href="../.." class="icon icon-home" aria-label="Docs"></a></li>
+      <li class="breadcrumb-item active">Contradiction Handling</li>
+    <li class="wy-breadcrumbs-aside">
+    </li>
+  </ul>
+  <hr/>
+</div>
+          <div role="main" class="document" itemscope="itemscope" itemtype="http://schema.org/Article">
+            <div class="section" itemprop="articleBody">
+              
+                <h1 id="contradiction-handling">Contradiction Handling<a class="headerlink" href="#contradiction-handling" title="Permanent link">&para;</a></h1>
+<h2 id="purpose">Purpose<a class="headerlink" href="#purpose" title="Permanent link">&para;</a></h2>
+<p>Contradictions arise when evidence for a hypothesis is inconsistent — some events support the hypothesis while others actively contradict it. The contradiction handler detects, classifies, and surfaces these conflicts so that the scoring engine can penalize contradicted hypotheses and the UI can present the operator with an honest assessment.</p>
+<hr />
+<h2 id="what-is-a-contradiction">What Is a Contradiction?<a class="headerlink" href="#what-is-a-contradiction" title="Permanent link">&para;</a></h2>
+<p>A contradiction is a piece of evidence that, if true, makes a hypothesis less likely or impossible. Examples:</p>
+<table>
+<thead>
+<tr>
+<th>Hypothesis</th>
+<th>Contradicting Evidence</th>
+<th>Why It's a Contradiction</th>
+</tr>
+</thead>
+<tbody>
+<tr>
+<td>"postgres is down"</td>
+<td>Successful health check on postgres at incident time</td>
+<td>postgres was reachable</td>
+</tr>
+<tr>
+<td>"OOM killed the process"</td>
+<td>Memory usage was at 40% when the crash occurred</td>
+<td>No memory pressure</td>
+</tr>
+<tr>
+<td>"deployment broke the service"</td>
+<td>Errors started 30 minutes before the deployment</td>
+<td>Timeline doesn't fit</td>
+</tr>
+<tr>
+<td>"network partition between A and B"</td>
+<td>A successfully called B during the incident window</td>
+<td>Connectivity existed</td>
+</tr>
+</tbody>
+</table>
+<hr />
+<h2 id="contradiction-detection-rules">Contradiction Detection Rules<a class="headerlink" href="#contradiction-detection-rules" title="Permanent link">&para;</a></h2>
+<h3 id="rule-1-timeline-violation">Rule 1: Timeline Violation<a class="headerlink" href="#rule-1-timeline-violation" title="Permanent link">&para;</a></h3>
+<p>A contradiction where the alleged cause occurred after its claimed effects.</p>
+<pre><code class="language-python">def detect_timeline_violation(hypothesis: Hypothesis,
+                                events: dict[str, NormalizedEvent]) -&gt; list[Contradiction]:
+    contradictions = []
+    if hypothesis.root_cause_event_id is None:
+        return contradictions
+
+    root = events[hypothesis.root_cause_event_id]
+    for eid in hypothesis.supporting_events:
+        event = events.get(eid)
+        if event and event.timestamp &lt; root.timestamp and eid != hypothesis.root_cause_event_id:
+            latency = (root.timestamp - event.timestamp).total_seconds()
+            if latency &gt; 5.0:  # allow 5s tolerance for clock skew
+                contradictions.append(Contradiction(
+                    hypothesis_id=hypothesis.hypothesis_id,
+                    contradicting_event_id=eid,
+                    contradiction_type=&quot;timeline_violation&quot;,
+                    explanation=(
+                        f&quot;Event on {event.service_id} at {event.timestamp.isoformat()} occurred &quot;
+                        f&quot;{latency:.0f}s before the alleged root cause at {root.timestamp.isoformat()}&quot;
+                    ),
+                    severity=&quot;strong&quot; if latency &gt; 30 else &quot;weak&quot;,
+                ))
+    return contradictions
+</code></pre>
+<h3 id="rule-2-health-check-contradiction-with-temporal-resolution">Rule 2: Health Check Contradiction (with Temporal Resolution)<a class="headerlink" href="#rule-2-health-check-contradiction-with-temporal-resolution" title="Permanent link">&para;</a></h3>
+<p>A successful health check on a service that the hypothesis claims was failing. <strong>Crucially, this rule models intermittent failures</strong> — a health check passing 2 minutes into a 5-minute incident does not definitively prove the service was healthy the entire time.</p>
+<pre><code class="language-python">def detect_health_contradiction(hypothesis: Hypothesis,
+                                  events: dict[str, NormalizedEvent]) -&gt; list[Contradiction]:
+    contradictions = []
+    hyp_events = [events[eid] for eid in hypothesis.supporting_events if eid in events]
+    if not hyp_events:
+        return contradictions
+
+    hyp_start = min(e.timestamp for e in hyp_events)
+    hyp_end = max(e.timestamp for e in hyp_events)
+
+    for event in events.values():
+        if (event.event_type != EventType.HEALTH_CHECK
+            or event.service_id not in hypothesis.affected_services):
+            continue
+        if &quot;pass&quot; not in event.message.lower() and &quot;healthy&quot; not in event.message.lower():
+            continue
+        if not (hyp_start &lt;= event.timestamp &lt;= hyp_end):
+            continue
+
+        # Temporal resolution: divide the incident into sub-windows
+        # and check if FAILURE events and HEALTH events co-occur in the same sub-window
+        SUB_WINDOW = timedelta(seconds=30)
+        hc_window_start = event.timestamp - SUB_WINDOW / 2
+        hc_window_end = event.timestamp + SUB_WINDOW / 2
+
+        # Are there failure events for this service in the SAME sub-window?
+        concurrent_failures = [
+            e for e in hyp_events
+            if e.service_id == event.service_id
+            and e.severity &gt;= Severity.ERROR
+            and hc_window_start &lt;= e.timestamp &lt;= hc_window_end
+        ]
+
+        if concurrent_failures:
+            # Health check passed but errors exist in the same 30s window
+            # → intermittent failure, weak contradiction
+            contradictions.append(Contradiction(
+                hypothesis_id=hypothesis.hypothesis_id,
+                contradicting_event_id=event.event_id,
+                contradiction_type=&quot;state_inconsistency&quot;,
+                explanation=(
+                    f&quot;Health check on {event.service_id} passed at {event.timestamp.isoformat()}, &quot;
+                    f&quot;but {len(concurrent_failures)} errors occurred within 30s. &quot;
+                    f&quot;Likely intermittent failure — health check caught a good moment.&quot;
+                ),
+                severity=&quot;weak&quot;,  # intermittent, not strong
+            ))
+        else:
+            # Health check passed and NO errors in the same sub-window
+            # Are there errors BEFORE and AFTER this health check?
+            errors_before = [e for e in hyp_events
+                             if e.service_id == event.service_id
+                             and e.severity &gt;= Severity.ERROR
+                             and e.timestamp &lt; hc_window_start]
+            errors_after = [e for e in hyp_events
+                            if e.service_id == event.service_id
+                            and e.severity &gt;= Severity.ERROR
+                            and e.timestamp &gt; hc_window_end]
+
+            if errors_before and errors_after:
+                # Errors flanking a clean health check → intermittent
+                contradictions.append(Contradiction(
+                    hypothesis_id=hypothesis.hypothesis_id,
+                    contradicting_event_id=event.event_id,
+                    contradiction_type=&quot;state_inconsistency&quot;,
+                    explanation=(
+                        f&quot;Health check on {event.service_id} passed at {event.timestamp.isoformat()}, &quot;
+                        f&quot;with errors before and after. Pattern consistent with intermittent failure.&quot;
+                    ),
+                    severity=&quot;weak&quot;,
+                ))
+            elif not errors_before and not errors_after:
+                # Health check passed and no errors for this service at all
+                # → strong contradiction: hypothesis claims failure, but we see none
+                contradictions.append(Contradiction(
+                    hypothesis_id=hypothesis.hypothesis_id,
+                    contradicting_event_id=event.event_id,
+                    contradiction_type=&quot;state_inconsistency&quot;,
+                    explanation=(
+                        f&quot;Health check on {event.service_id} passed at {event.timestamp.isoformat()}, &quot;
+                        f&quot;and no errors found for {event.service_id} during the incident.&quot;
+                    ),
+                    severity=&quot;strong&quot;,
+                ))
+            else:
+                # Health check passed, errors only before OR only after
+                # → moderate: service may have recovered or not yet failed
+                contradictions.append(Contradiction(
+                    hypothesis_id=hypothesis.hypothesis_id,
+                    contradicting_event_id=event.event_id,
+                    contradiction_type=&quot;state_inconsistency&quot;,
+                    explanation=(
+                        f&quot;Health check on {event.service_id} passed at {event.timestamp.isoformat()}. &quot;
+                        f&quot;Errors {'preceded' if errors_before else 'followed'} this check.&quot;
+                    ),
+                    severity=&quot;weak&quot;,
+                ))
+    return contradictions
+</code></pre>
+<p>This handles the most common real-world pattern: intermittent failures where health checks pass between failure bursts. Instead of a blunt "health check passed = strong contradiction," the severity is calibrated based on whether the failure was likely intermittent.</p>
+<h3 id="rule-3-resource-state-contradiction">Rule 3: Resource State Contradiction<a class="headerlink" href="#rule-3-resource-state-contradiction" title="Permanent link">&para;</a></h3>
+<p>Runtime context shows resource metrics inconsistent with a resource exhaustion hypothesis.</p>
+<pre><code class="language-python">def detect_resource_contradiction(hypothesis: Hypothesis,
+                                    runtime_context: RuntimeContext | None) -&gt; list[Contradiction]:
+    contradictions = []
+    if runtime_context is None:
+        return contradictions
+
+    if hypothesis.cause_subtype == &quot;memory_exhaustion&quot;:
+        if runtime_context.host_context.memory_used_percent &lt; 60:
+            contradictions.append(Contradiction(
+                hypothesis_id=hypothesis.hypothesis_id,
+                contradicting_event_id=&quot;&quot;,  # context-based, not event-based
+                contradiction_type=&quot;state_inconsistency&quot;,
+                explanation=(
+                    f&quot;Hypothesis claims memory exhaustion but memory usage is &quot;
+                    f&quot;{runtime_context.host_context.memory_used_percent:.0f}%&quot;
+                ),
+                severity=&quot;strong&quot;,
+            ))
+
+    if hypothesis.cause_subtype == &quot;cpu_saturation&quot;:
+        if runtime_context.host_context.cpu_percent &lt; 50:
+            contradictions.append(Contradiction(
+                hypothesis_id=hypothesis.hypothesis_id,
+                contradicting_event_id=&quot;&quot;,
+                contradiction_type=&quot;state_inconsistency&quot;,
+                explanation=(
+                    f&quot;Hypothesis claims CPU saturation but CPU usage is &quot;
+                    f&quot;{runtime_context.host_context.cpu_percent:.0f}%&quot;
+                ),
+                severity=&quot;strong&quot;,
+            ))
+
+    return contradictions
+</code></pre>
+<h3 id="rule-4-scope-mismatch">Rule 4: Scope Mismatch<a class="headerlink" href="#rule-4-scope-mismatch" title="Permanent link">&para;</a></h3>
+<p>The hypothesis claims a specific service or host is the root cause, but the evidence pattern doesn't match.</p>
+<pre><code class="language-python">def detect_scope_mismatch(hypothesis: Hypothesis,
+                            events: dict[str, NormalizedEvent]) -&gt; list[Contradiction]:
+    contradictions = []
+
+    if hypothesis.root_cause_event_id:
+        root = events[hypothesis.root_cause_event_id]
+        # If the root cause service has no other errors, the hypothesis may be wrong
+        root_service_errors = [
+            e for e in events.values()
+            if e.service_id == root.service_id and e.severity &gt;= Severity.ERROR
+        ]
+        other_service_errors = [
+            e for e in events.values()
+            if e.service_id != root.service_id and e.severity &gt;= Severity.ERROR
+        ]
+
+        if len(root_service_errors) == 1 and len(other_service_errors) &gt; 5:
+            contradictions.append(Contradiction(
+                hypothesis_id=hypothesis.hypothesis_id,
+                contradicting_event_id=&quot;&quot;,
+                contradiction_type=&quot;scope_mismatch&quot;,
+                explanation=(
+                    f&quot;Root cause service {root.service_id} has only 1 error, &quot;
+                    f&quot;while {len(other_service_errors)} errors occurred on other services. &quot;
+                    f&quot;The scope may be incorrectly attributed.&quot;
+                ),
+                severity=&quot;weak&quot;,
+            ))
+
+    return contradictions
+</code></pre>
+<h3 id="rule-5-mutual-exclusion">Rule 5: Mutual Exclusion<a class="headerlink" href="#rule-5-mutual-exclusion" title="Permanent link">&para;</a></h3>
+<p>Two hypotheses for the same incident propose mutually exclusive root causes.</p>
+<pre><code class="language-python">def detect_mutual_exclusion(hypotheses: list[Hypothesis]) -&gt; list[Contradiction]:
+    &quot;&quot;&quot;Detect hypothesis pairs that cannot both be true.&quot;&quot;&quot;
+    contradictions = []
+
+    EXCLUSIVE_PAIRS = [
+        (&quot;memory_exhaustion&quot;, &quot;disk_exhaustion&quot;),  # different resource constraints
+        (&quot;upstream_service_failure&quot;, &quot;config_change&quot;),  # if config change is root cause, upstream failure is a symptom
+    ]
+
+    for i, h1 in enumerate(hypotheses):
+        for h2 in hypotheses[i+1:]:
+            pair = (h1.cause_subtype, h2.cause_subtype)
+            reverse = (h2.cause_subtype, h1.cause_subtype)
+            if pair in EXCLUSIVE_PAIRS or reverse in EXCLUSIVE_PAIRS:
+                contradictions.append(Contradiction(
+                    hypothesis_id=h1.hypothesis_id,
+                    contradicting_event_id=&quot;&quot;,
+                    contradiction_type=&quot;mutual_exclusion&quot;,
+                    explanation=f&quot;Mutually exclusive with hypothesis '{h2.title}'&quot;,
+                    severity=&quot;informational&quot;,
+                ))
+    return contradictions
+</code></pre>
+<hr />
+<h2 id="contradiction-severity">Contradiction Severity<a class="headerlink" href="#contradiction-severity" title="Permanent link">&para;</a></h2>
+<pre><code class="language-python">class ContradictionSeverity(Enum):
+    STRONG = &quot;strong&quot;
+    # The contradiction directly invalidates the hypothesis if the evidence is accurate.
+    # Example: health check passed on an allegedly-down service.
+
+    WEAK = &quot;weak&quot;
+    # The contradiction raises doubt but doesn't definitively invalidate.
+    # Example: root cause service has few errors (could be that errors were too fast to log).
+
+    INFORMATIONAL = &quot;informational&quot;
+    # Worth noting but doesn't impact scoring.
+    # Example: mutual exclusion between two different hypotheses.
+</code></pre>
+<hr />
+<h2 id="impact-on-scoring">Impact on Scoring<a class="headerlink" href="#impact-on-scoring" title="Permanent link">&para;</a></h2>
+<p>Contradictions affect the scoring engine through the <code>contradiction_penalty</code>:</p>
+<pre><code class="language-python">def contradiction_penalty(contradictions: list[Contradiction]) -&gt; float:
+    &quot;&quot;&quot;Compute a multiplicative penalty based on contradictions.
+    Returns a value in [0.5, 1.0] that multiplies the final score.
+    &quot;&quot;&quot;
+    strong_count = sum(1 for c in contradictions if c.severity == &quot;strong&quot;)
+    weak_count = sum(1 for c in contradictions if c.severity == &quot;weak&quot;)
+
+    # Each strong contradiction reduces score by 15%, each weak by 5%
+    penalty = 1.0 - (strong_count * 0.15 + weak_count * 0.05)
+    return max(0.5, penalty)  # never reduce score by more than 50%
+</code></pre>
+<p>This penalty is applied multiplicatively to the final score:</p>
+<pre><code class="language-python">final_score = raw_score * validation_confidence * contradiction_penalty(contradictions)
+</code></pre>
+<hr />
+<h2 id="ambiguity-representation">Ambiguity Representation<a class="headerlink" href="#ambiguity-representation" title="Permanent link">&para;</a></h2>
+<p>When contradictions exist, the system must communicate ambiguity honestly:</p>
+<h3 id="in-the-hypothesis-display">In the Hypothesis Display<a class="headerlink" href="#in-the-hypothesis-display" title="Permanent link">&para;</a></h3>
+<pre><code>Hypothesis: &quot;postgres failure caused API errors&quot;
+Score: 0.72
+Confidence: medium
+
+⚠ Contradictions:
+  - Health check on postgres passed at 14:32:05 (1 minute into incident)
+    → This weakens the hypothesis but doesn't definitively disprove it
+      (health checks may have succeeded intermittently)
+</code></pre>
+<h3 id="in-the-explanation-layer">In the Explanation Layer<a class="headerlink" href="#in-the-explanation-layer" title="Permanent link">&para;</a></h3>
+<p>The LLM prompt includes contradictions explicitly, and the explanation must address them:</p>
+<pre><code>Include in your explanation:
+- The primary hypothesis and its evidence
+- The following contradictions and how they affect confidence:
+  [list of contradictions]
+- An honest assessment of uncertainty
+</code></pre>
+<hr />
+<h2 id="configuration">Configuration<a class="headerlink" href="#configuration" title="Permanent link">&para;</a></h2>
+<pre><code class="language-toml">[contradiction_handling]
+enabled = true
+timeline_tolerance_seconds = 5.0     # allow this much clock skew before flagging
+strong_penalty_per_contradiction = 0.15
+weak_penalty_per_contradiction = 0.05
+min_penalty_multiplier = 0.5          # never reduce score below 50%
+
+[contradiction_handling.rules]
+timeline_violation = true
+health_check = true
+resource_state = true
+scope_mismatch = true
+mutual_exclusion = true
+</code></pre>
+<hr />
+<h2 id="failure-modes">Failure Modes<a class="headerlink" href="#failure-modes" title="Permanent link">&para;</a></h2>
+<table>
+<thead>
+<tr>
+<th>Failure</th>
+<th>Impact</th>
+<th>Mitigation</th>
+</tr>
+</thead>
+<tbody>
+<tr>
+<td>Health check data missing</td>
+<td>Cannot detect health contradictions</td>
+<td>Rule silently skips; no false contradictions</td>
+</tr>
+<tr>
+<td>Runtime context unavailable</td>
+<td>Cannot detect resource contradictions</td>
+<td>Rule silently skips</td>
+</tr>
+<tr>
+<td>Clock skew misidentified as timeline violation</td>
+<td>False contradiction</td>
+<td>5-second tolerance; weak severity for borderline cases</td>
+</tr>
+<tr>
+<td>Over-penalization (too many weak contradictions)</td>
+<td>Good hypothesis scored too low</td>
+<td>Min penalty multiplier caps at 0.5</td>
+</tr>
+</tbody>
+</table>
+              
+            </div>
+          </div><footer>
+
+  <hr/>
+
+  <div role="contentinfo">
+    <!-- Copyright etc -->
+  </div>
+
+  Built with <a href="https://www.mkdocs.org/">MkDocs</a> using a <a href="https://github.com/readthedocs/sphinx_rtd_theme">theme</a> provided by <a href="https://readthedocs.org">Read the Docs</a>.
+</footer>
+          
+        </div>
+      </div>
+
+    </section>
+
+  </div>
+
+  <div class="rst-versions" role="note" aria-label="Versions">
+  <span class="rst-current-version" data-toggle="rst-current-version">
+    
+    
+    
+  </span>
+</div>
+    <script src="../../js/jquery-3.6.0.min.js"></script>
+    <script>var base_url = "../..";</script>
+    <script src="../../js/theme_extra.js"></script>
+    <script src="../../js/theme.js"></script>
+      <script src="../../search/main.js"></script>
+    <script>
+        jQuery(function () {
+            SphinxRtdTheme.Navigation.enable(true);
+        });
+    </script>
+
+</body>
+</html>

@@ -1,0 +1,553 @@
+<!DOCTYPE html>
+<html class="writer-html5" lang="en" >
+<head>
+    <meta charset="utf-8" />
+    <meta http-equiv="X-UA-Compatible" content="IE=edge" />
+    <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+      <link rel="shortcut icon" href="../../img/favicon.ico" />
+    <title>Runtime Context Builder - Inferra</title>
+    <link rel="stylesheet" href="../../css/theme.css" />
+    <link rel="stylesheet" href="../../css/theme_extra.css" />
+        <link rel="stylesheet" href="https://cdnjs.cloudflare.com/ajax/libs/highlight.js/11.8.0/styles/github.min.css" />
+    
+      <script>
+        // Current page data
+        var mkdocs_page_name = "Runtime Context Builder";
+        var mkdocs_page_input_path = "planning\\runtime_context_builder.md";
+        var mkdocs_page_url = null;
+      </script>
+    
+    <!--[if lt IE 9]>
+      <script src="../../js/html5shiv.min.js"></script>
+    <![endif]-->
+      <script src="https://cdnjs.cloudflare.com/ajax/libs/highlight.js/11.8.0/highlight.min.js"></script>
+      <script>hljs.highlightAll();</script> 
+</head>
+
+<body class="wy-body-for-nav" role="document">
+
+  <div class="wy-grid-for-nav">
+    <nav data-toggle="wy-nav-shift" class="wy-nav-side stickynav">
+    <div class="wy-side-scroll">
+      <div class="wy-side-nav-search">
+          <a href="../.." class="icon icon-home"> Inferra
+        </a><div role="search">
+  <form id ="rtd-search-form" class="wy-form" action="../../search.html" method="get">
+      <input type="text" name="q" placeholder="Search docs" aria-label="Search docs" title="Type search term here" />
+  </form>
+</div>
+      </div>
+
+      <div class="wy-menu wy-menu-vertical" data-spy="affix" role="navigation" aria-label="Navigation menu">
+              <ul>
+                <li class="toctree-l1"><a class="reference internal" href="../..">Home</a>
+                </li>
+              </ul>
+              <p class="caption"><span class="caption-text">Operator guides</span></p>
+              <ul>
+                  <li class="toctree-l1"><a class="reference internal" href="../../operations/install/">Install</a>
+                  </li>
+                  <li class="toctree-l1"><a class="reference internal" href="../../operations/ai_provider/">AI provider</a>
+                  </li>
+                  <li class="toctree-l1"><a class="reference internal" href="../../operations/collectors/">Collectors</a>
+                  </li>
+                  <li class="toctree-l1"><a class="reference internal" href="../../operations/tuning/">Tuning</a>
+                  </li>
+                  <li class="toctree-l1"><a class="reference internal" href="../../operations/upgrade/">Upgrade</a>
+                  </li>
+                  <li class="toctree-l1"><a class="reference internal" href="../../operations/troubleshooting/">Troubleshooting</a>
+                  </li>
+                  <li class="toctree-l1"><a class="reference internal" href="../../operations/ci/">CI</a>
+                  </li>
+                  <li class="toctree-l1"><a class="reference internal" href="../../operations/release_signing/">Release signing</a>
+                  </li>
+              </ul>
+              <p class="caption"><span class="caption-text">Architecture Decision Records</span></p>
+              <ul>
+                  <li class="toctree-l1"><a class="reference internal" href="../../adr/0001-local-first-guided-ai/">ADR 0001 — Local-first guided AI</a>
+                  </li>
+                  <li class="toctree-l1"><a class="reference internal" href="../../adr/0002-flat-src-layout/">ADR 0002 — Flat src layout</a>
+                  </li>
+                  <li class="toctree-l1"><a class="reference internal" href="../../adr/0003-storage-protocols/">ADR 0003 — Storage protocols</a>
+                  </li>
+                  <li class="toctree-l1"><a class="reference internal" href="../../adr/0004-windows-first-collectors/">ADR 0004 — Windows-first collectors</a>
+                  </li>
+                  <li class="toctree-l1"><a class="reference internal" href="../../adr/0005-ai-presentation-only/">ADR 0005 — AI presentation-only</a>
+                  </li>
+                  <li class="toctree-l1"><a class="reference internal" href="../../adr/0006-ollama-gemma-default/">ADR 0006 — Ollama Gemma default</a>
+                  </li>
+              </ul>
+              <p class="caption"><span class="caption-text">Planning</span></p>
+              <ul>
+                  <li class="toctree-l1"><a class="reference internal" href="../architecture_overview/">Architecture overview</a>
+                  </li>
+                  <li class="toctree-l1"><a class="reference internal" href="../full_build_architecture_plan/">Full build architecture plan</a>
+                  </li>
+                  <li class="toctree-l1"><a class="reference internal" href="../data_flow_contracts/">Data flow contracts</a>
+                  </li>
+                  <li class="toctree-l1"><a class="reference internal" href="../implementation_index/">Implementation index</a>
+                  </li>
+              </ul>
+      </div>
+    </div>
+    </nav>
+
+    <section data-toggle="wy-nav-shift" class="wy-nav-content-wrap">
+      <nav class="wy-nav-top" role="navigation" aria-label="Mobile navigation menu">
+          <i data-toggle="wy-nav-top" class="fa fa-bars"></i>
+          <a href="../..">Inferra</a>
+        
+      </nav>
+      <div class="wy-nav-content">
+        <div class="rst-content"><div role="navigation" aria-label="breadcrumbs navigation">
+  <ul class="wy-breadcrumbs">
+    <li><a href="../.." class="icon icon-home" aria-label="Docs"></a></li>
+      <li class="breadcrumb-item active">Runtime Context Builder</li>
+    <li class="wy-breadcrumbs-aside">
+    </li>
+  </ul>
+  <hr/>
+</div>
+          <div role="main" class="document" itemscope="itemscope" itemtype="http://schema.org/Article">
+            <div class="section" itemprop="articleBody">
+              
+                <h1 id="runtime-context-builder">Runtime Context Builder<a class="headerlink" href="#runtime-context-builder" title="Permanent link">&para;</a></h1>
+<h2 id="purpose">Purpose<a class="headerlink" href="#purpose" title="Permanent link">&para;</a></h2>
+<p>The runtime context builder constructs a snapshot of the system's state at the time of an incident. While the event model captures what happened (logs, errors, state changes), the runtime context captures what the system <em>looked like</em> when it happened — resource utilization, process states, container configurations, network topology.</p>
+<p>This context is critical for hypothesis generation (e.g., "was the machine under memory pressure when the OOM occurred?") and for the explanation layer (e.g., "at the time of failure, the host was running at 94% CPU utilization with 12 containers competing for resources").</p>
+<hr />
+<h2 id="context-structure">Context Structure<a class="headerlink" href="#context-structure" title="Permanent link">&para;</a></h2>
+<pre><code class="language-python">@dataclass
+class RuntimeContext:
+    &quot;&quot;&quot;Snapshot of system state at incident time.&quot;&quot;&quot;
+    captured_at: datetime
+    incident_id: str
+
+    host_context: HostContext
+    container_contexts: dict[str, ContainerContext]     # container_id → context
+    service_contexts: dict[str, ServiceContext]          # service_id → context
+    topology: TopologySnapshot
+    resource_summary: ResourceSummary
+
+@dataclass
+class HostContext:
+    hostname: str
+    os_info: str                    # e.g., &quot;Linux 5.15.0-generic x86_64&quot;
+    cpu_count: int
+    total_memory_mb: int
+    load_average: tuple[float, float, float]  # 1min, 5min, 15min
+    cpu_percent: float              # 0–100
+    memory_used_percent: float      # 0–100
+    disk_usage: dict[str, DiskUsage]  # mount_point → usage
+    uptime_seconds: float
+    open_file_descriptors: int
+    max_file_descriptors: int
+
+@dataclass
+class DiskUsage:
+    total_gb: float
+    used_gb: float
+    free_gb: float
+    used_percent: float
+
+@dataclass
+class ContainerContext:
+    container_id: str
+    container_name: str
+    image: str
+    state: str                      # &quot;running&quot; | &quot;restarting&quot; | &quot;exited&quot; | &quot;paused&quot;
+    started_at: datetime | None
+    restart_count: int
+    cpu_percent: float              # container's CPU usage
+    memory_usage_mb: float
+    memory_limit_mb: float | None   # None if unlimited
+    memory_percent: float
+    network_rx_bytes: int
+    network_tx_bytes: int
+    pids: int                       # number of processes in container
+    health_status: str | None       # &quot;healthy&quot; | &quot;unhealthy&quot; | &quot;starting&quot; | None (no healthcheck)
+    labels: dict[str, str]
+    environment_keys: list[str]     # only key names, NOT values (security constraint)
+    ports: list[str]                # e.g., [&quot;8080/tcp -&gt; 0.0.0.0:8080&quot;]
+
+@dataclass
+class ServiceContext:
+    service_id: str
+    containers: list[str]           # container_ids running this service
+    event_rate_current: float       # events/sec in the last 5 minutes
+    error_rate_current: float       # errors/sec in the last 5 minutes
+    anomaly_score: float            # from anomaly detector
+    last_restart: datetime | None
+    restart_count_24h: int
+    active_connections: int | None  # if determinable from procfs
+    dependency_health: dict[str, str]  # dep_service_id → &quot;healthy&quot; | &quot;degraded&quot; | &quot;down&quot;
+
+@dataclass
+class TopologySnapshot:
+    &quot;&quot;&quot;Service dependency graph at capture time.&quot;&quot;&quot;
+    services: list[str]
+    edges: list[TopologyEdge]
+    isolated_services: list[str]    # services with no known dependencies
+
+@dataclass
+class TopologyEdge:
+    source_service: str             # caller
+    target_service: str             # callee
+    relation_type: str              # &quot;calls&quot; | &quot;depends_on&quot; | &quot;shares_host&quot; | &quot;shares_volume&quot;
+    inferred_from: str              # &quot;config&quot; | &quot;log_pattern&quot; | &quot;network_observation&quot;
+
+@dataclass
+class ResourceSummary:
+    &quot;&quot;&quot;High-level resource health assessment.&quot;&quot;&quot;
+    cpu_pressure: str               # &quot;normal&quot; | &quot;elevated&quot; | &quot;critical&quot;
+    memory_pressure: str
+    disk_pressure: str
+    container_density: int          # number of running containers
+    resource_contention_score: float  # 0.0-1.0, composite measure of resource pressure
+</code></pre>
+<hr />
+<h2 id="data-collection">Data Collection<a class="headerlink" href="#data-collection" title="Permanent link">&para;</a></h2>
+<h3 id="source-procfs-collector-continuous">Source: Procfs Collector (Continuous)<a class="headerlink" href="#source-procfs-collector-continuous" title="Permanent link">&para;</a></h3>
+<p>The procfs collector provides continuous system metrics. The runtime context builder aggregates these into a snapshot on demand.</p>
+<pre><code class="language-python">class RuntimeContextBuilder:
+    def __init__(self, event_store: EventStore, docker_client: DockerClient | None,
+                 procfs_data: ProcfsDataSource):
+        self.event_store = event_store
+        self.docker = docker_client
+        self.procfs = procfs_data
+
+    async def build_context(self, incident: Incident) -&gt; RuntimeContext:
+        &quot;&quot;&quot;Build runtime context for an incident. Called when incident is created or updated.&quot;&quot;&quot;
+        host = await self._collect_host_context()
+        containers = await self._collect_container_contexts()
+        services = self._build_service_contexts(incident, containers)
+        topology = self._build_topology_snapshot()
+        resources = self._assess_resource_pressure(host, containers)
+
+        return RuntimeContext(
+            captured_at=datetime.utcnow(),
+            incident_id=incident.incident_id,
+            host_context=host,
+            container_contexts=containers,
+            service_contexts=services,
+            topology=topology,
+            resource_summary=resources,
+        )
+</code></pre>
+<h3 id="host-context-collection">Host Context Collection<a class="headerlink" href="#host-context-collection" title="Permanent link">&para;</a></h3>
+<pre><code class="language-python">async def _collect_host_context(self) -&gt; HostContext:
+    return HostContext(
+        hostname=socket.gethostname(),
+        os_info=platform.platform(),
+        cpu_count=os.cpu_count(),
+        total_memory_mb=self.procfs.total_memory_mb(),
+        load_average=os.getloadavg(),    # Linux only
+        cpu_percent=self.procfs.cpu_percent(),
+        memory_used_percent=self.procfs.memory_percent(),
+        disk_usage={
+            mount: DiskUsage(
+                total_gb=usage.total / 1e9,
+                used_gb=usage.used / 1e9,
+                free_gb=usage.free / 1e9,
+                used_percent=usage.percent,
+            )
+            for mount, usage in self.procfs.disk_usage_all().items()
+        },
+        uptime_seconds=self.procfs.uptime_seconds(),
+        open_file_descriptors=self.procfs.open_fds(),
+        max_file_descriptors=self.procfs.max_fds(),
+    )
+</code></pre>
+<h3 id="container-context-collection">Container Context Collection<a class="headerlink" href="#container-context-collection" title="Permanent link">&para;</a></h3>
+<p>Uses the Docker API (if available):</p>
+<pre><code class="language-python">async def _collect_container_contexts(self) -&gt; dict[str, ContainerContext]:
+    if self.docker is None:
+        return {}
+
+    contexts = {}
+    for container in await self.docker.containers.list():
+        stats = await container.stats(stream=False)
+        contexts[container.id[:12]] = ContainerContext(
+            container_id=container.id[:12],
+            container_name=container.name,
+            image=container.image.tags[0] if container.image.tags else container.image.id[:12],
+            state=container.status,
+            started_at=parse_docker_time(container.attrs[&quot;State&quot;][&quot;StartedAt&quot;]),
+            restart_count=container.attrs[&quot;RestartCount&quot;],
+            cpu_percent=calculate_cpu_percent(stats),
+            memory_usage_mb=stats[&quot;memory_stats&quot;][&quot;usage&quot;] / 1e6,
+            memory_limit_mb=stats[&quot;memory_stats&quot;].get(&quot;limit&quot;, None),
+            memory_percent=calculate_memory_percent(stats),
+            network_rx_bytes=sum_network_stat(stats, &quot;rx_bytes&quot;),
+            network_tx_bytes=sum_network_stat(stats, &quot;tx_bytes&quot;),
+            pids=stats.get(&quot;pids_stats&quot;, {}).get(&quot;current&quot;, 0),
+            health_status=container.attrs[&quot;State&quot;].get(&quot;Health&quot;, {}).get(&quot;Status&quot;),
+            labels=container.labels,
+            environment_keys=[e.split(&quot;=&quot;)[0] for e in container.attrs[&quot;Config&quot;].get(&quot;Env&quot;, [])],
+            ports=format_port_bindings(container.ports),
+        )
+    return contexts
+</code></pre>
+<h3 id="service-context-assembly">Service Context Assembly<a class="headerlink" href="#service-context-assembly" title="Permanent link">&para;</a></h3>
+<pre><code class="language-python">def _build_service_contexts(self, incident: Incident,
+                             containers: dict[str, ContainerContext]) -&gt; dict[str, ServiceContext]:
+    contexts = {}
+    for service_id in incident.affected_services:
+        service_containers = [
+            cid for cid, ctx in containers.items()
+            if self._service_for_container(ctx.container_name) == service_id
+        ]
+
+        window = timedelta(minutes=5)
+        event_count = self.event_store.count_by_service(service_id, window)
+        error_count = self.event_store.count_by_severity(service_id, Severity.ERROR, window)
+
+        contexts[service_id] = ServiceContext(
+            service_id=service_id,
+            containers=service_containers,
+            event_rate_current=event_count / 300.0,
+            error_rate_current=error_count / 300.0,
+            anomaly_score=self.anomaly_detector.current_score(service_id),
+            last_restart=self._find_last_restart(service_id),
+            restart_count_24h=self._count_restarts(service_id, timedelta(hours=24)),
+            active_connections=self._count_connections(service_id),
+            dependency_health=self._assess_dependency_health(service_id),
+        )
+    return contexts
+</code></pre>
+<hr />
+<h2 id="topology-discovery">Topology Discovery<a class="headerlink" href="#topology-discovery" title="Permanent link">&para;</a></h2>
+<p>The service dependency graph determines how well Inferra can reason about failure cascades. <strong>Getting this wrong corrupts half the analysis pipeline.</strong> The design is therefore <strong>config-first, inference-second</strong>.</p>
+<h3 id="priority-1-explicit-configuration-required-for-production-use">Priority 1: Explicit Configuration (REQUIRED for production use)<a class="headerlink" href="#priority-1-explicit-configuration-required-for-production-use" title="Permanent link">&para;</a></h3>
+<p>This is the primary path. The user defines their service topology in <code>inferra.toml</code>:</p>
+<pre><code class="language-toml">[[topology.edges]]
+source = &quot;api-gateway&quot;
+target = &quot;user-service&quot;
+type = &quot;calls&quot;
+
+[[topology.edges]]
+source = &quot;user-service&quot;
+target = &quot;postgres&quot;
+type = &quot;depends_on&quot;
+
+[[topology.edges]]
+source = &quot;api-gateway&quot;
+target = &quot;redis&quot;
+type = &quot;depends_on&quot;
+</code></pre>
+<p><strong>First-run experience</strong>: If no topology is configured and Inferra detects multiple services, it displays a prominent banner in the UI:</p>
+<pre><code>⚠ No service topology configured.
+Inferra has detected 8 services but doesn't know how they depend on each other.
+Without topology, dependency-based analysis is disabled.
+→ [Configure topology] or [Auto-detect (experimental)]
+</code></pre>
+<p>The "Configure topology" button opens a simple UI where the user can draw edges between discovered services. This is persisted to <code>inferra.toml</code>.</p>
+<h3 id="priority-2-docker-compose-inference-automatic-medium-confidence">Priority 2: Docker Compose Inference (automatic, medium confidence)<a class="headerlink" href="#priority-2-docker-compose-inference-automatic-medium-confidence" title="Permanent link">&para;</a></h3>
+<p>If Docker Compose labels are present, <code>depends_on</code> relationships are extracted automatically:</p>
+<pre><code class="language-python">for container in containers:
+    depends_on = container.labels.get(&quot;com.docker.compose.depends_on&quot;, &quot;&quot;)
+    for dep in depends_on.split(&quot;,&quot;):
+        add_edge(container_service, dep_service, &quot;depends_on&quot;,
+                 source=&quot;docker_compose&quot;, confidence=&quot;medium&quot;)
+</code></pre>
+<p>These edges are <strong>shown to the user for confirmation</strong> on first detection. Once confirmed or rejected, the decision is persisted.</p>
+<h3 id="priority-3-log-pattern-inference-off-by-default-opt-in-only">Priority 3: Log Pattern Inference (OFF by default, opt-in only)<a class="headerlink" href="#priority-3-log-pattern-inference-off-by-default-opt-in-only" title="Permanent link">&para;</a></h3>
+<p>Connection strings and URL patterns in log messages can reveal dependencies:</p>
+<pre><code class="language-python">DEPENDENCY_PATTERNS = [
+    (r'connecting to (\S+):(\d+)', &quot;network_connect&quot;),
+    (r'host=(\S+)\s+port=(\d+)', &quot;database_connect&quot;),
+    (r'redis://(\S+)', &quot;redis_connect&quot;),
+]
+</code></pre>
+<p><strong>This is disabled by default</strong> because it produces false positives. To enable:</p>
+<pre><code class="language-toml">[topology]
+log_inference_enabled = true  # default: false
+log_inference_confirmation_required = true  # require user confirmation before adding
+</code></pre>
+<p>When enabled, inferred edges appear as "suggested" in the UI with an "Accept" / "Reject" button. They do NOT enter the service graph until confirmed.</p>
+<h3 id="why-config-first-matters">Why Config-First Matters<a class="headerlink" href="#why-config-first-matters" title="Permanent link">&para;</a></h3>
+<p>Half the inference graph construction and 4+ signal detectors depend on the service graph. If the graph is wrong:
+- Dependency propagation edges point the wrong way
+- Connection error signals are attributed to wrong services
+- Cascade detection produces nonsensical hypotheses
+- Scoring penalties from dependency_proximity are inverted</p>
+<p>An inaccurate graph is worse than no graph. With no graph, the system says "I don't know the topology." With a wrong graph, it says "A caused B" when B caused A. The first is honest; the second destroys trust.</p>
+<hr />
+<h2 id="resource-pressure-assessment">Resource Pressure Assessment<a class="headerlink" href="#resource-pressure-assessment" title="Permanent link">&para;</a></h2>
+<pre><code class="language-python">def _assess_resource_pressure(self, host: HostContext,
+                                containers: dict[str, ContainerContext]) -&gt; ResourceSummary:
+    cpu_p = &quot;critical&quot; if host.cpu_percent &gt; 90 else &quot;elevated&quot; if host.cpu_percent &gt; 70 else &quot;normal&quot;
+    mem_p = &quot;critical&quot; if host.memory_used_percent &gt; 95 else &quot;elevated&quot; if host.memory_used_percent &gt; 80 else &quot;normal&quot;
+
+    disk_worst = max((d.used_percent for d in host.disk_usage.values()), default=0)
+    disk_p = &quot;critical&quot; if disk_worst &gt; 95 else &quot;elevated&quot; if disk_worst &gt; 85 else &quot;normal&quot;
+
+    pressure_map = {&quot;normal&quot;: 0.0, &quot;elevated&quot;: 0.5, &quot;critical&quot;: 1.0}
+    contention = (pressure_map[cpu_p] + pressure_map[mem_p] + pressure_map[disk_p]) / 3.0
+
+    return ResourceSummary(
+        cpu_pressure=cpu_p,
+        memory_pressure=mem_p,
+        disk_pressure=disk_p,
+        container_density=len([c for c in containers.values() if c.state == &quot;running&quot;]),
+        resource_contention_score=contention,
+    )
+</code></pre>
+<hr />
+<h2 id="caching-and-update-strategy">Caching and Update Strategy<a class="headerlink" href="#caching-and-update-strategy" title="Permanent link">&para;</a></h2>
+<p>Runtime context is <strong>not</strong> collected continuously — it is captured on demand:</p>
+<ol>
+<li><strong>On incident creation</strong>: Full context capture</li>
+<li><strong>On incident update (new events added)</strong>: Incremental update (host metrics refreshed, container states refreshed, service contexts updated)</li>
+<li><strong>On explanation request</strong>: Verify context is &lt;5 minutes old; refresh if stale</li>
+</ol>
+<p>The context is stored as part of the incident in the incident store.</p>
+<hr />
+<h2 id="performance-budget">Performance Budget<a class="headerlink" href="#performance-budget" title="Permanent link">&para;</a></h2>
+<table>
+<thead>
+<tr>
+<th>Operation</th>
+<th>Budget</th>
+<th>Notes</th>
+</tr>
+</thead>
+<tbody>
+<tr>
+<td>Host context collection</td>
+<td>&lt;50ms</td>
+<td>Procfs reads, cached CPU percent</td>
+</tr>
+<tr>
+<td>Container context collection</td>
+<td>&lt;200ms</td>
+<td>Docker API calls (main bottleneck)</td>
+</tr>
+<tr>
+<td>Service context assembly</td>
+<td>&lt;50ms</td>
+<td>Event store queries (indexed)</td>
+</tr>
+<tr>
+<td>Topology snapshot</td>
+<td>&lt;10ms</td>
+<td>In-memory graph read</td>
+</tr>
+<tr>
+<td>Resource assessment</td>
+<td>&lt;5ms</td>
+<td>Arithmetic on collected data</td>
+</tr>
+<tr>
+<td><strong>Total</strong></td>
+<td><strong>&lt;315ms</strong></td>
+<td>Acceptable for per-incident capture</td>
+</tr>
+</tbody>
+</table>
+<hr />
+<h2 id="failure-modes">Failure Modes<a class="headerlink" href="#failure-modes" title="Permanent link">&para;</a></h2>
+<table>
+<thead>
+<tr>
+<th>Failure</th>
+<th>Impact</th>
+<th>Mitigation</th>
+</tr>
+</thead>
+<tbody>
+<tr>
+<td>Docker socket unavailable</td>
+<td>No container context</td>
+<td>Container fields set to None; log warning</td>
+</tr>
+<tr>
+<td>Procfs read error</td>
+<td>Missing host metrics</td>
+<td>Use last known values; flag as stale</td>
+</tr>
+<tr>
+<td>Docker API timeout</td>
+<td>Context capture delayed</td>
+<td>2-second timeout; use cached container data</td>
+</tr>
+<tr>
+<td>Too many containers (&gt;100)</td>
+<td>Slow collection</td>
+<td>Collect only containers related to incident services</td>
+</tr>
+</tbody>
+</table>
+<hr />
+<h2 id="platform-support">Platform Support<a class="headerlink" href="#platform-support" title="Permanent link">&para;</a></h2>
+<table>
+<thead>
+<tr>
+<th>Platform</th>
+<th>Host Context</th>
+<th>Container Context</th>
+<th>Procfs Metrics</th>
+</tr>
+</thead>
+<tbody>
+<tr>
+<td>Linux</td>
+<td>Full</td>
+<td>Full (Docker)</td>
+<td>Full</td>
+</tr>
+<tr>
+<td>macOS</td>
+<td>Partial (no procfs)</td>
+<td>Full (Docker Desktop)</td>
+<td>Via <code>psutil</code> fallback</td>
+</tr>
+<tr>
+<td>Windows</td>
+<td>Partial (no procfs)</td>
+<td>Limited (Docker Desktop)</td>
+<td>Via <code>psutil</code> fallback</td>
+</tr>
+</tbody>
+</table>
+<p>The system is designed primarily for Linux. macOS and Windows support is best-effort, with <code>psutil</code> as the fallback for system metrics where procfs is unavailable.</p>
+              
+            </div>
+          </div><footer>
+
+  <hr/>
+
+  <div role="contentinfo">
+    <!-- Copyright etc -->
+  </div>
+
+  Built with <a href="https://www.mkdocs.org/">MkDocs</a> using a <a href="https://github.com/readthedocs/sphinx_rtd_theme">theme</a> provided by <a href="https://readthedocs.org">Read the Docs</a>.
+</footer>
+          
+        </div>
+      </div>
+
+    </section>
+
+  </div>
+
+  <div class="rst-versions" role="note" aria-label="Versions">
+  <span class="rst-current-version" data-toggle="rst-current-version">
+    
+    
+    
+  </span>
+</div>
+    <script src="../../js/jquery-3.6.0.min.js"></script>
+    <script>var base_url = "../..";</script>
+    <script src="../../js/theme_extra.js"></script>
+    <script src="../../js/theme.js"></script>
+      <script src="../../search/main.js"></script>
+    <script>
+        jQuery(function () {
+            SphinxRtdTheme.Navigation.enable(true);
+        });
+    </script>
+
+</body>
+</html>

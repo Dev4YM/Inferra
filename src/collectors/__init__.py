@@ -1,4 +1,6 @@
+from collectors.app_http import AppHttpCollector
 from collectors.base import Collector, CollectorHealth
+from collectors.docker import DockerCollector
 from collectors.factory import build_collectors
 from collectors.file import FileCollector
 from collectors.host_metrics import HostMetricsCollector
@@ -14,6 +16,8 @@ __all__ = [
     "Collector",
     "CollectorHealth",
     "CollectorSupervisor",
+    "AppHttpCollector",
+    "DockerCollector",
     "FileCollector",
     "HostMetricsCollector",
     "JournaldCollector",

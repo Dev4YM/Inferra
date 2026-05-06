@@ -1,0 +1,8 @@
+{
+  "id": "resource_exhaustion",
+  "expected_cause_type": "resource_exhaustion",
+  "raw_payloads": [
+    "{\"service\":\"host\",\"level\":\"warn\",\"message\":\"host resource pressure detected: memory\",\"metrics\":{\"memory_percent\":96}}",
+    "{\"service\":\"api\",\"level\":\"warn\",\"message\":\"high memory pressure near timeout\"}"
+  ]
+}

@@ -1,94 +1,199 @@
 from __future__ import annotations
 
 import asyncio
+import ctypes
+import glob
+import os
+import platform
+import re
+from dataclasses import dataclass, field
 from pathlib import Path
 
-from collectors.base import CollectorHealth
+from collectors.base import PollingCollector
 from core.time import utc_now
 from events.models import RawEvent
 
+if platform.system().lower() == "windows":  # pragma: no cover
+    import msvcrt
 
-class FileCollector:
+
+@dataclass
+class FileState:
+    offset: int = 0
+    identity: tuple[int, int] | tuple[str, int, float] | None = None
+    pending_lines: list[str] = field(default_factory=list)
+
+
+class FileCollector(PollingCollector):
     source_type = "file"
 
     def __init__(
         self,
-        path: str | Path,
+        path: str | Path | None = None,
+        *,
+        glob_pattern: str | None = None,
         service_id: str | None = None,
+        service_id_from_filename: bool = False,
+        multiline_pattern: str | None = None,
         poll_interval_seconds: float = 1.0,
         start_at_end: bool = False,
+        emit_timeout_seconds: float = 1.0,
     ) -> None:
-        self.path = Path(path)
+        super().__init__(poll_interval_seconds=poll_interval_seconds, emit_timeout_seconds=emit_timeout_seconds)
+        if path is None and not glob_pattern:
+            raise ValueError("FileCollector requires either a path or a glob pattern")
+        self.path = Path(path) if path is not None else None
+        self.glob_pattern = glob_pattern
         self.service_id = service_id
-        self.poll_interval_seconds = poll_interval_seconds
+        self.service_id_from_filename = service_id_from_filename
+        self.multiline_pattern = re.compile(multiline_pattern) if multiline_pattern else None
         self.start_at_end = start_at_end
-        self._running = False
-        self._offset = 0
-        self._events = 0
-        self._errors = 0
-        self._last_error: str | None = None
-        self._last_event_at = None
+        self._states: dict[Path, FileState] = {}
 
     @property
     def collector_id(self) -> str:
-        return f"file://{self.path}"
+        target = self.glob_pattern or (str(self.path) if self.path is not None else "unknown")
+        return f"file://{target}"
 
-    async def start(self, sink: asyncio.Queue[RawEvent]) -> None:
-        self._running = True
-        if self.start_at_end and self.path.exists():
-            self._offset = self.path.stat().st_size
+    async def run(self, queue: asyncio.Queue[RawEvent]) -> None:
+        await self._mark_running()
+        if self.start_at_end:
+            for path in self._resolve_paths():
+                if path.exists():
+                    state = self._states.setdefault(path, FileState())
+                    state.offset = path.stat().st_size
+                    state.identity = self._file_identity(path)
         try:
-            while self._running:
-                await self._poll_once(sink)
-                await asyncio.sleep(self.poll_interval_seconds)
+            while not self._should_stop():
+                try:
+                    await self.collect_once(queue)
+                except Exception as exc:  # pragma: no cover
+                    self._record_error(exc)
+                try:
+                    await asyncio.wait_for(self._stop_event.wait(), timeout=self.poll_interval_seconds)
+                except TimeoutError:
+                    continue
         finally:
-            self._running = False
+            await self._mark_stopped()
 
     async def collect_existing(self, sink: asyncio.Queue[RawEvent]) -> int:
-        before = self._events
-        await self._poll_once(sink, read_to_eof=True)
-        return self._events - before
+        return await self.collect_once(sink, read_to_eof=True)
 
-    async def stop(self) -> None:
-        self._running = False
+    async def collect_once(self, sink: asyncio.Queue[RawEvent], read_to_eof: bool = False) -> int:
+        emitted = 0
+        for path in self._resolve_paths():
+            emitted += await self._poll_path(path, sink, read_to_eof=read_to_eof)
+        return emitted
 
-    def health_check(self) -> CollectorHealth:
-        return CollectorHealth(
-            collector_id=self.collector_id,
-            source_type=self.source_type,
-            is_running=self._running,
-            events_emitted=self._events,
-            last_event_at=self._last_event_at,
-            error_count=self._errors,
-            last_error=self._last_error,
-        )
-
-    async def _poll_once(self, sink: asyncio.Queue[RawEvent], read_to_eof: bool = False) -> None:
-        if not self.path.exists():
-            return
+    async def _poll_path(self, path: Path, sink: asyncio.Queue[RawEvent], read_to_eof: bool) -> int:
+        if not path.exists():
+            return 0
+        state = self._states.setdefault(path, FileState())
         try:
-            size = self.path.stat().st_size
-            if size < self._offset:
-                self._offset = 0
-            with self.path.open("r", encoding="utf-8", errors="replace") as handle:
-                handle.seek(self._offset)
+            identity = self._file_identity(path)
+            size = path.stat().st_size
+            if state.identity is not None and state.identity != identity:
+                state.offset = 0
+                state.pending_lines.clear()
+            elif size < state.offset:
+                state.offset = 0
+                state.pending_lines.clear()
+            emitted = 0
+            with _open_text_file(path) as handle:
+                handle.seek(state.offset)
                 while True:
                     line = handle.readline()
                     if not line:
                         break
-                    self._offset = handle.tell()
-                    event = RawEvent(
-                        source_type=self.source_type,
-                        source_id=self.collector_id,
-                        raw_payload=line.rstrip("\r\n"),
-                        collected_at=utc_now(),
-                        metadata={"path": str(self.path), "raw_offset": self._offset, "service_id": self.service_id},
-                    )
-                    await sink.put(event)
-                    self._events += 1
-                    self._last_event_at = event.collected_at
+                    state.offset = handle.tell()
+                    emitted += await self._handle_line(path, line.rstrip("\r\n"), state, sink)
                     if not read_to_eof:
                         await asyncio.sleep(0)
+            state.identity = identity
+            if read_to_eof and state.pending_lines:
+                emitted += await self._emit_buffer(path, state, sink)
+            return emitted
         except OSError as exc:
-            self._errors += 1
-            self._last_error = str(exc)
+            self._record_error(exc)
+            return 0
+
+    async def _handle_line(self, path: Path, line: str, state: FileState, sink: asyncio.Queue[RawEvent]) -> int:
+        if self.multiline_pattern is None:
+            return 1 if await self.emit(sink, self._raw_event(path, line, state.offset)) else 0
+        matches_start = bool(self.multiline_pattern.search(line))
+        if matches_start and state.pending_lines:
+            emitted = 1 if await self.emit(sink, self._raw_event(path, "\n".join(state.pending_lines), state.offset)) else 0
+            state.pending_lines = [line]
+            return emitted
+        state.pending_lines.append(line)
+        return 0
+
+    async def _emit_buffer(self, path: Path, state: FileState, sink: asyncio.Queue[RawEvent]) -> int:
+        payload = "\n".join(state.pending_lines)
+        state.pending_lines.clear()
+        return 1 if await self.emit(sink, self._raw_event(path, payload, state.offset)) else 0
+
+    def _resolve_paths(self) -> list[Path]:
+        if self.path is not None:
+            return [self.path]
+        assert self.glob_pattern is not None
+        return sorted(Path(item) for item in glob.glob(self.glob_pattern, recursive=True))
+
+    def _raw_event(self, path: Path, payload: str, offset: int) -> RawEvent:
+        service_id = self.service_id
+        if self.service_id_from_filename:
+            service_id = path.stem
+        return RawEvent(
+            source_type=self.source_type,
+            source_id=f"file://{path}",
+            raw_payload=payload,
+            collected_at=utc_now(),
+            metadata={"path": str(path), "raw_offset": offset, "service_id": service_id},
+        )
+
+    def _file_identity(self, path: Path) -> tuple[int, int] | tuple[str, int, float]:
+        stat = path.stat()
+        if platform.system().lower() == "windows":
+            return (str(path.resolve()), stat.st_size, stat.st_mtime)
+        return (stat.st_dev, stat.st_ino)
+
+
+def _open_text_file(path: Path):
+    if platform.system().lower() != "windows":
+        return path.open("r", encoding="utf-8", errors="replace")
+    return _WindowsSharedReader(path)
+
+
+class _WindowsSharedReader:
+    FILE_SHARE_READ = 0x00000001
+    FILE_SHARE_WRITE = 0x00000002
+    FILE_SHARE_DELETE = 0x00000004
+    OPEN_EXISTING = 3
+    GENERIC_READ = 0x80000000
+    INVALID_HANDLE_VALUE = ctypes.c_void_p(-1).value
+
+    def __init__(self, path: Path) -> None:
+        self._path = path
+        self._handle = None
+        self._file = None
+
+    def __enter__(self):
+        handle = ctypes.windll.kernel32.CreateFileW(
+            str(self._path),
+            self.GENERIC_READ,
+            self.FILE_SHARE_READ | self.FILE_SHARE_WRITE | self.FILE_SHARE_DELETE,
+            None,
+            self.OPEN_EXISTING,
+            0,
+            None,
+        )
+        if handle == self.INVALID_HANDLE_VALUE:
+            raise OSError(f"unable to open {self._path}")
+        fd = msvcrt.open_osfhandle(handle, os.O_RDONLY)  # type: ignore[name-defined]
+        self._handle = handle
+        self._file = os.fdopen(fd, "r", encoding="utf-8", errors="replace")
+        return self._file
+
+    def __exit__(self, exc_type, exc, tb) -> None:
+        if self._file is not None:
+            self._file.close()

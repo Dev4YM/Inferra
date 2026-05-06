@@ -1,0 +1,9 @@
+{
+  "id": "configuration_error",
+  "expected_cause_type": "configuration_error",
+  "raw_payloads": [
+    "{\"service\":\"api\",\"level\":\"info\",\"message\":\"deployment completed for api\"}",
+    "{\"service\":\"api\",\"level\":\"error\",\"message\":\"errors after rollout one\"}",
+    "{\"service\":\"api\",\"level\":\"error\",\"message\":\"errors after rollout two\"}"
+  ]
+}

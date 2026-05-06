@@ -12,6 +12,7 @@ htmlcov/
 build/
 dist/
 .venv/
+.venv-inferra-build/
 venv/
 .idea/
 .vscode/

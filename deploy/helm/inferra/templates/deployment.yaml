@@ -12,13 +12,28 @@ spec:
       labels:
         app.kubernetes.io/name: {{ include "inferra.name" . }}
     spec:
+      serviceAccountName: {{ include "inferra.serviceAccountName" . }}
+      securityContext:
+{{ toYaml .Values.podSecurityContext | indent 8 }}
       containers:
         - name: inferra
           image: "{{ .Values.image.repository }}:{{ .Values.image.tag }}"
           imagePullPolicy: {{ .Values.image.pullPolicy }}
+          securityContext:
+{{ toYaml .Values.securityContext | indent 12 }}
+          args:
+            - "--config"
+            - "/etc/inferra/inferra.toml"
+            - "serve"
+            - "--data-dir"
+            - "/data"
+            - "--host"
+            - "0.0.0.0"
+            - "--port"
+            - "{{ .Values.service.port | toString }}"
           ports:
             - name: http
-              containerPort: 7433
+              containerPort: {{ .Values.service.port }}
           volumeMounts:
             - name: config
               mountPath: /etc/inferra

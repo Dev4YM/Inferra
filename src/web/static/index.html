@@ -4,29 +4,13 @@
     <meta charset="utf-8">
     <meta name="viewport" content="width=device-width, initial-scale=1">
     <title>Inferra Console</title>
-    <script src="https://cdn.tailwindcss.com"></script>
-    <script>
-      tailwind.config = {
-        theme: {
-          extend: {
-            colors: {
-              ink: "#172033",
-              panel: "#ffffff",
-              line: "#d9e1ea",
-              quiet: "#667085",
-              accent: "#0f766e",
-              danger: "#b42318",
-              warn: "#b54708"
-            }
-          }
-        }
-      };
-    </script>
+    <link rel="stylesheet" href="/static/tailwind.css">
     <link rel="stylesheet" href="/static/styles.css">
   </head>
-  <body class="min-h-screen bg-slate-100 text-ink">
+  <body class="min-h-screen bg-slate-100 text-ink dark:bg-slate-950 dark:text-slate-100">
+    <a id="skip-link" class="skip-link" href="#main-content">Skip to main content</a>
     <div class="min-h-screen xl:grid xl:grid-cols-[248px_minmax(0,1fr)]">
-      <aside class="border-b border-slate-300 bg-slate-950 text-slate-100 xl:min-h-screen xl:border-b-0 xl:border-r">
+      <aside class="border-b border-slate-300 bg-slate-950 text-slate-100 xl:min-h-screen xl:border-b-0 xl:border-r dark:border-slate-800" role="navigation" aria-label="Application">
         <div class="flex items-center justify-between gap-4 px-5 py-4 xl:block">
           <div>
             <div class="text-xl font-semibold tracking-normal">Inferra</div>
@@ -49,13 +33,15 @@
       </aside>
 
       <div class="min-w-0">
-        <header class="sticky top-0 z-20 border-b border-slate-300 bg-white/95 px-5 py-3 backdrop-blur">
+        <header class="sticky top-0 z-20 border-b border-slate-300 bg-white/95 px-5 py-3 backdrop-blur dark:border-slate-700 dark:bg-slate-900/95" role="banner">
+          <div id="degraded-banner" class="mb-3 hidden rounded-md border border-amber-600 bg-amber-50 px-3 py-2 text-sm text-amber-950 dark:border-amber-500 dark:bg-amber-950/40 dark:text-amber-50" role="status"></div>
           <div class="flex flex-wrap items-center justify-between gap-3">
             <div>
               <h1 id="page-title" class="text-lg font-semibold">Dashboard</h1>
-              <p id="status" class="text-sm text-slate-600">Starting...</p>
+              <p id="status" class="text-sm text-slate-600 dark:text-slate-400">Starting...</p>
             </div>
             <div class="flex flex-wrap items-center gap-2">
+              <button id="theme-toggle" class="btn-secondary" type="button" aria-pressed="false">Theme</button>
               <button id="refresh-data" class="btn-secondary" type="button">Refresh</button>
               <button id="start-collectors" class="btn-secondary" type="button">Start Collectors</button>
               <button id="stop-collectors" class="btn-secondary" type="button">Stop Collectors</button>
@@ -63,7 +49,7 @@
           </div>
         </header>
 
-        <main class="p-4 sm:p-5">
+        <main id="main-content" class="p-4 sm:p-5" role="main" tabindex="-1" aria-label="Main content">
           <section id="view-dashboard" class="view active"></section>
 
           <section id="view-incidents" class="view">
@@ -87,13 +73,13 @@
                   <button id="resolve-incident" class="btn-secondary" type="button" hidden>Resolve</button>
                 </div>
                 <div id="incident-detail" class="empty-state">Select an incident.</div>
-                <div id="incident-tabs" class="tabs" hidden>
-                  <button class="tab active" type="button" data-tab="timeline">Timeline</button>
-                  <button class="tab" type="button" data-tab="logs">Logs</button>
-                  <button class="tab" type="button" data-tab="graph">Graph</button>
-                  <button class="tab" type="button" data-tab="explanation">Explanation</button>
-                  <button class="tab" type="button" data-tab="trace">AI Trace</button>
-                  <button class="tab" type="button" data-tab="chat">Chat</button>
+                <div id="incident-tabs" class="tabs" role="tablist" aria-label="Incident workbench" hidden>
+                  <button class="tab active" type="button" role="tab" data-tab="timeline" aria-selected="true">Timeline</button>
+                  <button class="tab" type="button" role="tab" data-tab="logs" aria-selected="false">Logs</button>
+                  <button class="tab" type="button" role="tab" data-tab="graph" aria-selected="false">Graph</button>
+                  <button class="tab" type="button" role="tab" data-tab="explanation" aria-selected="false">Explanation</button>
+                  <button class="tab" type="button" role="tab" data-tab="trace" aria-selected="false">AI Trace</button>
+                  <button class="tab" type="button" role="tab" data-tab="chat" aria-selected="false">Chat</button>
                 </div>
                 <div id="incident-panel" class="mt-4"></div>
               </section>
@@ -110,18 +96,18 @@
                 <button id="refresh-logs" class="btn-secondary" type="button">Refresh Logs</button>
               </div>
               <form id="log-filters" class="grid gap-3 md:grid-cols-[1fr_160px_160px_140px_auto]">
-                <input id="log-search" class="field" type="search" placeholder="Search messages">
-                <select id="log-service" class="field"></select>
-                <select id="log-severity" class="field">
+                <input id="log-search" class="field" type="search" placeholder="Search messages" aria-label="Search messages">
+                <select id="log-service" class="field" aria-label="Service filter"></select>
+                <select id="log-severity" class="field" aria-label="Severity filter">
                   <option value="">All severities</option>
                   <option value="2">Warn and above</option>
                   <option value="3">Error and above</option>
                   <option value="4">Critical only</option>
                 </select>
-                <input id="log-limit" class="field" type="number" min="1" max="500" value="120">
+                <input id="log-limit" class="field" type="number" min="1" max="2000" value="500" aria-label="Row limit">
                 <button class="btn-primary" type="submit">Apply</button>
               </form>
-              <div id="logs" class="mt-4 overflow-hidden rounded-md border border-slate-200"></div>
+              <div id="logs" class="mt-4 overflow-hidden rounded-md border border-slate-200 dark:border-slate-600"></div>
             </section>
           </section>
 
@@ -170,10 +156,10 @@
                   </div>
                   <button id="refresh-ai" class="btn-secondary" type="button">Refresh AI</button>
                 </div>
-                <form id="ai-config-form" class="grid gap-3 md:grid-cols-[120px_minmax(220px,1fr)_minmax(220px,1fr)_minmax(160px,0.7fr)_auto]">
+                <form id="ai-config-form" class="grid gap-3 md:grid-cols-[120px_minmax(220px,1fr)_minmax(220px,1fr)_minmax(160px,0.7fr)_120px_auto]">
                   <label class="field-label">
                     <span>Enabled</span>
-                    <input id="ai-enabled" type="checkbox" class="h-5 w-5 rounded border-slate-300">
+                    <input id="ai-enabled" type="checkbox" class="h-5 w-5 rounded border-slate-300 dark:border-slate-600">
                   </label>
                   <label class="field-label">
                     <span>Server</span>
@@ -187,14 +173,19 @@
                     <span>Token Env</span>
                     <input id="ai-token-env" class="field" autocomplete="off" placeholder="OLLAMA_TOKEN">
                   </label>
+                  <label class="field-label">
+                    <span>Remote</span>
+                    <input id="ai-allow-remote" type="checkbox" class="h-5 w-5 rounded border-slate-300 dark:border-slate-600">
+                  </label>
                   <button class="btn-primary self-end" type="submit">Save</button>
                 </form>
                 <div id="ai-status" class="mt-4 grid gap-3 md:grid-cols-4"></div>
+                <div id="ai-pull-panel" class="mt-4"></div>
               </section>
               <section class="surface">
                 <div class="section-head">
                   <div>
-                    <h2>Gemma 4 Registry</h2>
+                    <h2>Gemma Registry</h2>
                     <p>Known Ollama tags and installed model markers.</p>
                   </div>
                 </div>
@@ -208,10 +199,10 @@
 
     <div id="event-drawer" class="drawer" hidden>
       <div class="drawer-backdrop" data-close-drawer></div>
-      <aside class="drawer-panel">
+      <aside class="drawer-panel" role="dialog" aria-modal="true" aria-labelledby="drawer-title">
         <div class="section-head">
           <div>
-            <h2>Event Detail</h2>
+            <h2 id="drawer-title">Event Detail</h2>
             <p id="drawer-subtitle">Normalized log evidence</p>
           </div>
           <button class="btn-secondary" type="button" data-close-drawer>Close</button>
@@ -220,6 +211,6 @@
       </aside>
     </div>
 
-    <script src="/static/app.js"></script>
+    <script type="module" src="/static/js/main.js"></script>
   </body>
 </html>

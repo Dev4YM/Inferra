@@ -12,16 +12,16 @@ class FakeCoreApi:
         self.events = events or []
         self.pods = pods or []
 
-    def list_event_for_all_namespaces(self, limit):
+    def list_event_for_all_namespaces(self, limit, label_selector=None):
         return SimpleNamespace(items=self.events[:limit])
 
-    def list_namespaced_event(self, namespace, limit):
+    def list_namespaced_event(self, namespace, limit, label_selector=None):
         return SimpleNamespace(items=[item for item in self.events if item.metadata.namespace == namespace][:limit])
 
-    def list_pod_for_all_namespaces(self, limit):
+    def list_pod_for_all_namespaces(self, limit, label_selector=None):
         return SimpleNamespace(items=self.pods[:limit])
 
-    def list_namespaced_pod(self, namespace, limit):
+    def list_namespaced_pod(self, namespace, limit, label_selector=None):
         return SimpleNamespace(items=[item for item in self.pods if item.metadata.namespace == namespace][:limit])
 
 

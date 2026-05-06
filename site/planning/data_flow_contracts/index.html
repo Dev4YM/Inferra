@@ -1,0 +1,529 @@
+<!DOCTYPE html>
+<html class="writer-html5" lang="en" >
+<head>
+    <meta charset="utf-8" />
+    <meta http-equiv="X-UA-Compatible" content="IE=edge" />
+    <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+      <link rel="shortcut icon" href="../../img/favicon.ico" />
+    <title>Data flow contracts - Inferra</title>
+    <link rel="stylesheet" href="../../css/theme.css" />
+    <link rel="stylesheet" href="../../css/theme_extra.css" />
+        <link rel="stylesheet" href="https://cdnjs.cloudflare.com/ajax/libs/highlight.js/11.8.0/styles/github.min.css" />
+    
+      <script>
+        // Current page data
+        var mkdocs_page_name = "Data flow contracts";
+        var mkdocs_page_input_path = "planning\\data_flow_contracts.md";
+        var mkdocs_page_url = null;
+      </script>
+    
+    <!--[if lt IE 9]>
+      <script src="../../js/html5shiv.min.js"></script>
+    <![endif]-->
+      <script src="https://cdnjs.cloudflare.com/ajax/libs/highlight.js/11.8.0/highlight.min.js"></script>
+      <script>hljs.highlightAll();</script> 
+</head>
+
+<body class="wy-body-for-nav" role="document">
+
+  <div class="wy-grid-for-nav">
+    <nav data-toggle="wy-nav-shift" class="wy-nav-side stickynav">
+    <div class="wy-side-scroll">
+      <div class="wy-side-nav-search">
+          <a href="../.." class="icon icon-home"> Inferra
+        </a><div role="search">
+  <form id ="rtd-search-form" class="wy-form" action="../../search.html" method="get">
+      <input type="text" name="q" placeholder="Search docs" aria-label="Search docs" title="Type search term here" />
+  </form>
+</div>
+      </div>
+
+      <div class="wy-menu wy-menu-vertical" data-spy="affix" role="navigation" aria-label="Navigation menu">
+              <ul>
+                <li class="toctree-l1"><a class="reference internal" href="../..">Home</a>
+                </li>
+              </ul>
+              <p class="caption"><span class="caption-text">Operator guides</span></p>
+              <ul>
+                  <li class="toctree-l1"><a class="reference internal" href="../../operations/install/">Install</a>
+                  </li>
+                  <li class="toctree-l1"><a class="reference internal" href="../../operations/ai_provider/">AI provider</a>
+                  </li>
+                  <li class="toctree-l1"><a class="reference internal" href="../../operations/collectors/">Collectors</a>
+                  </li>
+                  <li class="toctree-l1"><a class="reference internal" href="../../operations/tuning/">Tuning</a>
+                  </li>
+                  <li class="toctree-l1"><a class="reference internal" href="../../operations/upgrade/">Upgrade</a>
+                  </li>
+                  <li class="toctree-l1"><a class="reference internal" href="../../operations/troubleshooting/">Troubleshooting</a>
+                  </li>
+                  <li class="toctree-l1"><a class="reference internal" href="../../operations/ci/">CI</a>
+                  </li>
+                  <li class="toctree-l1"><a class="reference internal" href="../../operations/release_signing/">Release signing</a>
+                  </li>
+              </ul>
+              <p class="caption"><span class="caption-text">Architecture Decision Records</span></p>
+              <ul>
+                  <li class="toctree-l1"><a class="reference internal" href="../../adr/0001-local-first-guided-ai/">ADR 0001 — Local-first guided AI</a>
+                  </li>
+                  <li class="toctree-l1"><a class="reference internal" href="../../adr/0002-flat-src-layout/">ADR 0002 — Flat src layout</a>
+                  </li>
+                  <li class="toctree-l1"><a class="reference internal" href="../../adr/0003-storage-protocols/">ADR 0003 — Storage protocols</a>
+                  </li>
+                  <li class="toctree-l1"><a class="reference internal" href="../../adr/0004-windows-first-collectors/">ADR 0004 — Windows-first collectors</a>
+                  </li>
+                  <li class="toctree-l1"><a class="reference internal" href="../../adr/0005-ai-presentation-only/">ADR 0005 — AI presentation-only</a>
+                  </li>
+                  <li class="toctree-l1"><a class="reference internal" href="../../adr/0006-ollama-gemma-default/">ADR 0006 — Ollama Gemma default</a>
+                  </li>
+              </ul>
+              <p class="caption"><span class="caption-text">Planning</span></p>
+              <ul class="current">
+                  <li class="toctree-l1"><a class="reference internal" href="../architecture_overview/">Architecture overview</a>
+                  </li>
+                  <li class="toctree-l1"><a class="reference internal" href="../full_build_architecture_plan/">Full build architecture plan</a>
+                  </li>
+                  <li class="toctree-l1 current"><a class="reference internal current" href="#">Data flow contracts</a>
+    <ul class="current">
+    <li class="toctree-l2"><a class="reference internal" href="#contract-1-collector-normalization-pipeline">Contract 1: Collector → Normalization Pipeline</a>
+        <ul>
+    <li class="toctree-l3"><a class="reference internal" href="#structure-rawevent">Structure: RawEvent</a>
+    </li>
+    <li class="toctree-l3"><a class="reference internal" href="#producer-guarantees-collector">Producer Guarantees (Collector)</a>
+    </li>
+    <li class="toctree-l3"><a class="reference internal" href="#consumer-assumptions-normalization">Consumer Assumptions (Normalization)</a>
+    </li>
+        </ul>
+    </li>
+    <li class="toctree-l2"><a class="reference internal" href="#contract-2-normalization-pipeline-storage">Contract 2: Normalization Pipeline → Storage</a>
+        <ul>
+    <li class="toctree-l3"><a class="reference internal" href="#structure-normalizedevent">Structure: NormalizedEvent</a>
+    </li>
+    <li class="toctree-l3"><a class="reference internal" href="#producer-guarantees-normalization">Producer Guarantees (Normalization)</a>
+    </li>
+    <li class="toctree-l3"><a class="reference internal" href="#consumer-assumptions-storage">Consumer Assumptions (Storage)</a>
+    </li>
+        </ul>
+    </li>
+    <li class="toctree-l2"><a class="reference internal" href="#contract-3-storage-analysis-layer">Contract 3: Storage → Analysis Layer</a>
+        <ul>
+    <li class="toctree-l3"><a class="reference internal" href="#query-interface-eventstore">Query Interface: EventStore</a>
+    </li>
+    <li class="toctree-l3"><a class="reference internal" href="#guarantees">Guarantees</a>
+    </li>
+        </ul>
+    </li>
+    <li class="toctree-l2"><a class="reference internal" href="#contract-4-analysis-layer-incident-builder">Contract 4: Analysis Layer → Incident Builder</a>
+        <ul>
+    <li class="toctree-l3"><a class="reference internal" href="#structure-eventcluster">Structure: EventCluster</a>
+    </li>
+    <li class="toctree-l3"><a class="reference internal" href="#guarantees_1">Guarantees</a>
+    </li>
+        </ul>
+    </li>
+    <li class="toctree-l2"><a class="reference internal" href="#contract-5-incident-builder-reasoning-layer">Contract 5: Incident Builder → Reasoning Layer</a>
+        <ul>
+    <li class="toctree-l3"><a class="reference internal" href="#structure-incident">Structure: Incident</a>
+    </li>
+    <li class="toctree-l3"><a class="reference internal" href="#guarantees_2">Guarantees</a>
+    </li>
+        </ul>
+    </li>
+    <li class="toctree-l2"><a class="reference internal" href="#contract-6-reasoning-layer-presentation-layer">Contract 6: Reasoning Layer → Presentation Layer</a>
+        <ul>
+    <li class="toctree-l3"><a class="reference internal" href="#structure-scoredhypothesisset">Structure: ScoredHypothesisSet</a>
+    </li>
+    <li class="toctree-l3"><a class="reference internal" href="#guarantees_3">Guarantees</a>
+    </li>
+        </ul>
+    </li>
+    <li class="toctree-l2"><a class="reference internal" href="#contract-7-presentation-layer-llm-explanation-request">Contract 7: Presentation Layer → LLM (Explanation Request)</a>
+        <ul>
+    <li class="toctree-l3"><a class="reference internal" href="#structure-explanationrequest">Structure: ExplanationRequest</a>
+    </li>
+    <li class="toctree-l3"><a class="reference internal" href="#guarantees_4">Guarantees</a>
+    </li>
+        </ul>
+    </li>
+    <li class="toctree-l2"><a class="reference internal" href="#contract-8-llm-presentation-layer-explanation-response">Contract 8: LLM → Presentation Layer (Explanation Response)</a>
+        <ul>
+    <li class="toctree-l3"><a class="reference internal" href="#structure-explanationresult">Structure: ExplanationResult</a>
+    </li>
+    <li class="toctree-l3"><a class="reference internal" href="#guarantees_5">Guarantees</a>
+    </li>
+        </ul>
+    </li>
+    <li class="toctree-l2"><a class="reference internal" href="#data-flow-invariants">Data Flow Invariants</a>
+    </li>
+    </ul>
+                  </li>
+                  <li class="toctree-l1"><a class="reference internal" href="../implementation_index/">Implementation index</a>
+                  </li>
+              </ul>
+      </div>
+    </div>
+    </nav>
+
+    <section data-toggle="wy-nav-shift" class="wy-nav-content-wrap">
+      <nav class="wy-nav-top" role="navigation" aria-label="Mobile navigation menu">
+          <i data-toggle="wy-nav-top" class="fa fa-bars"></i>
+          <a href="../..">Inferra</a>
+        
+      </nav>
+      <div class="wy-nav-content">
+        <div class="rst-content"><div role="navigation" aria-label="breadcrumbs navigation">
+  <ul class="wy-breadcrumbs">
+    <li><a href="../.." class="icon icon-home" aria-label="Docs"></a></li>
+          <li class="breadcrumb-item">Planning</li>
+      <li class="breadcrumb-item active">Data flow contracts</li>
+    <li class="wy-breadcrumbs-aside">
+    </li>
+  </ul>
+  <hr/>
+</div>
+          <div role="main" class="document" itemscope="itemscope" itemtype="http://schema.org/Article">
+            <div class="section" itemprop="articleBody">
+              
+                <h1 id="data-flow-contracts">Data Flow Contracts<a class="headerlink" href="#data-flow-contracts" title="Permanent link">&para;</a></h1>
+<p><strong>Implementation:</strong> <code>src/events/</code>, <code>src/normalization/pipeline.py</code>, <code>src/storage/</code>. See <a href="../implementation_index/">implementation index</a>.</p>
+<p>This document defines the typed interfaces between every major subsystem. Each contract specifies the exact structure of data crossing a module boundary, the guarantees the producer provides, and the assumptions the consumer makes.</p>
+<hr />
+<h2 id="contract-1-collector-normalization-pipeline">Contract 1: Collector → Normalization Pipeline<a class="headerlink" href="#contract-1-collector-normalization-pipeline" title="Permanent link">&para;</a></h2>
+<h3 id="structure-rawevent">Structure: <code>RawEvent</code><a class="headerlink" href="#structure-rawevent" title="Permanent link">&para;</a></h3>
+<pre><code class="language-python">@dataclass
+class RawEvent:
+    source_type: str          # &quot;docker&quot; | &quot;journald&quot; | &quot;file&quot; | &quot;procfs&quot; | &quot;app&quot;
+    source_id: str            # unique collector instance id (e.g., &quot;docker://container_abc&quot;)
+    raw_payload: str          # the original log line or metric blob, unmodified
+    collected_at: datetime    # wall-clock time when the collector captured this
+    metadata: dict            # source-specific metadata:
+                              #   docker: {&quot;container_id&quot;, &quot;image&quot;, &quot;container_name&quot;}
+                              #   journald: {&quot;unit&quot;, &quot;priority&quot;, &quot;syslog_identifier&quot;}
+                              #   file: {&quot;path&quot;, &quot;line_number&quot;, &quot;inode&quot;}
+                              #   procfs: {&quot;pid&quot;, &quot;stat_type&quot;}
+</code></pre>
+<h3 id="producer-guarantees-collector">Producer Guarantees (Collector)<a class="headerlink" href="#producer-guarantees-collector" title="Permanent link">&para;</a></h3>
+<ul>
+<li><code>raw_payload</code> is the exact bytes read from the source (UTF-8 decoded, invalid bytes replaced with U+FFFD)</li>
+<li><code>collected_at</code> is monotonically non-decreasing per collector instance</li>
+<li><code>source_id</code> is stable across restarts for the same logical source</li>
+</ul>
+<h3 id="consumer-assumptions-normalization">Consumer Assumptions (Normalization)<a class="headerlink" href="#consumer-assumptions-normalization" title="Permanent link">&para;</a></h3>
+<ul>
+<li><code>raw_payload</code> may be malformed, empty, or binary-like</li>
+<li><code>metadata</code> keys vary by <code>source_type</code></li>
+<li>Events may arrive out of order across different collectors</li>
+</ul>
+<hr />
+<h2 id="contract-2-normalization-pipeline-storage">Contract 2: Normalization Pipeline → Storage<a class="headerlink" href="#contract-2-normalization-pipeline-storage" title="Permanent link">&para;</a></h2>
+<h3 id="structure-normalizedevent">Structure: <code>NormalizedEvent</code><a class="headerlink" href="#structure-normalizedevent" title="Permanent link">&para;</a></h3>
+<pre><code class="language-python">@dataclass
+class NormalizedEvent:
+    event_id: str             # UUID v4, assigned during normalization
+    timestamp: datetime       # parsed from raw_payload, or falls back to collected_at
+    timestamp_source: str     # &quot;parsed&quot; | &quot;collected_at&quot; | &quot;inferred&quot;
+    service_id: str           # canonicalized service identifier
+    host_id: str              # hostname or container ID
+    severity: Severity        # enum: DEBUG, INFO, WARN, ERROR, CRITICAL
+    event_type: EventType     # enum: LOG, METRIC, STATE_CHANGE, HEALTH_CHECK
+    message: str              # human-readable summary (first 1024 chars of meaningful content)
+    structured_data: dict     # parsed key-value pairs extracted from the log
+    tags: set[str]            # derived tags: {&quot;restart&quot;, &quot;oom&quot;, &quot;connection_refused&quot;, ...}
+    fingerprint: str          # deduplication fingerprint (see event_deduplication.md)
+    quality: DataQuality      # data quality assessment (see event_model.md)
+    source_ref: SourceRef     # back-reference to raw event source for drill-down
+    schema_version: int       # currently 1; incremented on breaking schema changes
+</code></pre>
+<pre><code class="language-python">class SourceRef:
+    source_type: str
+    source_id: str
+    raw_offset: int | None    # byte offset in source file, if applicable
+    collected_at: datetime
+</code></pre>
+<h3 id="producer-guarantees-normalization">Producer Guarantees (Normalization)<a class="headerlink" href="#producer-guarantees-normalization" title="Permanent link">&para;</a></h3>
+<ul>
+<li><code>event_id</code> is globally unique</li>
+<li><code>severity</code> is always populated (defaults to INFO if unparseable)</li>
+<li><code>fingerprint</code> is deterministic: same raw_payload + service_id → same fingerprint</li>
+<li><code>quality</code> is always populated with valid DataQuality scores (all fields in 0.0–1.0)</li>
+<li><code>timestamp</code> is never None</li>
+<li><code>schema_version</code> matches the current code version</li>
+</ul>
+<h3 id="consumer-assumptions-storage">Consumer Assumptions (Storage)<a class="headerlink" href="#consumer-assumptions-storage" title="Permanent link">&para;</a></h3>
+<ul>
+<li>Events are deduplicated before reaching storage (fingerprint checked)</li>
+<li>Events passing validation satisfy all field constraints in event_model.md</li>
+</ul>
+<hr />
+<h2 id="contract-3-storage-analysis-layer">Contract 3: Storage → Analysis Layer<a class="headerlink" href="#contract-3-storage-analysis-layer" title="Permanent link">&para;</a></h2>
+<h3 id="query-interface-eventstore">Query Interface: <code>EventStore</code><a class="headerlink" href="#query-interface-eventstore" title="Permanent link">&para;</a></h3>
+<pre><code class="language-python">class EventStore(Protocol):
+    def query_time_range(
+        self,
+        start: datetime,
+        end: datetime,
+        filters: EventFilter | None = None
+    ) -&gt; Iterator[NormalizedEvent]:
+        &quot;&quot;&quot;Returns events in timestamp order. Lazily loaded.&quot;&quot;&quot;
+        ...
+
+    def query_by_service(
+        self,
+        service_id: str,
+        window: timedelta
+    ) -&gt; Iterator[NormalizedEvent]:
+        &quot;&quot;&quot;Returns events for a service within the lookback window.&quot;&quot;&quot;
+        ...
+
+    def count_by_severity(
+        self,
+        service_id: str,
+        severity: Severity,
+        window: timedelta
+    ) -&gt; int:
+        &quot;&quot;&quot;Fast count query for anomaly detection.&quot;&quot;&quot;
+        ...
+
+    def get_event(self, event_id: str) -&gt; NormalizedEvent | None:
+        ...
+</code></pre>
+<pre><code class="language-python">@dataclass
+class EventFilter:
+    service_ids: set[str] | None = None
+    host_ids: set[str] | None = None
+    severities: set[Severity] | None = None
+    event_types: set[EventType] | None = None
+    tags: set[str] | None = None        # ANY match
+    message_contains: str | None = None  # substring search
+</code></pre>
+<h3 id="guarantees">Guarantees<a class="headerlink" href="#guarantees" title="Permanent link">&para;</a></h3>
+<ul>
+<li><code>query_time_range</code> returns events in ascending timestamp order</li>
+<li>Iterator is lazy: does not load all events into memory</li>
+<li>Queries against pruned data return empty results (no error)</li>
+</ul>
+<hr />
+<h2 id="contract-4-analysis-layer-incident-builder">Contract 4: Analysis Layer → Incident Builder<a class="headerlink" href="#contract-4-analysis-layer-incident-builder" title="Permanent link">&para;</a></h2>
+<h3 id="structure-eventcluster">Structure: <code>EventCluster</code><a class="headerlink" href="#structure-eventcluster" title="Permanent link">&para;</a></h3>
+<pre><code class="language-python">@dataclass
+class EventCluster:
+    cluster_id: str
+    events: list[str]              # event_ids, ordered by timestamp
+    time_range: tuple[datetime, datetime]
+    affected_services: set[str]
+    primary_severity: Severity     # highest severity in cluster
+    trigger_event_id: str          # the event that initiated cluster formation
+    correlation_edges: list[CorrelationEdge]
+    anomaly_scores: dict[str, float]  # service_id → anomaly score at cluster time
+</code></pre>
+<pre><code class="language-python">@dataclass
+class CorrelationEdge:
+    source_event_id: str
+    target_event_id: str
+    edge_type: str           # &quot;temporal&quot; | &quot;service_dependency&quot; | &quot;inferred_sequence&quot; | &quot;co_occurrence&quot;
+    weight: float            # 0.0 – 1.0, strength of correlation
+    evidence: str            # brief justification: &quot;events within 2s on dependent services&quot;
+</code></pre>
+<h3 id="guarantees_1">Guarantees<a class="headerlink" href="#guarantees_1" title="Permanent link">&para;</a></h3>
+<ul>
+<li>Every <code>event_id</code> in <code>events</code> exists in the EventStore</li>
+<li><code>time_range[0] &lt;= time_range[1]</code></li>
+<li><code>trigger_event_id</code> is in <code>events</code></li>
+<li><code>correlation_edges</code> reference only events within this cluster</li>
+</ul>
+<hr />
+<h2 id="contract-5-incident-builder-reasoning-layer">Contract 5: Incident Builder → Reasoning Layer<a class="headerlink" href="#contract-5-incident-builder-reasoning-layer" title="Permanent link">&para;</a></h2>
+<h3 id="structure-incident">Structure: <code>Incident</code><a class="headerlink" href="#structure-incident" title="Permanent link">&para;</a></h3>
+<pre><code class="language-python">@dataclass
+class Incident:
+    incident_id: str
+    state: IncidentState          # OPEN, INVESTIGATING, EXPLAINED, RESOLVED, STALE
+    created_at: datetime
+    updated_at: datetime
+    clusters: list[str]           # cluster_ids that form this incident
+    events: list[str]             # all event_ids across clusters
+    affected_services: set[str]
+    primary_service: str | None   # service with highest anomaly score
+    time_range: tuple[datetime, datetime]
+    severity: Severity            # inherited from highest-severity event
+    runtime_context: RuntimeContext | None
+    inference_graph: InferenceGraph | None
+</code></pre>
+<h3 id="guarantees_2">Guarantees<a class="headerlink" href="#guarantees_2" title="Permanent link">&para;</a></h3>
+<ul>
+<li><code>incident_id</code> is stable across updates (same incident, new data → same id)</li>
+<li><code>events</code> list grows monotonically (events are never removed from an incident)</li>
+<li><code>state</code> transitions follow the lifecycle state machine (see incident_lifecycle.md)</li>
+</ul>
+<hr />
+<h2 id="contract-6-reasoning-layer-presentation-layer">Contract 6: Reasoning Layer → Presentation Layer<a class="headerlink" href="#contract-6-reasoning-layer-presentation-layer" title="Permanent link">&para;</a></h2>
+<h3 id="structure-scoredhypothesisset">Structure: <code>ScoredHypothesisSet</code><a class="headerlink" href="#structure-scoredhypothesisset" title="Permanent link">&para;</a></h3>
+<pre><code class="language-python">@dataclass
+class ScoredHypothesisSet:
+    incident_id: str
+    hypotheses: list[ScoredHypothesis]  # sorted by total_score descending
+    contradictions: list[Contradiction]
+    analysis_timestamp: datetime
+    analysis_duration_ms: int
+
+@dataclass
+class ScoredHypothesis:
+    hypothesis_id: str
+    rank: int                          # 1-indexed
+    cause_type: CauseType              # enum from failure_taxonomy.md
+    description: str                   # structured description (not LLM-generated)
+    total_score: float                 # 0.0 – 1.0, normalized
+    score_breakdown: ScoreBreakdown
+    supporting_events: list[str]       # event_ids
+    contradicting_events: list[str]    # event_ids
+    affected_services: list[str]
+    suggested_checks: list[str]        # concrete diagnostic commands
+    confidence_label: str              # &quot;high&quot; | &quot;medium&quot; | &quot;low&quot; (from calibration)
+    is_valid: bool                     # passed validation checks
+    invalidation_reasons: list[str]    # if not valid, why
+
+@dataclass
+class ScoreBreakdown:
+    temporal_alignment: float
+    correlation_strength: float
+    frequency_weight: float
+    dependency_proximity: float
+    evidence_coverage: float
+    anomaly_severity: float
+    # each in 0.0 – 1.0 range before weighting
+
+@dataclass
+class Contradiction:
+    hypothesis_id: str
+    contradicting_event_id: str
+    contradiction_type: str        # &quot;timeline_violation&quot; | &quot;state_inconsistency&quot; | &quot;scope_mismatch&quot;
+    explanation: str               # structured explanation of the contradiction
+</code></pre>
+<h3 id="guarantees_3">Guarantees<a class="headerlink" href="#guarantees_3" title="Permanent link">&para;</a></h3>
+<ul>
+<li><code>hypotheses</code> list is non-empty for any incident in INVESTIGATING state</li>
+<li><code>rank</code> values are contiguous starting from 1</li>
+<li><code>total_score</code> is in [0.0, 1.0]</li>
+<li>Every <code>event_id</code> referenced exists in the event store</li>
+<li><code>score_breakdown</code> components sum (weighted) to <code>total_score</code></li>
+</ul>
+<hr />
+<h2 id="contract-7-presentation-layer-llm-explanation-request">Contract 7: Presentation Layer → LLM (Explanation Request)<a class="headerlink" href="#contract-7-presentation-layer-llm-explanation-request" title="Permanent link">&para;</a></h2>
+<h3 id="structure-explanationrequest">Structure: <code>ExplanationRequest</code><a class="headerlink" href="#structure-explanationrequest" title="Permanent link">&para;</a></h3>
+<pre><code class="language-python">@dataclass
+class ExplanationRequest:
+    incident_id: str
+    top_hypotheses: list[ScoredHypothesis]   # top 3–5
+    timeline: list[TimelineEntry]
+    service_topology: list[ServiceRelation]
+    runtime_context_summary: dict
+    contradictions: list[Contradiction]
+    output_format: str                        # &quot;full&quot; | &quot;summary&quot; | &quot;timeline_narrative&quot;
+</code></pre>
+<pre><code class="language-python">@dataclass
+class TimelineEntry:
+    timestamp: datetime
+    service_id: str
+    severity: Severity
+    summary: str           # 1-line summary of the event
+    is_key_event: bool     # flagged by the hypothesis as important evidence
+
+@dataclass
+class ServiceRelation:
+    source: str
+    target: str
+    relation_type: str     # &quot;calls&quot; | &quot;depends_on&quot; | &quot;shares_host&quot;
+</code></pre>
+<h3 id="guarantees_4">Guarantees<a class="headerlink" href="#guarantees_4" title="Permanent link">&para;</a></h3>
+<ul>
+<li>All service names are canonicalized (no raw hostnames or IPs)</li>
+<li>No raw log content is included (only summaries)</li>
+<li>Sensitive fields are stripped before this structure is created</li>
+<li>Timeline is sorted ascending</li>
+</ul>
+<hr />
+<h2 id="contract-8-llm-presentation-layer-explanation-response">Contract 8: LLM → Presentation Layer (Explanation Response)<a class="headerlink" href="#contract-8-llm-presentation-layer-explanation-response" title="Permanent link">&para;</a></h2>
+<h3 id="structure-explanationresult">Structure: <code>ExplanationResult</code><a class="headerlink" href="#structure-explanationresult" title="Permanent link">&para;</a></h3>
+<pre><code class="language-python">@dataclass
+class ExplanationResult:
+    incident_id: str
+    summary: str                    # 2-3 sentence overview
+    primary_hypothesis_text: str    # human-readable explanation of top hypothesis
+    evidence_narrative: str         # paragraph linking evidence to conclusion
+    timeline_narrative: str         # chronological story of what happened
+    alternative_explanations: list[str]  # brief descriptions of other hypotheses
+    suggested_actions: list[str]    # operator-facing next steps
+    uncertainty_notes: list[str]    # where the system is unsure
+    generation_model: str           # which LLM or template was used
+    guardrail_violations: list[str] # any claims that were stripped or modified
+</code></pre>
+<h3 id="guarantees_5">Guarantees<a class="headerlink" href="#guarantees_5" title="Permanent link">&para;</a></h3>
+<ul>
+<li><code>summary</code> is &lt;500 characters</li>
+<li><code>guardrail_violations</code> is populated if post-processing modified the LLM output</li>
+<li>If LLM was unavailable, <code>generation_model</code> is "template_fallback" and outputs are structured but less natural</li>
+</ul>
+<hr />
+<h2 id="data-flow-invariants">Data Flow Invariants<a class="headerlink" href="#data-flow-invariants" title="Permanent link">&para;</a></h2>
+<ol>
+<li>
+<p><strong>No backward data flow</strong>: Data moves from Collection → Normalization → Storage → Analysis → Reasoning → Presentation. No subsystem writes back to a subsystem earlier in the pipeline.</p>
+</li>
+<li>
+<p><strong>Event immutability</strong>: Once a <code>NormalizedEvent</code> is written to storage, it is never modified. Incidents and hypotheses are append-only (new versions, not mutations).</p>
+</li>
+<li>
+<p><strong>Reference integrity</strong>: Any <code>event_id</code> referenced by any downstream structure MUST exist in the event store at the time of reference. Pruning old events requires first resolving or archiving incidents that reference them.</p>
+</li>
+<li>
+<p><strong>Schema versioning</strong>: All persisted structures include a <code>schema_version</code> field. Readers must handle version mismatches by either migrating or rejecting with a clear error.</p>
+</li>
+</ol>
+              
+            </div>
+          </div><footer>
+    <div class="rst-footer-buttons" role="navigation" aria-label="Footer Navigation">
+        <a href="../full_build_architecture_plan/" class="btn btn-neutral float-left" title="Full build architecture plan"><span class="icon icon-circle-arrow-left"></span> Previous</a>
+        <a href="../implementation_index/" class="btn btn-neutral float-right" title="Implementation index">Next <span class="icon icon-circle-arrow-right"></span></a>
+    </div>
+
+  <hr/>
+
+  <div role="contentinfo">
+    <!-- Copyright etc -->
+  </div>
+
+  Built with <a href="https://www.mkdocs.org/">MkDocs</a> using a <a href="https://github.com/readthedocs/sphinx_rtd_theme">theme</a> provided by <a href="https://readthedocs.org">Read the Docs</a>.
+</footer>
+          
+        </div>
+      </div>
+
+    </section>
+
+  </div>
+
+  <div class="rst-versions" role="note" aria-label="Versions">
+  <span class="rst-current-version" data-toggle="rst-current-version">
+    
+    
+      <span><a href="../full_build_architecture_plan/" style="color: #fcfcfc">&laquo; Previous</a></span>
+    
+    
+      <span><a href="../implementation_index/" style="color: #fcfcfc">Next &raquo;</a></span>
+    
+  </span>
+</div>
+    <script src="../../js/jquery-3.6.0.min.js"></script>
+    <script>var base_url = "../..";</script>
+    <script src="../../js/theme_extra.js"></script>
+    <script src="../../js/theme.js"></script>
+      <script src="../../search/main.js"></script>
+    <script>
+        jQuery(function () {
+            SphinxRtdTheme.Navigation.enable(true);
+        });
+    </script>
+
+</body>
+</html>

@@ -1,5 +1,7 @@
 # Data Flow Contracts
 
+**Implementation:** `src/events/`, `src/normalization/pipeline.py`, `src/storage/`. See [implementation index](implementation_index.md).
+
 This document defines the typed interfaces between every major subsystem. Each contract specifies the exact structure of data crossing a module boundary, the guarantees the producer provides, and the assumptions the consumer makes.
 
 ---

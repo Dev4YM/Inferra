@@ -1,0 +1,7 @@
+{
+  "id": "database_failure",
+  "expected_cause_type": "database_failure",
+  "raw_payloads": [
+    "{\"service\":\"api\",\"level\":\"error\",\"message\":\"deadlock detected while updating rows\"}"
+  ]
+}

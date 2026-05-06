@@ -1,0 +1,897 @@
+<!DOCTYPE html>
+<html class="writer-html5" lang="en" >
+<head>
+    <meta charset="utf-8" />
+    <meta http-equiv="X-UA-Compatible" content="IE=edge" />
+    <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+      <link rel="shortcut icon" href="../../img/favicon.ico" />
+    <title>Full build architecture plan - Inferra</title>
+    <link rel="stylesheet" href="../../css/theme.css" />
+    <link rel="stylesheet" href="../../css/theme_extra.css" />
+        <link rel="stylesheet" href="https://cdnjs.cloudflare.com/ajax/libs/highlight.js/11.8.0/styles/github.min.css" />
+    
+      <script>
+        // Current page data
+        var mkdocs_page_name = "Full build architecture plan";
+        var mkdocs_page_input_path = "planning\\full_build_architecture_plan.md";
+        var mkdocs_page_url = null;
+      </script>
+    
+    <!--[if lt IE 9]>
+      <script src="../../js/html5shiv.min.js"></script>
+    <![endif]-->
+      <script src="https://cdnjs.cloudflare.com/ajax/libs/highlight.js/11.8.0/highlight.min.js"></script>
+      <script>hljs.highlightAll();</script> 
+</head>
+
+<body class="wy-body-for-nav" role="document">
+
+  <div class="wy-grid-for-nav">
+    <nav data-toggle="wy-nav-shift" class="wy-nav-side stickynav">
+    <div class="wy-side-scroll">
+      <div class="wy-side-nav-search">
+          <a href="../.." class="icon icon-home"> Inferra
+        </a><div role="search">
+  <form id ="rtd-search-form" class="wy-form" action="../../search.html" method="get">
+      <input type="text" name="q" placeholder="Search docs" aria-label="Search docs" title="Type search term here" />
+  </form>
+</div>
+      </div>
+
+      <div class="wy-menu wy-menu-vertical" data-spy="affix" role="navigation" aria-label="Navigation menu">
+              <ul>
+                <li class="toctree-l1"><a class="reference internal" href="../..">Home</a>
+                </li>
+              </ul>
+              <p class="caption"><span class="caption-text">Operator guides</span></p>
+              <ul>
+                  <li class="toctree-l1"><a class="reference internal" href="../../operations/install/">Install</a>
+                  </li>
+                  <li class="toctree-l1"><a class="reference internal" href="../../operations/ai_provider/">AI provider</a>
+                  </li>
+                  <li class="toctree-l1"><a class="reference internal" href="../../operations/collectors/">Collectors</a>
+                  </li>
+                  <li class="toctree-l1"><a class="reference internal" href="../../operations/tuning/">Tuning</a>
+                  </li>
+                  <li class="toctree-l1"><a class="reference internal" href="../../operations/upgrade/">Upgrade</a>
+                  </li>
+                  <li class="toctree-l1"><a class="reference internal" href="../../operations/troubleshooting/">Troubleshooting</a>
+                  </li>
+                  <li class="toctree-l1"><a class="reference internal" href="../../operations/ci/">CI</a>
+                  </li>
+                  <li class="toctree-l1"><a class="reference internal" href="../../operations/release_signing/">Release signing</a>
+                  </li>
+              </ul>
+              <p class="caption"><span class="caption-text">Architecture Decision Records</span></p>
+              <ul>
+                  <li class="toctree-l1"><a class="reference internal" href="../../adr/0001-local-first-guided-ai/">ADR 0001 — Local-first guided AI</a>
+                  </li>
+                  <li class="toctree-l1"><a class="reference internal" href="../../adr/0002-flat-src-layout/">ADR 0002 — Flat src layout</a>
+                  </li>
+                  <li class="toctree-l1"><a class="reference internal" href="../../adr/0003-storage-protocols/">ADR 0003 — Storage protocols</a>
+                  </li>
+                  <li class="toctree-l1"><a class="reference internal" href="../../adr/0004-windows-first-collectors/">ADR 0004 — Windows-first collectors</a>
+                  </li>
+                  <li class="toctree-l1"><a class="reference internal" href="../../adr/0005-ai-presentation-only/">ADR 0005 — AI presentation-only</a>
+                  </li>
+                  <li class="toctree-l1"><a class="reference internal" href="../../adr/0006-ollama-gemma-default/">ADR 0006 — Ollama Gemma default</a>
+                  </li>
+              </ul>
+              <p class="caption"><span class="caption-text">Planning</span></p>
+              <ul class="current">
+                  <li class="toctree-l1"><a class="reference internal" href="../architecture_overview/">Architecture overview</a>
+                  </li>
+                  <li class="toctree-l1 current"><a class="reference internal current" href="#">Full build architecture plan</a>
+    <ul class="current">
+    <li class="toctree-l2"><a class="reference internal" href="#purpose">Purpose</a>
+    </li>
+    <li class="toctree-l2"><a class="reference internal" href="#product-position">Product Position</a>
+    </li>
+    <li class="toctree-l2"><a class="reference internal" href="#required-stack">Required Stack</a>
+        <ul>
+    <li class="toctree-l3"><a class="reference internal" href="#core">Core</a>
+    </li>
+    <li class="toctree-l3"><a class="reference internal" href="#optional-integrations">Optional Integrations</a>
+    </li>
+    <li class="toctree-l3"><a class="reference internal" href="#packaging">Packaging</a>
+    </li>
+        </ul>
+    </li>
+    <li class="toctree-l2"><a class="reference internal" href="#architectural-principle-changes">Architectural Principle Changes</a>
+    </li>
+    <li class="toctree-l2"><a class="reference internal" href="#target-architecture">Target Architecture</a>
+    </li>
+    <li class="toctree-l2"><a class="reference internal" href="#repository-structure">Repository Structure</a>
+    </li>
+    <li class="toctree-l2"><a class="reference internal" href="#core-data-model">Core Data Model</a>
+    </li>
+    <li class="toctree-l2"><a class="reference internal" href="#storage-architecture">Storage Architecture</a>
+        <ul>
+    <li class="toctree-l3"><a class="reference internal" href="#databases">Databases</a>
+    </li>
+    <li class="toctree-l3"><a class="reference internal" href="#sqlite-rules">SQLite Rules</a>
+    </li>
+    <li class="toctree-l3"><a class="reference internal" href="#future-portability">Future Portability</a>
+    </li>
+        </ul>
+    </li>
+    <li class="toctree-l2"><a class="reference internal" href="#platform-support-plan">Platform Support Plan</a>
+        <ul>
+    <li class="toctree-l3"><a class="reference internal" href="#windows-and-windows-server">Windows and Windows Server</a>
+    </li>
+    <li class="toctree-l3"><a class="reference internal" href="#linux">Linux</a>
+    </li>
+    <li class="toctree-l3"><a class="reference internal" href="#kubernetes-on-linux">Kubernetes on Linux</a>
+    </li>
+    <li class="toctree-l3"><a class="reference internal" href="#macos">macOS</a>
+    </li>
+        </ul>
+    </li>
+    <li class="toctree-l2"><a class="reference internal" href="#build-phases">Build Phases</a>
+        <ul>
+    <li class="toctree-l3"><a class="reference internal" href="#phase-0-project-foundation">Phase 0: Project Foundation</a>
+    </li>
+    <li class="toctree-l3"><a class="reference internal" href="#phase-1-event-pipeline-mvp">Phase 1: Event Pipeline MVP</a>
+    </li>
+    <li class="toctree-l3"><a class="reference internal" href="#phase-2-windows-first-collection">Phase 2: Windows-First Collection</a>
+    </li>
+    <li class="toctree-l3"><a class="reference internal" href="#phase-3-deduplication-noise-and-baselines">Phase 3: Deduplication, Noise, and Baselines</a>
+    </li>
+    <li class="toctree-l3"><a class="reference internal" href="#phase-4-correlation-and-incidents">Phase 4: Correlation and Incidents</a>
+    </li>
+    <li class="toctree-l3"><a class="reference internal" href="#phase-5-reasoning-engine">Phase 5: Reasoning Engine</a>
+    </li>
+    <li class="toctree-l3"><a class="reference internal" href="#phase-6-local-web-ui">Phase 6: Local Web UI</a>
+    </li>
+    <li class="toctree-l3"><a class="reference internal" href="#phase-7-explanation-layer">Phase 7: Explanation Layer</a>
+    </li>
+    <li class="toctree-l3"><a class="reference internal" href="#phase-8-linux-docker-and-kubernetes">Phase 8: Linux, Docker, and Kubernetes</a>
+    </li>
+    <li class="toctree-l3"><a class="reference internal" href="#phase-9-packaging-hardening-and-release">Phase 9: Packaging, Hardening, and Release</a>
+    </li>
+        </ul>
+    </li>
+    <li class="toctree-l2"><a class="reference internal" href="#api-plan">API Plan</a>
+        <ul>
+    <li class="toctree-l3"><a class="reference internal" href="#rest">REST</a>
+    </li>
+    <li class="toctree-l3"><a class="reference internal" href="#websocket">WebSocket</a>
+    </li>
+        </ul>
+    </li>
+    <li class="toctree-l2"><a class="reference internal" href="#configuration-plan">Configuration Plan</a>
+    </li>
+    <li class="toctree-l2"><a class="reference internal" href="#testing-architecture">Testing Architecture</a>
+    </li>
+    <li class="toctree-l2"><a class="reference internal" href="#key-risks">Key Risks</a>
+        <ul>
+    <li class="toctree-l3"><a class="reference internal" href="#sqlite-in-kubernetes">SQLite in Kubernetes</a>
+    </li>
+    <li class="toctree-l3"><a class="reference internal" href="#windows-collector-complexity">Windows Collector Complexity</a>
+    </li>
+    <li class="toctree-l3"><a class="reference internal" href="#service-graph-accuracy">Service Graph Accuracy</a>
+    </li>
+    <li class="toctree-l3"><a class="reference internal" href="#llm-trust">LLM Trust</a>
+    </li>
+        </ul>
+    </li>
+    <li class="toctree-l2"><a class="reference internal" href="#mvp-definition">MVP Definition</a>
+    </li>
+    <li class="toctree-l2"><a class="reference internal" href="#suggested-implementation-order">Suggested Implementation Order</a>
+    </li>
+    <li class="toctree-l2"><a class="reference internal" href="#final-architecture-decision">Final Architecture Decision</a>
+    </li>
+    </ul>
+                  </li>
+                  <li class="toctree-l1"><a class="reference internal" href="../data_flow_contracts/">Data flow contracts</a>
+                  </li>
+                  <li class="toctree-l1"><a class="reference internal" href="../implementation_index/">Implementation index</a>
+                  </li>
+              </ul>
+      </div>
+    </div>
+    </nav>
+
+    <section data-toggle="wy-nav-shift" class="wy-nav-content-wrap">
+      <nav class="wy-nav-top" role="navigation" aria-label="Mobile navigation menu">
+          <i data-toggle="wy-nav-top" class="fa fa-bars"></i>
+          <a href="../..">Inferra</a>
+        
+      </nav>
+      <div class="wy-nav-content">
+        <div class="rst-content"><div role="navigation" aria-label="breadcrumbs navigation">
+  <ul class="wy-breadcrumbs">
+    <li><a href="../.." class="icon icon-home" aria-label="Docs"></a></li>
+          <li class="breadcrumb-item">Planning</li>
+      <li class="breadcrumb-item active">Full build architecture plan</li>
+    <li class="wy-breadcrumbs-aside">
+    </li>
+  </ul>
+  <hr/>
+</div>
+          <div role="main" class="document" itemscope="itemscope" itemtype="http://schema.org/Article">
+            <div class="section" itemprop="articleBody">
+              
+                <h1 id="full-build-and-architecture-plan">Full Build and Architecture Plan<a class="headerlink" href="#full-build-and-architecture-plan" title="Permanent link">&para;</a></h1>
+<p>Living module map: <a href="../implementation_index/">implementation index</a>.</p>
+<h2 id="purpose">Purpose<a class="headerlink" href="#purpose" title="Permanent link">&para;</a></h2>
+<p>This plan consolidates the existing Inferra planning documents into an implementation architecture for a Python + SQLite product that runs first-class on Windows and Windows Server, while remaining portable to Linux, Kubernetes, and macOS.</p>
+<p>Inferra remains a local-first, read-only runtime debugging assistant. It observes logs, containers, services, process metrics, and runtime context, then builds deterministic, evidence-backed hypotheses about failures. The LLM layer is optional and presentation-only.</p>
+<h2 id="product-position">Product Position<a class="headerlink" href="#product-position" title="Permanent link">&para;</a></h2>
+<p>Inferra is not a cloud observability platform and not an auto-remediation system. It is a local diagnostic system for developers, operators, and small teams who need fast failure explanation without sending operational data to a cloud service.</p>
+<p>The core promise:</p>
+<ol>
+<li>Ingest runtime events from local sources.</li>
+<li>Normalize them into a stable event model.</li>
+<li>Store them locally in SQLite.</li>
+<li>Correlate events into incidents.</li>
+<li>Build inference graphs and hypotheses deterministically.</li>
+<li>Rank hypotheses using auditable scoring.</li>
+<li>Present the result through a local web UI.</li>
+</ol>
+<h2 id="required-stack">Required Stack<a class="headerlink" href="#required-stack" title="Permanent link">&para;</a></h2>
+<h3 id="core">Core<a class="headerlink" href="#core" title="Permanent link">&para;</a></h3>
+<ul>
+<li>Python 3.11+</li>
+<li>SQLite in WAL mode</li>
+<li>FastAPI for local REST and WebSocket server</li>
+<li>asyncio queues for in-process event flow</li>
+<li>dataclasses or Pydantic models for typed contracts</li>
+<li>NetworkX for local graph operations</li>
+<li>psutil for cross-platform host/process metrics</li>
+<li>pytest for tests</li>
+</ul>
+<h3 id="optional-integrations">Optional Integrations<a class="headerlink" href="#optional-integrations" title="Permanent link">&para;</a></h3>
+<ul>
+<li>Docker SDK or Docker Engine HTTP API for Docker collectors.</li>
+<li>pywin32 for Windows Event Log and Windows Service support.</li>
+<li>systemd journal bindings for Linux journald support.</li>
+<li>Kubernetes Python client for Kubernetes discovery and log collection.</li>
+<li>Ollama or OpenAI-compatible provider for optional explanations.</li>
+</ul>
+<h3 id="packaging">Packaging<a class="headerlink" href="#packaging" title="Permanent link">&para;</a></h3>
+<ul>
+<li>PyInstaller or Nuitka for Windows/macOS/Linux binaries.</li>
+<li>Windows Service wrapper for Windows Server.</li>
+<li>systemd unit for Linux.</li>
+<li>Docker image for Linux container runtime.</li>
+<li>Helm chart and Kubernetes manifests for cluster deployment.</li>
+</ul>
+<h2 id="architectural-principle-changes">Architectural Principle Changes<a class="headerlink" href="#architectural-principle-changes" title="Permanent link">&para;</a></h2>
+<p>The current planning set is mostly Linux-first. For the requested target platforms, the implementation should use a platform adapter architecture:</p>
+<pre><code class="language-text">Inferra Core
+  config
+  event model
+  normalization
+  storage
+  analysis
+  reasoning
+  presentation
+
+Platform Adapters
+  windows
+  linux
+  macos
+  kubernetes
+
+Collectors
+  file
+  docker
+  app_http
+  host_metrics
+  windows_event_log
+  journald
+  kubernetes_logs
+</code></pre>
+<p>The reasoning core must not depend directly on Windows APIs, Linux procfs, journald, Docker, or Kubernetes. All platform-specific behavior enters through collectors and runtime context providers.</p>
+<h2 id="target-architecture">Target Architecture<a class="headerlink" href="#target-architecture" title="Permanent link">&para;</a></h2>
+<pre><code class="language-text">Sources
+  Windows Event Log
+  Windows services/processes
+  Linux journald/syslog
+  Docker logs/events
+  Kubernetes pod logs/events
+  application HTTP events
+  configured log files
+        |
+        v
+Collection Layer
+  async collectors
+  bounded queues
+  backpressure
+  checkpoints
+        |
+        v
+Normalization Layer
+  format detection
+  parsing
+  identity resolution
+  enrichment
+  fingerprinting
+  validation
+  deduplication
+  noise filtering
+        |
+        v
+SQLite Storage
+  events.db
+  incidents.db
+  config/state files
+  baselines
+  service graph
+        |
+        v
+Analysis Layer
+  anomaly detection
+  runtime context builder
+  correlation engine
+  incident lifecycle
+        |
+        v
+Reasoning Layer
+  inference graph
+  signal detectors
+  hypothesis composer
+  contradiction handler
+  validator
+  scoring
+  calibration
+        |
+        v
+Presentation Layer
+  local FastAPI server
+  static web UI
+  REST API
+  WebSocket updates
+  optional LLM explanation
+</code></pre>
+<h2 id="repository-structure">Repository Structure<a class="headerlink" href="#repository-structure" title="Permanent link">&para;</a></h2>
+<p>Recommended implementation layout:</p>
+<pre><code class="language-text">pyproject.toml
+README.md
+Dockerfile
+compose.yaml
+src/
+  app.py
+  cli.py
+  windows_service.py
+  ai/
+  analysis/
+  collectors/
+  config/
+  core/
+  events/
+  explanation/
+  normalization/
+  reasoning/
+  runtime/
+  storage/
+  web/
+    static/
+deploy/
+  windows/
+  systemd/
+  macos/
+  helm/
+docs/
+  adr/
+  operations/
+  planning/
+  tests/
+    unit/
+    integration/
+</code></pre>
+<p>The implementation intentionally keeps packages directly under <code>src/</code>. Do not introduce a root <code>inferra/</code> package or any nested implementation package under <code>src/</code>.</p>
+<h2 id="core-data-model">Core Data Model<a class="headerlink" href="#core-data-model" title="Permanent link">&para;</a></h2>
+<p>The existing <code>RawEvent</code>, <code>NormalizedEvent</code>, <code>EventCluster</code>, <code>Incident</code>, <code>ScoredHypothesisSet</code>, and <code>ExplanationResult</code> contracts should become actual Python models early in the build.</p>
+<p>Rules:</p>
+<ul>
+<li><code>NormalizedEvent</code> is immutable after storage.</li>
+<li>Every persisted object has <code>schema_version</code>.</li>
+<li>Every reference to an <code>event_id</code> must point to an existing event at the time it is written.</li>
+<li>Core reasoning receives only normalized, validated structures.</li>
+<li>LLM output never feeds back into analysis, scoring, or ranking.</li>
+</ul>
+<h2 id="storage-architecture">Storage Architecture<a class="headerlink" href="#storage-architecture" title="Permanent link">&para;</a></h2>
+<p>Use SQLite as the only required database.</p>
+<h3 id="databases">Databases<a class="headerlink" href="#databases" title="Permanent link">&para;</a></h3>
+<ul>
+<li><code>events.db</code>: append-heavy normalized events.</li>
+<li><code>incidents.db</code>: incidents, clusters, hypotheses, explanations, feedback.</li>
+<li>JSON files for baselines, scoring weights, service graph, calibration, and checkpoints where write frequency is low.</li>
+</ul>
+<h3 id="sqlite-rules">SQLite Rules<a class="headerlink" href="#sqlite-rules" title="Permanent link">&para;</a></h3>
+<ul>
+<li>Enable WAL mode.</li>
+<li>Use schema migrations from day one.</li>
+<li>Use repository interfaces instead of direct SQL from business logic.</li>
+<li>Batch event writes.</li>
+<li>Add retention pruning.</li>
+<li>Run integrity checks on startup.</li>
+<li>Keep query methods lazy and paginated.</li>
+</ul>
+<h3 id="future-portability">Future Portability<a class="headerlink" href="#future-portability" title="Permanent link">&para;</a></h3>
+<p>Even though SQLite is the required database, storage should be accessed through protocols:</p>
+<ul>
+<li><code>EventStore</code></li>
+<li><code>IncidentStore</code></li>
+<li><code>ConfigStore</code></li>
+<li><code>ServiceGraphStore</code></li>
+</ul>
+<p>This preserves a future path to PostgreSQL without changing the reasoning engine.</p>
+<h2 id="platform-support-plan">Platform Support Plan<a class="headerlink" href="#platform-support-plan" title="Permanent link">&para;</a></h2>
+<h3 id="windows-and-windows-server">Windows and Windows Server<a class="headerlink" href="#windows-and-windows-server" title="Permanent link">&para;</a></h3>
+<p>This is the main support target.</p>
+<p>Collectors:</p>
+<ul>
+<li>File collector with polling and Windows file rotation handling.</li>
+<li>Windows Event Log collector using pywin32.</li>
+<li>Host metrics collector using psutil.</li>
+<li>Docker Desktop or Windows Docker Engine collector where available.</li>
+<li>Application HTTP collector on localhost.</li>
+</ul>
+<p>Runtime context:</p>
+<ul>
+<li>CPU, memory, disk, process list, service state via psutil and Windows APIs.</li>
+<li>Windows service status where available.</li>
+<li>Docker Desktop container context where available.</li>
+</ul>
+<p>Packaging:</p>
+<ul>
+<li>Single executable or installed package.</li>
+<li>Windows Service mode for Windows Server.</li>
+<li>Local web UI bound to <code>127.0.0.1</code> by default.</li>
+<li>Data directory under <code>%ProgramData%\Inferra</code> for service installs and user-local app data for desktop installs.</li>
+</ul>
+<p>Constraints:</p>
+<ul>
+<li>No journald.</li>
+<li>No procfs.</li>
+<li>Some Docker and container metrics are limited compared to Linux.</li>
+</ul>
+<h3 id="linux">Linux<a class="headerlink" href="#linux" title="Permanent link">&para;</a></h3>
+<p>Collectors:</p>
+<ul>
+<li>File collector using inotify when available.</li>
+<li>journald collector.</li>
+<li>procfs/sys collector.</li>
+<li>Docker collector through Unix socket.</li>
+<li>Application HTTP collector.</li>
+</ul>
+<p>Runtime context:</p>
+<ul>
+<li>Full host context via procfs, sysfs, psutil fallback.</li>
+<li>Full Docker context when Docker is available.</li>
+</ul>
+<p>Packaging:</p>
+<ul>
+<li>Python package.</li>
+<li>Standalone binary.</li>
+<li>systemd service.</li>
+<li>Docker image.</li>
+</ul>
+<h3 id="kubernetes-on-linux">Kubernetes on Linux<a class="headerlink" href="#kubernetes-on-linux" title="Permanent link">&para;</a></h3>
+<p>SQLite means the first Kubernetes version should be node-local, not a fully distributed cluster brain.</p>
+<p>Recommended deployment modes:</p>
+<ol>
+<li>Single-node Kubernetes:</li>
+<li>Inferra runs as one Deployment or DaemonSet pod.</li>
+<li>SQLite is stored on a persistent volume.</li>
+<li>
+<p>Correlates pod logs and events visible from that node or namespace.</p>
+</li>
+<li>
+<p>Multi-node Kubernetes, v1 practical mode:</p>
+</li>
+<li>DaemonSet, one Inferra per node.</li>
+<li>Each node has its own SQLite database.</li>
+<li>No cross-node causal correlation.</li>
+<li>
+<p>Optional UI per node or port-forward access.</p>
+</li>
+<li>
+<p>Future multi-node mode:</p>
+</li>
+<li>Requires event relay, central storage, or a coordinator.</li>
+<li>This exceeds pure SQLite local-first architecture unless the central process owns a single SQLite database and agents send events to it.</li>
+</ol>
+<p>Kubernetes collectors:</p>
+<ul>
+<li>Pod log collector.</li>
+<li>Kubernetes event collector.</li>
+<li>Container restart/OOM collector.</li>
+<li>Namespace and label filters.</li>
+</ul>
+<p>Kubernetes packaging:</p>
+<ul>
+<li>Docker image.</li>
+<li>Helm chart.</li>
+<li>RBAC with least privilege.</li>
+<li>hostPath or PVC for SQLite data.</li>
+</ul>
+<h3 id="macos">macOS<a class="headerlink" href="#macos" title="Permanent link">&para;</a></h3>
+<p>Collectors:</p>
+<ul>
+<li>File collector.</li>
+<li>Docker Desktop collector.</li>
+<li>Host metrics via psutil.</li>
+<li>Application HTTP collector.</li>
+</ul>
+<p>Runtime context:</p>
+<ul>
+<li>Partial host metrics.</li>
+<li>Docker Desktop where available.</li>
+</ul>
+<p>Packaging:</p>
+<ul>
+<li>Python package or standalone binary.</li>
+<li>launchd service optional.</li>
+</ul>
+<h2 id="build-phases">Build Phases<a class="headerlink" href="#build-phases" title="Permanent link">&para;</a></h2>
+<h3 id="phase-0-project-foundation">Phase 0: Project Foundation<a class="headerlink" href="#phase-0-project-foundation" title="Permanent link">&para;</a></h3>
+<p>Deliverables:</p>
+<ul>
+<li><code>pyproject.toml</code></li>
+<li>package skeleton</li>
+<li>CLI entrypoint</li>
+<li>config loader</li>
+<li>typed model definitions</li>
+<li>logging setup</li>
+<li>migration framework</li>
+<li>test harness</li>
+</ul>
+<p>Acceptance:</p>
+<ul>
+<li><code>inferra --version</code> works.</li>
+<li><code>inferra check-config</code> validates config.</li>
+<li>SQLite databases can initialize and migrate.</li>
+</ul>
+<h3 id="phase-1-event-pipeline-mvp">Phase 1: Event Pipeline MVP<a class="headerlink" href="#phase-1-event-pipeline-mvp" title="Permanent link">&para;</a></h3>
+<p>Deliverables:</p>
+<ul>
+<li><code>RawEvent</code> and <code>NormalizedEvent</code></li>
+<li>file collector</li>
+<li>application HTTP collector</li>
+<li>normalization pipeline</li>
+<li>fingerprinting</li>
+<li>validation</li>
+<li>SQLite event store</li>
+<li>basic REST event query endpoint</li>
+</ul>
+<p>Acceptance:</p>
+<ul>
+<li>Feed sample log files.</li>
+<li>Events appear in <code>events.db</code>.</li>
+<li>Query by time range, service, severity.</li>
+<li>Deterministic fingerprint tests pass.</li>
+</ul>
+<h3 id="phase-2-windows-first-collection">Phase 2: Windows-First Collection<a class="headerlink" href="#phase-2-windows-first-collection" title="Permanent link">&para;</a></h3>
+<p>Deliverables:</p>
+<ul>
+<li>Windows Event Log collector.</li>
+<li>psutil host metrics collector.</li>
+<li>Windows service/process runtime context.</li>
+<li>Windows file collector checkpointing.</li>
+<li>Windows service packaging prototype.</li>
+</ul>
+<p>Acceptance:</p>
+<ul>
+<li>Runs on Windows desktop and Windows Server.</li>
+<li>Collects Application/System event logs.</li>
+<li>Captures CPU, memory, disk, process metrics.</li>
+<li>Survives restart with checkpoints.</li>
+</ul>
+<h3 id="phase-3-deduplication-noise-and-baselines">Phase 3: Deduplication, Noise, and Baselines<a class="headerlink" href="#phase-3-deduplication-noise-and-baselines" title="Permanent link">&para;</a></h3>
+<p>Deliverables:</p>
+<ul>
+<li>dedup tracker</li>
+<li>noise filter</li>
+<li>metric ringbuffer</li>
+<li>anomaly baseline store</li>
+<li>cold start UI/API status</li>
+</ul>
+<p>Acceptance:</p>
+<ul>
+<li>Duplicate storms are compressed.</li>
+<li>ERROR/CRITICAL events are preserved.</li>
+<li>Baselines enter learning mode and persist.</li>
+<li>Anomaly score API returns deterministic output for fixtures.</li>
+</ul>
+<h3 id="phase-4-correlation-and-incidents">Phase 4: Correlation and Incidents<a class="headerlink" href="#phase-4-correlation-and-incidents" title="Permanent link">&para;</a></h3>
+<p>Deliverables:</p>
+<ul>
+<li>service graph cache</li>
+<li>topology config</li>
+<li>correlation strategies</li>
+<li>event clustering</li>
+<li>incident creation and merge logic</li>
+<li>incident store</li>
+<li>active incident REST endpoints</li>
+</ul>
+<p>Acceptance:</p>
+<ul>
+<li>Synthetic multi-service failure creates one incident.</li>
+<li>No topology means conservative same-service correlation only.</li>
+<li>Configured topology enables cascade clustering.</li>
+</ul>
+<h3 id="phase-5-reasoning-engine">Phase 5: Reasoning Engine<a class="headerlink" href="#phase-5-reasoning-engine" title="Permanent link">&para;</a></h3>
+<p>Deliverables:</p>
+<ul>
+<li>inference graph engine</li>
+<li>signal detectors</li>
+<li>hypothesis composer</li>
+<li>hypothesis validator</li>
+<li>contradiction handler</li>
+<li>scoring engine</li>
+<li>calibration model</li>
+</ul>
+<p>Acceptance:</p>
+<ul>
+<li>Determinism fixtures pass.</li>
+<li>Top hypothesis is stable for repeated runs.</li>
+<li>Contradictions reduce scores and appear in API output.</li>
+<li>Feedback updates scoring weights within bounds.</li>
+</ul>
+<h3 id="phase-6-local-web-ui">Phase 6: Local Web UI<a class="headerlink" href="#phase-6-local-web-ui" title="Permanent link">&para;</a></h3>
+<p>Deliverables:</p>
+<ul>
+<li>FastAPI REST API</li>
+<li>WebSocket live updates</li>
+<li>static dashboard</li>
+<li>incident detail view</li>
+<li>services view</li>
+<li>timeline view</li>
+<li>settings view</li>
+</ul>
+<p>Acceptance:</p>
+<ul>
+<li>Initial page load under 500ms locally.</li>
+<li>Dashboard shows status, incidents, service health, event rate.</li>
+<li>Incident page shows hypotheses, evidence timeline, graph, explanation, resolution controls.</li>
+<li>UI works without CDN or external assets.</li>
+</ul>
+<h3 id="phase-7-explanation-layer">Phase 7: Explanation Layer<a class="headerlink" href="#phase-7-explanation-layer" title="Permanent link">&para;</a></h3>
+<p>Deliverables:</p>
+<ul>
+<li>template fallback provider</li>
+<li>LLM provider abstraction</li>
+<li>Ollama provider</li>
+<li>OpenAI-compatible provider</li>
+<li>sanitization</li>
+<li>guardrails</li>
+<li>explanation cache</li>
+</ul>
+<p>Acceptance:</p>
+<ul>
+<li>Template explanations always work.</li>
+<li>LLM is optional.</li>
+<li>Raw logs and secrets are not sent to remote providers.</li>
+<li>Guardrail violations are stored and visible.</li>
+</ul>
+<h3 id="phase-8-linux-docker-and-kubernetes">Phase 8: Linux, Docker, and Kubernetes<a class="headerlink" href="#phase-8-linux-docker-and-kubernetes" title="Permanent link">&para;</a></h3>
+<p>Deliverables:</p>
+<ul>
+<li>Linux journald collector.</li>
+<li>Linux procfs/sys metrics.</li>
+<li>Docker collector.</li>
+<li>Kubernetes collector.</li>
+<li>Docker image.</li>
+<li>systemd service.</li>
+<li>Helm chart.</li>
+</ul>
+<p>Acceptance:</p>
+<ul>
+<li>Runs as Linux service.</li>
+<li>Runs in Docker.</li>
+<li>Runs as single-node Kubernetes deployment.</li>
+<li>Runs as DaemonSet in node-local mode.</li>
+</ul>
+<h3 id="phase-9-packaging-hardening-and-release">Phase 9: Packaging, Hardening, and Release<a class="headerlink" href="#phase-9-packaging-hardening-and-release" title="Permanent link">&para;</a></h3>
+<p>Deliverables:</p>
+<ul>
+<li>Windows installer/service package.</li>
+<li>Linux binaries/packages.</li>
+<li>macOS binary.</li>
+<li>Docker image and Helm chart.</li>
+<li>CI matrix for Windows/Linux/macOS.</li>
+<li>performance and determinism benchmarks.</li>
+<li>upgrade/migration tests.</li>
+</ul>
+<p>Acceptance:</p>
+<ul>
+<li>Clean install and upgrade work.</li>
+<li>Crash recovery works.</li>
+<li>SQLite integrity check and degraded modes work.</li>
+<li>p99 latency budgets are met for supported workloads.</li>
+</ul>
+<h2 id="api-plan">API Plan<a class="headerlink" href="#api-plan" title="Permanent link">&para;</a></h2>
+<h3 id="rest">REST<a class="headerlink" href="#rest" title="Permanent link">&para;</a></h3>
+<ul>
+<li><code>GET /api/health</code></li>
+<li><code>GET /api/events</code></li>
+<li><code>GET /api/incidents</code></li>
+<li><code>GET /api/incidents/{id}</code></li>
+<li><code>GET /api/incidents/{id}/events</code></li>
+<li><code>GET /api/incidents/{id}/hypotheses</code></li>
+<li><code>GET /api/incidents/{id}/explanation</code></li>
+<li><code>POST /api/incidents/{id}/resolve</code></li>
+<li><code>GET /api/services</code></li>
+<li><code>GET /api/services/{id}</code></li>
+<li><code>GET /api/config</code></li>
+<li><code>PUT /api/config</code></li>
+</ul>
+<h3 id="websocket">WebSocket<a class="headerlink" href="#websocket" title="Permanent link">&para;</a></h3>
+<p>Server messages:</p>
+<ul>
+<li><code>incident_created</code></li>
+<li><code>incident_updated</code></li>
+<li><code>incident_resolved</code></li>
+<li><code>event_count</code></li>
+<li><code>collector_health</code></li>
+<li><code>explanation_ready</code></li>
+<li><code>baseline_status</code></li>
+</ul>
+<p>Client messages:</p>
+<ul>
+<li><code>subscribe_incident</code></li>
+<li><code>unsubscribe_incident</code></li>
+<li><code>resolve_incident</code></li>
+</ul>
+<h2 id="configuration-plan">Configuration Plan<a class="headerlink" href="#configuration-plan" title="Permanent link">&para;</a></h2>
+<p>Primary config file: <code>inferra.toml</code>.</p>
+<p>Config sections:</p>
+<ul>
+<li><code>[server]</code></li>
+<li><code>[storage]</code></li>
+<li><code>[collectors.file]</code></li>
+<li><code>[collectors.app]</code></li>
+<li><code>[collectors.windows_eventlog]</code></li>
+<li><code>[collectors.docker]</code></li>
+<li><code>[collectors.journald]</code></li>
+<li><code>[collectors.kubernetes]</code></li>
+<li><code>[normalization]</code></li>
+<li><code>[deduplication]</code></li>
+<li><code>[noise_filter]</code></li>
+<li><code>[anomaly_detection]</code></li>
+<li><code>[correlation]</code></li>
+<li><code>[inference_graph]</code></li>
+<li><code>[hypothesis_engine]</code></li>
+<li><code>[scoring]</code></li>
+<li><code>[calibration]</code></li>
+<li><code>[explanation]</code></li>
+<li><code>[[topology.edges]]</code></li>
+</ul>
+<h2 id="testing-architecture">Testing Architecture<a class="headerlink" href="#testing-architecture" title="Permanent link">&para;</a></h2>
+<p>Test layers:</p>
+<ol>
+<li>Unit tests for parsers, fingerprinting, deduplication, scoring, validators.</li>
+<li>Integration tests for raw event to stored event.</li>
+<li>Pipeline tests for raw event to incident.</li>
+<li>Determinism snapshot tests for reasoning outputs.</li>
+<li>Performance tests for normalization, analysis ticks, graph construction.</li>
+<li>Platform tests for Windows, Linux, macOS.</li>
+<li>Packaging smoke tests.</li>
+</ol>
+<p>Minimum CI matrix:</p>
+<ul>
+<li>Windows latest, Python 3.11 and 3.12</li>
+<li>Windows Server runner if available</li>
+<li>Ubuntu latest, Python 3.11 and 3.12</li>
+<li>macOS latest, Python 3.11 and 3.12</li>
+</ul>
+<h2 id="key-risks">Key Risks<a class="headerlink" href="#key-risks" title="Permanent link">&para;</a></h2>
+<h3 id="sqlite-in-kubernetes">SQLite in Kubernetes<a class="headerlink" href="#sqlite-in-kubernetes" title="Permanent link">&para;</a></h3>
+<p>SQLite is excellent for local-first mode, but it is not a distributed database. Kubernetes support should be node-local unless a central coordinator is introduced.</p>
+<p>Decision:</p>
+<ul>
+<li>Support node-local Kubernetes in v1.</li>
+<li>Document no cross-node correlation.</li>
+<li>Do not pretend DaemonSet SQLite instances are one shared system.</li>
+</ul>
+<h3 id="windows-collector-complexity">Windows Collector Complexity<a class="headerlink" href="#windows-collector-complexity" title="Permanent link">&para;</a></h3>
+<p>Windows Event Log, service state, and Docker Desktop all behave differently from Linux sources.</p>
+<p>Decision:</p>
+<ul>
+<li>Build Windows collector early.</li>
+<li>Treat Windows as first-class, not a late port.</li>
+<li>Keep OS-specific APIs behind adapters.</li>
+</ul>
+<h3 id="service-graph-accuracy">Service Graph Accuracy<a class="headerlink" href="#service-graph-accuracy" title="Permanent link">&para;</a></h3>
+<p>Wrong topology creates wrong explanations.</p>
+<p>Decision:</p>
+<ul>
+<li>Config-first topology.</li>
+<li>Auto-detected edges require confidence labels.</li>
+<li>Log-pattern topology inference remains opt-in.</li>
+</ul>
+<h3 id="llm-trust">LLM Trust<a class="headerlink" href="#llm-trust" title="Permanent link">&para;</a></h3>
+<p>LLM explanations can hallucinate.</p>
+<p>Decision:</p>
+<ul>
+<li>Template fallback is always available.</li>
+<li>LLM never affects ranking.</li>
+<li>UI clearly separates structured summary from LLM explanation.</li>
+</ul>
+<h2 id="mvp-definition">MVP Definition<a class="headerlink" href="#mvp-definition" title="Permanent link">&para;</a></h2>
+<p>The first useful MVP should be:</p>
+<ul>
+<li>Windows-first local application.</li>
+<li>File collector.</li>
+<li>Windows Event Log collector.</li>
+<li>Application HTTP collector.</li>
+<li>SQLite storage.</li>
+<li>Normalization, deduplication, noise filtering.</li>
+<li>Basic anomaly scores.</li>
+<li>Correlation into incidents.</li>
+<li>Hypothesis generation and scoring for common failure modes.</li>
+<li>Local web dashboard and incident detail view.</li>
+<li>Template explanation fallback.</li>
+</ul>
+<p>Docker, Linux, Kubernetes, macOS, and LLM providers can follow after the MVP foundation is stable.</p>
+<h2 id="suggested-implementation-order">Suggested Implementation Order<a class="headerlink" href="#suggested-implementation-order" title="Permanent link">&para;</a></h2>
+<ol>
+<li>Define typed contracts and storage migrations.</li>
+<li>Build event pipeline and event store.</li>
+<li>Build Windows collectors and psutil runtime metrics.</li>
+<li>Add deduplication, noise filtering, and baselines.</li>
+<li>Add correlation and incident lifecycle.</li>
+<li>Add inference graph, signal detectors, hypotheses, validation, and scoring.</li>
+<li>Add local web UI.</li>
+<li>Add template explanations.</li>
+<li>Add Linux/Docker collectors.</li>
+<li>Add Kubernetes deployment.</li>
+<li>Add macOS support.</li>
+<li>Add optional LLM providers.</li>
+<li>Harden packaging and release.</li>
+</ol>
+<h2 id="final-architecture-decision">Final Architecture Decision<a class="headerlink" href="#final-architecture-decision" title="Permanent link">&para;</a></h2>
+<p>Use a single-process modular monolith for v1.</p>
+<p>This is the best fit for Python + SQLite and local-first deployment. It keeps installation simple on Windows, keeps Linux and macOS support practical, and keeps Kubernetes possible in a node-local mode. The architecture should still enforce strong module boundaries through typed contracts and repository interfaces so that future multi-process or central-server modes are possible without rewriting the reasoning core.</p>
+              
+            </div>
+          </div><footer>
+    <div class="rst-footer-buttons" role="navigation" aria-label="Footer Navigation">
+        <a href="../architecture_overview/" class="btn btn-neutral float-left" title="Architecture overview"><span class="icon icon-circle-arrow-left"></span> Previous</a>
+        <a href="../data_flow_contracts/" class="btn btn-neutral float-right" title="Data flow contracts">Next <span class="icon icon-circle-arrow-right"></span></a>
+    </div>
+
+  <hr/>
+
+  <div role="contentinfo">
+    <!-- Copyright etc -->
+  </div>
+
+  Built with <a href="https://www.mkdocs.org/">MkDocs</a> using a <a href="https://github.com/readthedocs/sphinx_rtd_theme">theme</a> provided by <a href="https://readthedocs.org">Read the Docs</a>.
+</footer>
+          
+        </div>
+      </div>
+
+    </section>
+
+  </div>
+
+  <div class="rst-versions" role="note" aria-label="Versions">
+  <span class="rst-current-version" data-toggle="rst-current-version">
+    
+    
+      <span><a href="../architecture_overview/" style="color: #fcfcfc">&laquo; Previous</a></span>
+    
+    
+      <span><a href="../data_flow_contracts/" style="color: #fcfcfc">Next &raquo;</a></span>
+    
+  </span>
+</div>
+    <script src="../../js/jquery-3.6.0.min.js"></script>
+    <script>var base_url = "../..";</script>
+    <script src="../../js/theme_extra.js"></script>
+    <script src="../../js/theme.js"></script>
+      <script src="../../search/main.js"></script>
+    <script>
+        jQuery(function () {
+            SphinxRtdTheme.Navigation.enable(true);
+        });
+    </script>
+
+</body>
+</html>

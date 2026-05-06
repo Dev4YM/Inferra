@@ -5,7 +5,7 @@ from typing import Any
 
 from core.enums import EventType, Severity
 from core.time import parse_datetime, to_iso
-from events.models import DataQuality, NormalizedEvent, SourceRef
+from events.models import DataQuality, NormalizedEvent, SourceRef, thaw_value
 
 
 def event_to_dict(event: NormalizedEvent) -> dict[str, Any]:
@@ -18,7 +18,7 @@ def event_to_dict(event: NormalizedEvent) -> dict[str, Any]:
         "severity": int(event.severity),
         "event_type": int(event.event_type),
         "message": event.message,
-        "structured_data": event.structured_data,
+        "structured_data": thaw_value(event.structured_data),
         "tags": sorted(event.tags),
         "fingerprint": event.fingerprint,
         "quality": {
@@ -27,6 +27,7 @@ def event_to_dict(event: NormalizedEvent) -> dict[str, Any]:
             "parse_confidence": event.quality.parse_confidence,
             "identity_confidence": event.quality.identity_confidence,
             "completeness": event.quality.completeness,
+            "flags": sorted(event.quality.flags),
         },
         "source_ref": {
             "source_type": event.source_ref.source_type,
@@ -68,4 +69,4 @@ def event_from_dict(data: dict[str, Any]) -> NormalizedEvent:
 
 
 def json_dumps(value: Any) -> str:
-    return json.dumps(value, sort_keys=True, separators=(",", ":"))
+    return json.dumps(thaw_value(value), sort_keys=True, separators=(",", ":"))

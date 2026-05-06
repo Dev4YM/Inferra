@@ -7,7 +7,7 @@ from storage import initialize_storage
 
 
 def test_sqlite_event_store_roundtrip(tmp_path):
-    event_store, incident_store = initialize_storage(tmp_path)
+    event_store, incident_store, *_ = initialize_storage(tmp_path)
     try:
         raw = RawEvent(
             source_type="app",
@@ -32,7 +32,7 @@ def test_sqlite_event_store_roundtrip(tmp_path):
 
 
 def test_sqlite_collector_state_roundtrip(tmp_path):
-    event_store, incident_store = initialize_storage(tmp_path)
+    event_store, incident_store, *_ = initialize_storage(tmp_path)
     try:
         event_store.set_collector_state("collector://one", "bookmark", "42")
 

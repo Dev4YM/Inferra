@@ -3,7 +3,11 @@ import json
 import sys
 from types import SimpleNamespace
 
+import pytest
+
 from collectors.windows_eventlog import WindowsEventLogCollector
+
+pytestmark = pytest.mark.windows
 
 
 class FakeStateStore:

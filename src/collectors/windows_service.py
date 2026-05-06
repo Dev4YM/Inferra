@@ -1,13 +1,13 @@
 from __future__ import annotations
 
-import asyncio
 import json
 import platform
 import socket
 from dataclasses import dataclass
+from datetime import datetime
 from typing import Any
 
-from collectors.base import CollectorHealth
+from collectors.base import PollingCollector
 from core.time import to_iso, utc_now
 from events.models import RawEvent
 
@@ -28,7 +28,7 @@ class WindowsServiceSnapshot:
     binary_path: str | None
 
 
-class WindowsServiceCollector:
+class WindowsServiceCollector(PollingCollector):
     source_type = "windows_service"
 
     def __init__(
@@ -36,60 +36,39 @@ class WindowsServiceCollector:
         poll_interval_seconds: float = 30.0,
         include_stopped: bool = False,
         names: tuple[str, ...] = (),
+        emit_timeout_seconds: float = 1.0,
     ) -> None:
-        self.poll_interval_seconds = poll_interval_seconds
+        super().__init__(poll_interval_seconds=poll_interval_seconds, emit_timeout_seconds=emit_timeout_seconds)
         self.include_stopped = include_stopped
         self.names = tuple(name.lower() for name in names)
-        self._running = False
-        self._events = 0
-        self._errors = 0
-        self._last_error: str | None = None
-        self._last_event_at = None
         self._host = socket.gethostname()
+        self._last_snapshots: dict[str, WindowsServiceSnapshot] = {}
 
     @property
     def collector_id(self) -> str:
         return f"windows_service://{self._host}"
 
-    async def start(self, sink: asyncio.Queue[RawEvent]) -> None:
-        self._running = True
-        try:
-            while self._running:
-                await self.collect_once(sink)
-                await asyncio.sleep(self.poll_interval_seconds)
-        finally:
-            self._running = False
-
-    async def collect_once(self, sink: asyncio.Queue[RawEvent]) -> int:
+    async def collect_once(self, sink) -> int:
         if platform.system().lower() != "windows":
             return 0
         try:
+            snapshots = self._snapshots()
+            current = {snapshot.name.lower(): snapshot for snapshot in snapshots}
+            changed: list[tuple[WindowsServiceSnapshot, WindowsServiceSnapshot | None]] = []
+            for key, snapshot in current.items():
+                previous = self._last_snapshots.get(key)
+                if previous != snapshot:
+                    changed.append((snapshot, previous))
+            self._last_snapshots = current
             emitted = 0
-            for snapshot in self._snapshots():
-                event = self._event(snapshot)
-                await sink.put(event)
-                self._events += 1
-                emitted += 1
-                self._last_event_at = event.collected_at
+            observed_at = utc_now()
+            for snapshot, previous in changed:
+                event = self._event(snapshot, previous, observed_at)
+                emitted += 1 if await self.emit(sink, event) else 0
             return emitted
         except Exception as exc:  # pragma: no cover
-            self._errors += 1
-            self._last_error = str(exc)
+            self._record_error(exc)
             return 0
-
-    async def stop(self) -> None:
-        self._running = False
-
-    def health_check(self) -> CollectorHealth:
-        return CollectorHealth(
-            collector_id=self.collector_id,
-            source_type=self.source_type,
-            is_running=self._running,
-            events_emitted=self._events,
-            last_event_at=self._last_event_at,
-            error_count=self._errors,
-            last_error=self._last_error,
-        )
 
     def _snapshots(self) -> list[WindowsServiceSnapshot]:
         if psutil is None or not hasattr(psutil, "win_service_iter"):
@@ -119,18 +98,24 @@ class WindowsServiceCollector:
             )
         return sorted(snapshots, key=lambda item: item.name.lower())
 
-    def _event(self, snapshot: WindowsServiceSnapshot) -> RawEvent:
+    def _event(
+        self,
+        snapshot: WindowsServiceSnapshot,
+        previous: WindowsServiceSnapshot | None,
+        observed_at: datetime,
+    ) -> RawEvent:
         severity = "info"
         if snapshot.status not in {"running", "paused"}:
             severity = "warn"
         if snapshot.start_type == "automatic" and snapshot.status != "running":
             severity = "error"
+        previous_status = previous.status if previous is not None else "unknown"
         message = (
-            f"windows service {snapshot.name} status={snapshot.status} "
-            f"start_type={snapshot.start_type or 'unknown'}"
+            f"windows service {snapshot.name} state change {previous_status}->{snapshot.status} "
+            f"status={snapshot.status} start_type={snapshot.start_type or 'unknown'}"
         )
         payload: dict[str, Any] = {
-            "timestamp": to_iso(utc_now()),
+            "timestamp": to_iso(observed_at),
             "level": severity,
             "service": snapshot.name,
             "host": self._host,
@@ -138,6 +123,7 @@ class WindowsServiceCollector:
             "windows_service": {
                 "name": snapshot.name,
                 "display_name": snapshot.display_name,
+                "previous_status": previous_status,
                 "status": snapshot.status,
                 "start_type": snapshot.start_type,
                 "pid": snapshot.pid,
@@ -149,7 +135,7 @@ class WindowsServiceCollector:
             source_type=self.source_type,
             source_id=f"{self.collector_id}/{snapshot.name}",
             raw_payload=json.dumps(payload, sort_keys=True),
-            collected_at=utc_now(),
+            collected_at=observed_at,
             metadata={"service_name": snapshot.name, "status": snapshot.status, "host": self._host},
         )
 

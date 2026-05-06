@@ -1,0 +1,590 @@
+<!DOCTYPE html>
+<html class="writer-html5" lang="en" >
+<head>
+    <meta charset="utf-8" />
+    <meta http-equiv="X-UA-Compatible" content="IE=edge" />
+    <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+      <link rel="shortcut icon" href="../../img/favicon.ico" />
+    <title>Storage Architecture - Inferra</title>
+    <link rel="stylesheet" href="../../css/theme.css" />
+    <link rel="stylesheet" href="../../css/theme_extra.css" />
+        <link rel="stylesheet" href="https://cdnjs.cloudflare.com/ajax/libs/highlight.js/11.8.0/styles/github.min.css" />
+    
+      <script>
+        // Current page data
+        var mkdocs_page_name = "Storage Architecture";
+        var mkdocs_page_input_path = "planning\\storage_architecture.md";
+        var mkdocs_page_url = null;
+      </script>
+    
+    <!--[if lt IE 9]>
+      <script src="../../js/html5shiv.min.js"></script>
+    <![endif]-->
+      <script src="https://cdnjs.cloudflare.com/ajax/libs/highlight.js/11.8.0/highlight.min.js"></script>
+      <script>hljs.highlightAll();</script> 
+</head>
+
+<body class="wy-body-for-nav" role="document">
+
+  <div class="wy-grid-for-nav">
+    <nav data-toggle="wy-nav-shift" class="wy-nav-side stickynav">
+    <div class="wy-side-scroll">
+      <div class="wy-side-nav-search">
+          <a href="../.." class="icon icon-home"> Inferra
+        </a><div role="search">
+  <form id ="rtd-search-form" class="wy-form" action="../../search.html" method="get">
+      <input type="text" name="q" placeholder="Search docs" aria-label="Search docs" title="Type search term here" />
+  </form>
+</div>
+      </div>
+
+      <div class="wy-menu wy-menu-vertical" data-spy="affix" role="navigation" aria-label="Navigation menu">
+              <ul>
+                <li class="toctree-l1"><a class="reference internal" href="../..">Home</a>
+                </li>
+              </ul>
+              <p class="caption"><span class="caption-text">Operator guides</span></p>
+              <ul>
+                  <li class="toctree-l1"><a class="reference internal" href="../../operations/install/">Install</a>
+                  </li>
+                  <li class="toctree-l1"><a class="reference internal" href="../../operations/ai_provider/">AI provider</a>
+                  </li>
+                  <li class="toctree-l1"><a class="reference internal" href="../../operations/collectors/">Collectors</a>
+                  </li>
+                  <li class="toctree-l1"><a class="reference internal" href="../../operations/tuning/">Tuning</a>
+                  </li>
+                  <li class="toctree-l1"><a class="reference internal" href="../../operations/upgrade/">Upgrade</a>
+                  </li>
+                  <li class="toctree-l1"><a class="reference internal" href="../../operations/troubleshooting/">Troubleshooting</a>
+                  </li>
+                  <li class="toctree-l1"><a class="reference internal" href="../../operations/ci/">CI</a>
+                  </li>
+                  <li class="toctree-l1"><a class="reference internal" href="../../operations/release_signing/">Release signing</a>
+                  </li>
+              </ul>
+              <p class="caption"><span class="caption-text">Architecture Decision Records</span></p>
+              <ul>
+                  <li class="toctree-l1"><a class="reference internal" href="../../adr/0001-local-first-guided-ai/">ADR 0001 — Local-first guided AI</a>
+                  </li>
+                  <li class="toctree-l1"><a class="reference internal" href="../../adr/0002-flat-src-layout/">ADR 0002 — Flat src layout</a>
+                  </li>
+                  <li class="toctree-l1"><a class="reference internal" href="../../adr/0003-storage-protocols/">ADR 0003 — Storage protocols</a>
+                  </li>
+                  <li class="toctree-l1"><a class="reference internal" href="../../adr/0004-windows-first-collectors/">ADR 0004 — Windows-first collectors</a>
+                  </li>
+                  <li class="toctree-l1"><a class="reference internal" href="../../adr/0005-ai-presentation-only/">ADR 0005 — AI presentation-only</a>
+                  </li>
+                  <li class="toctree-l1"><a class="reference internal" href="../../adr/0006-ollama-gemma-default/">ADR 0006 — Ollama Gemma default</a>
+                  </li>
+              </ul>
+              <p class="caption"><span class="caption-text">Planning</span></p>
+              <ul>
+                  <li class="toctree-l1"><a class="reference internal" href="../architecture_overview/">Architecture overview</a>
+                  </li>
+                  <li class="toctree-l1"><a class="reference internal" href="../full_build_architecture_plan/">Full build architecture plan</a>
+                  </li>
+                  <li class="toctree-l1"><a class="reference internal" href="../data_flow_contracts/">Data flow contracts</a>
+                  </li>
+                  <li class="toctree-l1"><a class="reference internal" href="../implementation_index/">Implementation index</a>
+                  </li>
+              </ul>
+      </div>
+    </div>
+    </nav>
+
+    <section data-toggle="wy-nav-shift" class="wy-nav-content-wrap">
+      <nav class="wy-nav-top" role="navigation" aria-label="Mobile navigation menu">
+          <i data-toggle="wy-nav-top" class="fa fa-bars"></i>
+          <a href="../..">Inferra</a>
+        
+      </nav>
+      <div class="wy-nav-content">
+        <div class="rst-content"><div role="navigation" aria-label="breadcrumbs navigation">
+  <ul class="wy-breadcrumbs">
+    <li><a href="../.." class="icon icon-home" aria-label="Docs"></a></li>
+      <li class="breadcrumb-item active">Storage Architecture</li>
+    <li class="wy-breadcrumbs-aside">
+    </li>
+  </ul>
+  <hr/>
+</div>
+          <div role="main" class="document" itemscope="itemscope" itemtype="http://schema.org/Article">
+            <div class="section" itemprop="articleBody">
+              
+                <h1 id="storage-architecture">Storage Architecture<a class="headerlink" href="#storage-architecture" title="Permanent link">&para;</a></h1>
+<h2 id="design-goals">Design Goals<a class="headerlink" href="#design-goals" title="Permanent link">&para;</a></h2>
+<ol>
+<li><strong>Local-first</strong>: All data on the local filesystem. No network storage.</li>
+<li><strong>Bounded growth</strong>: Storage must not grow unboundedly. All stores have retention or capacity limits.</li>
+<li><strong>Crash-safe</strong>: The system must not corrupt data on unclean shutdown.</li>
+<li><strong>Read-optimized</strong>: Writes are append-heavy, but reads are the critical path (analysis queries events by time range, service, severity).</li>
+</ol>
+<hr />
+<h2 id="storage-components">Storage Components<a class="headerlink" href="#storage-components" title="Permanent link">&para;</a></h2>
+<h3 id="1-event-store-sqlite">1. Event Store (SQLite)<a class="headerlink" href="#1-event-store-sqlite" title="Permanent link">&para;</a></h3>
+<p><strong>File</strong>: <code>./data/events.db</code></p>
+<p><strong>Mode</strong>: WAL (Write-Ahead Logging) for concurrent reads during writes.</p>
+<h4 id="schema">Schema<a class="headerlink" href="#schema" title="Permanent link">&para;</a></h4>
+<pre><code class="language-sql">CREATE TABLE events (
+    event_id        TEXT PRIMARY KEY,
+    timestamp       TEXT NOT NULL,          -- ISO 8601 with microseconds
+    timestamp_source TEXT NOT NULL,         -- 'parsed' | 'collected_at' | 'inferred'
+    service_id      TEXT NOT NULL,
+    host_id         TEXT NOT NULL,
+    severity        INTEGER NOT NULL,       -- 0=DEBUG, 1=INFO, 2=WARN, 3=ERROR, 4=CRITICAL
+    event_type      INTEGER NOT NULL,       -- 0=LOG, 1=METRIC, 2=STATE_CHANGE, 3=HEALTH_CHECK
+    message         TEXT NOT NULL,
+    structured_data TEXT,                   -- JSON blob
+    tags            TEXT,                   -- comma-separated, indexed via FTS or LIKE
+    fingerprint     TEXT NOT NULL,
+    source_type     TEXT NOT NULL,
+    source_id       TEXT NOT NULL,
+    raw_offset      INTEGER,
+    collected_at    TEXT NOT NULL,
+    schema_version  INTEGER NOT NULL DEFAULT 1,
+    inserted_at     TEXT NOT NULL DEFAULT (strftime('%Y-%m-%dT%H:%M:%f', 'now'))
+);
+
+CREATE INDEX idx_events_timestamp ON events(timestamp);
+CREATE INDEX idx_events_service_ts ON events(service_id, timestamp);
+CREATE INDEX idx_events_severity_ts ON events(severity, timestamp);
+CREATE INDEX idx_events_fingerprint ON events(fingerprint);
+CREATE INDEX idx_events_inserted ON events(inserted_at);
+</code></pre>
+<h4 id="retention">Retention<a class="headerlink" href="#retention" title="Permanent link">&para;</a></h4>
+<p>A background task runs every 60 seconds:</p>
+<pre><code class="language-sql">DELETE FROM events
+WHERE inserted_at &lt; datetime('now', '-' || :retention_hours || ' hours');
+</code></pre>
+<p>Default <code>retention_hours</code>: 72. Configurable in <code>inferra.toml</code>.</p>
+<p>After deletion, <code>PRAGMA incremental_vacuum</code> reclaims disk space without blocking reads.</p>
+<h4 id="write-batching">Write Batching<a class="headerlink" href="#write-batching" title="Permanent link">&para;</a></h4>
+<p>Events are buffered in-memory and flushed to SQLite in batches of 100 or every 500ms (whichever comes first). This amortizes transaction overhead.</p>
+<pre><code class="language-python">INSERT INTO events (...) VALUES (...), (...), (...);  -- batch insert
+</code></pre>
+<h4 id="read-patterns">Read Patterns<a class="headerlink" href="#read-patterns" title="Permanent link">&para;</a></h4>
+<table>
+<thead>
+<tr>
+<th>Query</th>
+<th>Index Used</th>
+<th>Expected Latency</th>
+</tr>
+</thead>
+<tbody>
+<tr>
+<td>Events in time range</td>
+<td><code>idx_events_timestamp</code></td>
+<td>&lt;10ms for 1-hour window</td>
+</tr>
+<tr>
+<td>Events by service + time</td>
+<td><code>idx_events_service_ts</code></td>
+<td>&lt;5ms</td>
+</tr>
+<tr>
+<td>Events by severity + time</td>
+<td><code>idx_events_severity_ts</code></td>
+<td>&lt;5ms</td>
+</tr>
+<tr>
+<td>Dedup check by fingerprint</td>
+<td><code>idx_events_fingerprint</code></td>
+<td>&lt;1ms</td>
+</tr>
+<tr>
+<td>Count queries</td>
+<td>Covering indexes</td>
+<td>&lt;1ms</td>
+</tr>
+</tbody>
+</table>
+<hr />
+<h3 id="2-incident-store-sqlite">2. Incident Store (SQLite)<a class="headerlink" href="#2-incident-store-sqlite" title="Permanent link">&para;</a></h3>
+<p><strong>File</strong>: <code>./data/incidents.db</code></p>
+<p>Separate from events to avoid contention between high-frequency event writes and lower-frequency incident updates.</p>
+<h4 id="schema_1">Schema<a class="headerlink" href="#schema_1" title="Permanent link">&para;</a></h4>
+<pre><code class="language-sql">CREATE TABLE incidents (
+    incident_id     TEXT PRIMARY KEY,
+    state           TEXT NOT NULL,          -- 'open' | 'investigating' | 'explained' | 'resolved' | 'stale'
+    created_at      TEXT NOT NULL,
+    updated_at      TEXT NOT NULL,
+    severity        INTEGER NOT NULL,
+    primary_service TEXT,
+    affected_services TEXT NOT NULL,        -- JSON array
+    time_range_start TEXT NOT NULL,
+    time_range_end  TEXT NOT NULL,
+    event_count     INTEGER NOT NULL DEFAULT 0,
+    schema_version  INTEGER NOT NULL DEFAULT 1
+);
+
+CREATE TABLE incident_events (
+    incident_id     TEXT NOT NULL REFERENCES incidents(incident_id),
+    event_id        TEXT NOT NULL,
+    added_at        TEXT NOT NULL,
+    PRIMARY KEY (incident_id, event_id)
+);
+
+CREATE TABLE incident_clusters (
+    incident_id     TEXT NOT NULL REFERENCES incidents(incident_id),
+    cluster_id      TEXT NOT NULL,
+    cluster_data    TEXT NOT NULL,          -- JSON: correlation edges, anomaly scores
+    PRIMARY KEY (incident_id, cluster_id)
+);
+
+CREATE TABLE hypotheses (
+    hypothesis_id   TEXT PRIMARY KEY,
+    incident_id     TEXT NOT NULL REFERENCES incidents(incident_id),
+    rank            INTEGER,
+    cause_type      TEXT NOT NULL,
+    description     TEXT NOT NULL,
+    total_score     REAL,
+    score_breakdown TEXT,                   -- JSON
+    supporting_events TEXT,                 -- JSON array of event_ids
+    contradicting_events TEXT,              -- JSON array of event_ids
+    affected_services TEXT,                 -- JSON array
+    suggested_checks TEXT,                  -- JSON array
+    confidence_label TEXT,
+    is_valid        INTEGER NOT NULL DEFAULT 1,
+    invalidation_reasons TEXT,             -- JSON array
+    created_at      TEXT NOT NULL,
+    updated_at      TEXT NOT NULL
+);
+
+CREATE TABLE explanations (
+    explanation_id  TEXT PRIMARY KEY,
+    incident_id     TEXT NOT NULL REFERENCES incidents(incident_id),
+    summary         TEXT NOT NULL,
+    primary_text    TEXT NOT NULL,
+    evidence_text   TEXT,
+    timeline_text   TEXT,
+    alternatives    TEXT,                   -- JSON array
+    actions         TEXT,                   -- JSON array
+    uncertainty     TEXT,                   -- JSON array
+    model_used      TEXT NOT NULL,
+    guardrail_flags TEXT,                   -- JSON array
+    created_at      TEXT NOT NULL
+);
+
+CREATE INDEX idx_incidents_state ON incidents(state);
+CREATE INDEX idx_incidents_updated ON incidents(updated_at);
+CREATE INDEX idx_hypotheses_incident ON hypotheses(incident_id);
+CREATE INDEX idx_explanations_incident ON explanations(incident_id);
+</code></pre>
+<h4 id="incident-reconstruction-queries">Incident Reconstruction Queries<a class="headerlink" href="#incident-reconstruction-queries" title="Permanent link">&para;</a></h4>
+<p>Full incident reconstruction (loading an incident with all its events, hypotheses, and explanation) uses these access patterns:</p>
+<pre><code class="language-sql">-- Primary: load incident metadata
+SELECT * FROM incidents WHERE incident_id = ?;
+
+-- Load all events for an incident (join through incident_events)
+SELECT e.* FROM events e
+JOIN incident_events ie ON e.event_id = ie.event_id
+WHERE ie.incident_id = ?
+ORDER BY e.timestamp;
+
+-- Load hypotheses for incident
+SELECT * FROM hypotheses WHERE incident_id = ? ORDER BY rank;
+
+-- Load latest explanation
+SELECT * FROM explanations WHERE incident_id = ? ORDER BY created_at DESC LIMIT 1;
+
+-- Load inference graph snapshot
+SELECT graph_data FROM inference_graph_snapshots WHERE incident_id = ?;
+
+-- Dashboard: active incidents with top hypothesis
+SELECT i.*, h.description, h.total_score, h.confidence_label
+FROM incidents i
+LEFT JOIN hypotheses h ON i.incident_id = h.incident_id AND h.rank = 1
+WHERE i.state IN ('open', 'investigating', 'explained')
+ORDER BY i.severity DESC, i.updated_at DESC;
+</code></pre>
+<p><strong>Indexes supporting these queries</strong>:</p>
+<pre><code class="language-sql">-- incident_events: both directions
+CREATE INDEX idx_ie_incident ON incident_events(incident_id);
+CREATE INDEX idx_ie_event ON incident_events(event_id);
+
+-- hypotheses: incident lookup + rank ordering
+CREATE INDEX idx_hyp_incident_rank ON hypotheses(incident_id, rank);
+
+-- incidents: state-based queries for dashboard
+CREATE INDEX idx_incidents_state_severity ON incidents(state, severity DESC);
+</code></pre>
+<h4 id="retention_1">Retention<a class="headerlink" href="#retention_1" title="Permanent link">&para;</a></h4>
+<p>Incidents in <code>resolved</code> or <code>stale</code> state older than 7 days are archived (moved to <code>./data/archive/incidents_YYYYMMDD.db</code>) then deleted from the active store.</p>
+<hr />
+<h3 id="3-metric-ringbuffer">3. Metric Ringbuffer<a class="headerlink" href="#3-metric-ringbuffer" title="Permanent link">&para;</a></h3>
+<p><strong>Purpose</strong>: Store time-series metric data (event counts, error rates, latencies) for anomaly detection baselines.</p>
+<p><strong>Implementation</strong>: In-memory fixed-size arrays, persisted to disk on shutdown.</p>
+<pre><code class="language-python">class MetricRingbuffer:
+    &quot;&quot;&quot;Fixed-size circular buffer for one metric series.&quot;&quot;&quot;
+
+    def __init__(self, capacity: int = 720):
+        # 720 slots × 5-minute buckets = 60 hours of data
+        self.values: list[float | None] = [None] * capacity
+        self.timestamps: list[datetime | None] = [None] * capacity
+        self.head: int = 0
+        self.count: int = 0
+
+    def append(self, timestamp: datetime, value: float) -&gt; None: ...
+    def query_range(self, start: datetime, end: datetime) -&gt; list[tuple[datetime, float]]: ...
+    def last_n(self, n: int) -&gt; list[tuple[datetime, float]]: ...
+</code></pre>
+<p><strong>Persistence</strong>: On shutdown, each ringbuffer is serialized to <code>./data/metrics/{service_id}_{metric_name}.json</code>. On startup, these files are loaded back into memory.</p>
+<p><strong>Capacity limits</strong>:</p>
+<ul>
+<li>Max 100 metric series (across all services)</li>
+<li>Max 720 data points per series (60 hours at 5-minute resolution)</li>
+<li>Total memory: ~100 × 720 × 16 bytes ≈ 1.1MB</li>
+</ul>
+<hr />
+<h3 id="4-baseline-store">4. Baseline Store<a class="headerlink" href="#4-baseline-store" title="Permanent link">&para;</a></h3>
+<p><strong>Purpose</strong>: Store learned baselines for anomaly detection — what "normal" looks like for each service.</p>
+<p><strong>File</strong>: <code>./data/baselines/{service_id}.json</code></p>
+<pre><code class="language-json">{
+    &quot;service_id&quot;: &quot;api-gateway&quot;,
+    &quot;schema_version&quot;: 1,
+    &quot;updated_at&quot;: &quot;2026-05-01T12:00:00Z&quot;,
+    &quot;hourly_profiles&quot;: {
+        &quot;error_rate&quot;: {
+            &quot;buckets&quot;: [0.01, 0.02, 0.01, ...],  // 168 values, one per hour of week
+            &quot;stddev&quot;: [0.005, 0.008, 0.004, ...],
+            &quot;sample_count&quot;: [48, 52, 45, ...]
+        },
+        &quot;event_volume&quot;: {
+            &quot;buckets&quot;: [120, 130, 95, ...],
+            &quot;stddev&quot;: [15, 20, 12, ...],
+            &quot;sample_count&quot;: [48, 52, 45, ...]
+        }
+    },
+    &quot;known_patterns&quot;: [
+        {
+            &quot;pattern&quot;: &quot;connection refused&quot;,
+            &quot;normal_hourly_rate&quot;: 0.5,
+            &quot;stddev&quot;: 0.3
+        }
+    ]
+}
+</code></pre>
+<p><strong>Update policy</strong>: Baselines are updated every hour by incorporating the latest metric data using exponential moving average (EMA). Older data decays, giving recent weeks more weight.</p>
+<hr />
+<h3 id="5-service-graph-cache-persisted">5. Service Graph Cache (Persisted)<a class="headerlink" href="#5-service-graph-cache-persisted" title="Permanent link">&para;</a></h3>
+<p><strong>Purpose</strong>: In-memory representation of the service dependency graph with persistence across restarts.</p>
+<p><strong>Persistence</strong>: The service graph is written to <code>./data/service_graph.json</code> on every modification and on shutdown. On startup, the graph is loaded from this file, then updated with any new topology discovered from Docker or config.</p>
+<pre><code class="language-python">class ServiceGraphCache:
+    &quot;&quot;&quot;In-memory adjacency list for service dependencies, persisted to JSON.&quot;&quot;&quot;
+
+    graph: nx.DiGraph  # nodes = service_ids, edges = relationships
+    _dirty: bool = False  # tracks whether persistence is needed
+    _persist_path: Path
+
+    def add_relation(self, source: str, target: str, relation_type: str,
+                     origin: str = &quot;config&quot;,
+                     confidence: str = &quot;high&quot;) -&gt; None:
+        &quot;&quot;&quot;Add an edge. origin: 'config'|'docker_compose'|'log_inference'|'user_confirmed'&quot;&quot;&quot;
+        ...
+        self._dirty = True
+
+    def get_dependencies(self, service_id: str) -&gt; list[str]: ...
+    def get_dependents(self, service_id: str) -&gt; list[str]: ...
+    def get_colocated(self, service_id: str) -&gt; list[str]: ...
+    def shortest_path(self, source: str, target: str) -&gt; list[str] | None: ...
+    def shortest_path_length(self, source: str, target: str) -&gt; int | None: ...
+    def subgraph_around(self, service_id: str, depth: int = 2) -&gt; nx.DiGraph: ...
+
+    def persist(self) -&gt; None:
+        &quot;&quot;&quot;Write graph to disk if dirty.&quot;&quot;&quot;
+        if not self._dirty:
+            return
+        data = nx.node_link_data(self.graph)
+        atomic_write(self._persist_path, json.dumps(data, indent=2))
+        self._dirty = False
+
+    def load(self) -&gt; None:
+        &quot;&quot;&quot;Load graph from disk. Merge with config-defined topology.&quot;&quot;&quot;
+        if self._persist_path.exists():
+            data = json.loads(self._persist_path.read_text())
+            self.graph = nx.node_link_graph(data)
+</code></pre>
+<p><strong>Persistence format</strong> (<code>./data/service_graph.json</code>):</p>
+<pre><code class="language-json">{
+    &quot;directed&quot;: true,
+    &quot;nodes&quot;: [
+        {&quot;id&quot;: &quot;api-gateway&quot;},
+        {&quot;id&quot;: &quot;postgres&quot;},
+        {&quot;id&quot;: &quot;user-service&quot;}
+    ],
+    &quot;links&quot;: [
+        {&quot;source&quot;: &quot;api-gateway&quot;, &quot;target&quot;: &quot;postgres&quot;,
+         &quot;relation_type&quot;: &quot;depends_on&quot;, &quot;origin&quot;: &quot;config&quot;, &quot;confidence&quot;: &quot;high&quot;},
+        {&quot;source&quot;: &quot;api-gateway&quot;, &quot;target&quot;: &quot;user-service&quot;,
+         &quot;relation_type&quot;: &quot;calls&quot;, &quot;origin&quot;: &quot;docker_compose&quot;, &quot;confidence&quot;: &quot;medium&quot;}
+    ]
+}
+</code></pre>
+<p><strong>Startup sequence</strong>:
+1. Load <code>service_graph.json</code> if it exists
+2. Apply topology from <code>inferra.toml</code> (override/add edges)
+3. Discover Docker Compose edges if Docker is available (add as <code>confidence: "medium"</code>)
+4. Mark graph as clean (<code>_dirty = False</code>)</p>
+<p><strong>Capacity</strong>: Max 500 nodes, 5000 edges. Enforced at insertion time; oldest edges evicted if limit reached.</p>
+<hr />
+<h3 id="6-inference-graph-snapshots">6. Inference Graph Snapshots<a class="headerlink" href="#6-inference-graph-snapshots" title="Permanent link">&para;</a></h3>
+<p><strong>Purpose</strong>: Persist the last inference graph per active incident so that analysis can resume after restart without recomputation.</p>
+<p><strong>Storage</strong>: Within <code>incidents.db</code>:</p>
+<pre><code class="language-sql">CREATE TABLE inference_graph_snapshots (
+    incident_id     TEXT PRIMARY KEY REFERENCES incidents(incident_id),
+    graph_data      TEXT NOT NULL,    -- JSON: serialized InferenceGraph
+    created_at      TEXT NOT NULL,
+    event_count     INTEGER NOT NULL  -- number of events when graph was built
+);
+</code></pre>
+<p>The snapshot is updated whenever the inference graph is rebuilt for an incident. On restart, active incidents load their snapshots and skip graph reconstruction until new events arrive.</p>
+<p><strong>Eviction</strong>: Snapshots are deleted when their incident is resolved or archived.</p>
+<hr />
+<h2 id="disk-layout">Disk Layout<a class="headerlink" href="#disk-layout" title="Permanent link">&para;</a></h2>
+<pre><code>./data/
+├── events.db                  # SQLite: normalized events
+├── events.db-wal              # SQLite WAL file
+├── incidents.db               # SQLite: incidents, hypotheses, explanations
+├── incidents.db-wal
+├── metrics/
+│   ├── api-gateway_error_rate.json
+│   ├── api-gateway_event_volume.json
+│   ├── postgres_error_rate.json
+│   └── ...
+├── baselines/
+│   ├── api-gateway.json
+│   ├── postgres.json
+│   └── ...
+├── archive/
+│   ├── incidents_20260425.db
+│   └── ...
+└── config_cache/
+    └── service_graph_hints.json    # optional: user-provided dependency hints
+</code></pre>
+<hr />
+<h2 id="failure-modes">Failure Modes<a class="headerlink" href="#failure-modes" title="Permanent link">&para;</a></h2>
+<table>
+<thead>
+<tr>
+<th>Failure</th>
+<th>Detection</th>
+<th>Recovery</th>
+</tr>
+</thead>
+<tbody>
+<tr>
+<td>Disk full</td>
+<td>SQLite write error caught</td>
+<td>Switch to in-memory mode, alert user, stop retention pruning</td>
+</tr>
+<tr>
+<td>SQLite corruption</td>
+<td>Integrity check on startup</td>
+<td>Rename corrupt file, recreate empty DB, log data loss warning</td>
+</tr>
+<tr>
+<td>WAL file growth</td>
+<td>Monitor WAL size</td>
+<td>Force checkpoint if WAL exceeds 100MB</td>
+</tr>
+<tr>
+<td>Baseline file corrupt</td>
+<td>JSON parse error on load</td>
+<td>Delete corrupt file, rebuild from metric ringbuffer</td>
+</tr>
+<tr>
+<td>Archive directory missing</td>
+<td>OS error on archive write</td>
+<td>Create directory, retry</td>
+</tr>
+</tbody>
+</table>
+<hr />
+<h2 id="performance-characteristics">Performance Characteristics<a class="headerlink" href="#performance-characteristics" title="Permanent link">&para;</a></h2>
+<table>
+<thead>
+<tr>
+<th>Operation</th>
+<th>Latency</th>
+<th>Notes</th>
+</tr>
+</thead>
+<tbody>
+<tr>
+<td>Single event insert (batched)</td>
+<td>&lt;0.1ms amortized</td>
+<td>Batch of 100 committed together</td>
+</tr>
+<tr>
+<td>Time range query (1 hour)</td>
+<td>&lt;10ms</td>
+<td>Covering index</td>
+</tr>
+<tr>
+<td>Count by severity + service</td>
+<td>&lt;1ms</td>
+<td>Index scan</td>
+</tr>
+<tr>
+<td>Incident update</td>
+<td>&lt;5ms</td>
+<td>Small table</td>
+</tr>
+<tr>
+<td>Full-text search in messages</td>
+<td>10–50ms</td>
+<td>LIKE query; FTS5 extension optional</td>
+</tr>
+<tr>
+<td>Baseline load (all services)</td>
+<td>&lt;100ms</td>
+<td>JSON file reads</td>
+</tr>
+<tr>
+<td>Retention prune</td>
+<td>&lt;500ms</td>
+<td>Index-guided DELETE</td>
+</tr>
+</tbody>
+</table>
+              
+            </div>
+          </div><footer>
+
+  <hr/>
+
+  <div role="contentinfo">
+    <!-- Copyright etc -->
+  </div>
+
+  Built with <a href="https://www.mkdocs.org/">MkDocs</a> using a <a href="https://github.com/readthedocs/sphinx_rtd_theme">theme</a> provided by <a href="https://readthedocs.org">Read the Docs</a>.
+</footer>
+          
+        </div>
+      </div>
+
+    </section>
+
+  </div>
+
+  <div class="rst-versions" role="note" aria-label="Versions">
+  <span class="rst-current-version" data-toggle="rst-current-version">
+    
+    
+    
+  </span>
+</div>
+    <script src="../../js/jquery-3.6.0.min.js"></script>
+    <script>var base_url = "../..";</script>
+    <script src="../../js/theme_extra.js"></script>
+    <script src="../../js/theme.js"></script>
+      <script src="../../search/main.js"></script>
+    <script>
+        jQuery(function () {
+            SphinxRtdTheme.Navigation.enable(true);
+        });
+    </script>
+
+</body>
+</html>

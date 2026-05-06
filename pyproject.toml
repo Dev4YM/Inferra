@@ -4,54 +4,83 @@ build-backend = "setuptools.build_meta"
 
 [project]
 name = "inferra"
-version = "0.1.0"
+version = "0.2.0"
 description = "Local-first runtime failure explanation system"
 readme = "README.md"
 requires-python = ">=3.11"
 keywords = ["observability", "debugging", "incident-response", "ollama", "sqlite"]
 dependencies = [
+  "argcomplete>=3.5",
   "fastapi>=0.110",
   "uvicorn[standard]>=0.27",
   "networkx>=3.2",
   "psutil>=5.9",
+  "pydantic>=2",
+  "aiofiles>=23",
+  "aiohttp>=3.9",
+  "tomli>=2; python_version < '3.11'",
+  "tomli-w>=1.0",
 ]
 
 [project.optional-dependencies]
 windows = ["pywin32>=306"]
+build-windows = ["pyinstaller>=6,<8"]
 kubernetes = ["kubernetes>=29"]
-dev = ["pytest>=8", "pytest-asyncio>=0.23", "httpx>=0.27"]
+dev = [
+  "pytest>=8",
+  "pytest-asyncio>=0.23",
+  "httpx>=0.27",
+  "aioresponses>=0.7",
+  "pytest-cov>=6",
+  "ruff>=0.11",
+]
+ui = ["playwright>=1.41"]
+docs = ["mkdocs>=1.6"]
 
 [project.scripts]
 inferra = "cli:main"
 
 [tool.setuptools]
 package-dir = {"" = "src"}
-py-modules = ["app", "cli", "windows_service"]
+py-modules = ["cli", "windows_service", "app"]
 
 [tool.setuptools.packages.find]
 where = ["src"]
-include = [
-  "ai*",
-  "analysis*",
-  "collectors*",
-  "config*",
-  "core*",
-  "events*",
-  "explanation*",
-  "normalization*",
-  "reasoning*",
-  "runtime*",
-  "storage*",
-  "web*",
-]
 
 [tool.setuptools.package-data]
 config = ["*.toml"]
-web = ["static/*"]
+web = ["static/**/*"]
 
 [tool.pytest.ini_options]
 testpaths = ["tests"]
 asyncio_mode = "auto"
+markers = [
+    "integration: tests that need optional deps or longer runtime",
+    "perf: performance budgets; run explicitly or in CI perf job",
+    "windows: Windows-specific paths or collectors",
+    "linux: Linux-specific collectors or paths",
+    "determinism: long-run determinism checks",
+    "chaos: resilience and failure-injection scenarios",
+]
+filterwarnings = [
+    "ignore::DeprecationWarning:websockets",
+]
+
+[tool.coverage.run]
+branch = false
+source = ["src"]
+
+[tool.coverage.report]
+precision = 1
+fail_under = 80
+skip_empty = true
+include = [
+    "src/reasoning/**",
+    "src/analysis/**",
+    "src/storage/**",
+    "src/normalization/**",
+    "src/ai/**",
+]
 
 [tool.ruff]
 line-length = 120

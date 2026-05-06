@@ -30,4 +30,5 @@ def test_correlation_clusters_shared_failure_tags():
 
     assert len(clusters) == 1
     assert clusters[0].affected_services == {"api", "worker"}
-    assert clusters[0].correlation_edges[0].edge_type == "co_occurrence"
+    types = {edge.edge_type for edge in clusters[0].correlation_edges}
+    assert "co_occurrence" in types

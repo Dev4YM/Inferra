@@ -23,7 +23,7 @@ src/
   cli.py
 ```
 
-No nested `src/inferra/` or root `inferra/` implementation directory should be introduced.
+No nested implementation package under `src/` or root `inferra/` implementation directory should be introduced.
 
 ## Consequences
 
