@@ -1,0 +1,421 @@
+<!DOCTYPE html>
+<html class="writer-html5" lang="en" >
+<head>
+    <meta charset="utf-8" />
+    <meta http-equiv="X-UA-Compatible" content="IE=edge" />
+    <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+      <link rel="shortcut icon" href="../../../img/favicon.ico" />
+    <title>AI investigation system - Inferra</title>
+    <link rel="stylesheet" href="../../../css/theme.css" />
+    <link rel="stylesheet" href="../../../css/theme_extra.css" />
+        <link rel="stylesheet" href="https://cdnjs.cloudflare.com/ajax/libs/highlight.js/11.8.0/styles/github.min.css" />
+    
+      <script>
+        // Current page data
+        var mkdocs_page_name = "AI investigation system";
+        var mkdocs_page_input_path = "dossier\\ai\\ai_investigation_system.md";
+        var mkdocs_page_url = null;
+      </script>
+    
+    <!--[if lt IE 9]>
+      <script src="../../../js/html5shiv.min.js"></script>
+    <![endif]-->
+      <script src="https://cdnjs.cloudflare.com/ajax/libs/highlight.js/11.8.0/highlight.min.js"></script>
+      <script>hljs.highlightAll();</script> 
+</head>
+
+<body class="wy-body-for-nav" role="document">
+
+  <div class="wy-grid-for-nav">
+    <nav data-toggle="wy-nav-shift" class="wy-nav-side stickynav">
+    <div class="wy-side-scroll">
+      <div class="wy-side-nav-search">
+          <a href="../../.." class="icon icon-home"> Inferra
+        </a><div role="search">
+  <form id ="rtd-search-form" class="wy-form" action="../../../search.html" method="get">
+      <input type="text" name="q" placeholder="Search docs" aria-label="Search docs" title="Type search term here" />
+  </form>
+</div>
+      </div>
+
+      <div class="wy-menu wy-menu-vertical" data-spy="affix" role="navigation" aria-label="Navigation menu">
+              <ul>
+                <li class="toctree-l1"><a class="reference internal" href="../../..">Home</a>
+                </li>
+              </ul>
+              <p class="caption"><span class="caption-text">Operator Guides</span></p>
+              <ul>
+                  <li class="toctree-l1"><a class="reference internal" href="../../../operations/install/">Install</a>
+                  </li>
+                  <li class="toctree-l1"><a class="reference internal" href="../../../operations/windows_exe_build/">Windows exe - start here</a>
+                  </li>
+                  <li class="toctree-l1"><a class="reference internal" href="../../../operations/ai_provider/">AI provider</a>
+                  </li>
+                  <li class="toctree-l1"><a class="reference internal" href="../../../operations/collectors/">Collectors</a>
+                  </li>
+                  <li class="toctree-l1"><a class="reference internal" href="../../../operations/tuning/">Tuning</a>
+                  </li>
+                  <li class="toctree-l1"><a class="reference internal" href="../../../operations/upgrade/">Upgrade</a>
+                  </li>
+                  <li class="toctree-l1"><a class="reference internal" href="../../../operations/troubleshooting/">Troubleshooting</a>
+                  </li>
+                  <li class="toctree-l1"><a class="reference internal" href="../../../operations/ci/">CI</a>
+                  </li>
+                  <li class="toctree-l1"><a class="reference internal" href="../../../operations/release/">Release checklist</a>
+                  </li>
+                  <li class="toctree-l1"><a class="reference internal" href="../../../operations/release_signing/">Release signing</a>
+                  </li>
+              </ul>
+              <p class="caption"><span class="caption-text">Security</span></p>
+              <ul>
+                  <li class="toctree-l1"><a class="reference internal" href="../../../security/threat_model/">Threat model</a>
+                  </li>
+              </ul>
+              <p class="caption"><span class="caption-text">Reset Dossier</span></p>
+              <ul class="current">
+                  <li class="toctree-l1"><a class="reference internal" href="../../">Overview</a>
+                  </li>
+                  <li class="toctree-l1"><a class="reference internal" href="../../product/product_vision/">Product vision</a>
+                  </li>
+                  <li class="toctree-l1"><a class="reference internal" href="../../product/modes_and_personas/">Modes and personas</a>
+                  </li>
+                  <li class="toctree-l1"><a class="reference internal" href="../../architecture/current_state_audit/">Current state audit</a>
+                  </li>
+                  <li class="toctree-l1"><a class="reference internal" href="../../architecture/target_architecture/">Target architecture</a>
+                  </li>
+                  <li class="toctree-l1"><a class="reference internal" href="../../architecture/repository_reset_plan/">Repository reset plan</a>
+                  </li>
+                  <li class="toctree-l1"><a class="reference internal" href="../../control_plane/cli_control_plane/">CLI control plane</a>
+                  </li>
+                  <li class="toctree-l1"><a class="reference internal" href="../../control_plane/web_control_plane/">Web control plane</a>
+                  </li>
+                  <li class="toctree-l1 current"><a class="reference internal current" href="#">AI investigation system</a>
+    <ul class="current">
+    <li class="toctree-l2"><a class="reference internal" href="#ai-responsibilities">AI Responsibilities</a>
+    </li>
+    <li class="toctree-l2"><a class="reference internal" href="#investigation-flow">Investigation Flow</a>
+    </li>
+    <li class="toctree-l2"><a class="reference internal" href="#evidence-bundle">Evidence Bundle</a>
+    </li>
+    <li class="toctree-l2"><a class="reference internal" href="#ai-output-contract">AI Output Contract</a>
+    </li>
+    <li class="toctree-l2"><a class="reference internal" href="#investigation-commands">Investigation Commands</a>
+    </li>
+    <li class="toctree-l2"><a class="reference internal" href="#web-ai-ux">Web AI UX</a>
+    </li>
+    <li class="toctree-l2"><a class="reference internal" href="#prompt-trace">Prompt Trace</a>
+    </li>
+    <li class="toctree-l2"><a class="reference internal" href="#remote-provider-safety">Remote Provider Safety</a>
+    </li>
+    <li class="toctree-l2"><a class="reference internal" href="#guardrail-rule">Guardrail Rule</a>
+    </li>
+    </ul>
+                  </li>
+                  <li class="toctree-l1"><a class="reference internal" href="../../workspace/workspace_intelligence/">Workspace intelligence</a>
+                  </li>
+                  <li class="toctree-l1"><a class="reference internal" href="../../execution/execution_roadmap/">Execution roadmap</a>
+                  </li>
+                  <li class="toctree-l1"><a class="reference internal" href="../../execution/acceptance_gates/">Acceptance gates</a>
+                  </li>
+                  <li class="toctree-l1"><a class="reference internal" href="../../governance/open_decisions/">Open decisions</a>
+                  </li>
+              </ul>
+              <p class="caption"><span class="caption-text">Architecture Decision Records</span></p>
+              <ul>
+                  <li class="toctree-l1"><a class="reference internal" href="../../../adr/0001-local-first-guided-ai/">ADR 0001 - Local-first guided AI</a>
+                  </li>
+                  <li class="toctree-l1"><a class="reference internal" href="../../../adr/0002-flat-src-layout/">ADR 0002 - Flat src layout</a>
+                  </li>
+                  <li class="toctree-l1"><a class="reference internal" href="../../../adr/0003-storage-protocols/">ADR 0003 - Storage protocols</a>
+                  </li>
+                  <li class="toctree-l1"><a class="reference internal" href="../../../adr/0004-windows-first-collectors/">ADR 0004 - Windows-first collectors</a>
+                  </li>
+                  <li class="toctree-l1"><a class="reference internal" href="../../../adr/0005-ai-presentation-only/">ADR 0005 - AI presentation-only</a>
+                  </li>
+                  <li class="toctree-l1"><a class="reference internal" href="../../../adr/0006-ollama-gemma-default/">ADR 0006 - Ollama Gemma default</a>
+                  </li>
+              </ul>
+              <p class="caption"><span class="caption-text">Planning</span></p>
+              <ul>
+                  <li class="toctree-l1"><a class="reference internal" href="../../../implementation_roadmap/">Implementation roadmap</a>
+                  </li>
+                  <li class="toctree-l1"><a class="reference internal" href="../../../planning/architecture_overview/">Architecture overview</a>
+                  </li>
+                  <li class="toctree-l1"><a class="reference internal" href="../../../planning/full_build_architecture_plan/">Full build architecture plan</a>
+                  </li>
+                  <li class="toctree-l1"><a class="reference internal" href="../../../planning/data_flow_contracts/">Data flow contracts</a>
+                  </li>
+                  <li class="toctree-l1"><a class="reference internal" href="../../../planning/implementation_index/">Implementation index</a>
+                  </li>
+                  <li class="toctree-l1"><a class="reference internal" >Collectors and runtime</a>
+    <ul>
+                <li class="toctree-l2"><a class="reference internal" href="../../../planning/collector_architecture/">Collector architecture</a>
+                </li>
+                <li class="toctree-l2"><a class="reference internal" href="../../../planning/runtime_context_builder/">Runtime context builder</a>
+                </li>
+                <li class="toctree-l2"><a class="reference internal" href="../../../planning/log_normalization_pipeline/">Log normalization pipeline</a>
+                </li>
+                <li class="toctree-l2"><a class="reference internal" href="../../../planning/event_model/">Event model</a>
+                </li>
+                <li class="toctree-l2"><a class="reference internal" href="../../../planning/event_deduplication/">Event deduplication</a>
+                </li>
+                <li class="toctree-l2"><a class="reference internal" href="../../../planning/noise_filtering/">Noise filtering</a>
+                </li>
+    </ul>
+                  </li>
+                  <li class="toctree-l1"><a class="reference internal" >Analysis and reasoning</a>
+    <ul>
+                <li class="toctree-l2"><a class="reference internal" href="../../../planning/anomaly_detection/">Anomaly detection</a>
+                </li>
+                <li class="toctree-l2"><a class="reference internal" href="../../../planning/correlation_engine/">Correlation engine</a>
+                </li>
+                <li class="toctree-l2"><a class="reference internal" href="../../../planning/incident_lifecycle/">Incident lifecycle</a>
+                </li>
+                <li class="toctree-l2"><a class="reference internal" href="../../../planning/causal_graph_engine/">Causal graph engine</a>
+                </li>
+                <li class="toctree-l2"><a class="reference internal" href="../../../planning/hypothesis_engine/">Hypothesis engine</a>
+                </li>
+                <li class="toctree-l2"><a class="reference internal" href="../../../planning/hypothesis_validation/">Hypothesis validation</a>
+                </li>
+                <li class="toctree-l2"><a class="reference internal" href="../../../planning/scoring_engine/">Scoring engine</a>
+                </li>
+                <li class="toctree-l2"><a class="reference internal" href="../../../planning/contradiction_handling/">Contradiction handling</a>
+                </li>
+                <li class="toctree-l2"><a class="reference internal" href="../../../planning/confidence_calibration/">Confidence calibration</a>
+                </li>
+    </ul>
+                  </li>
+                  <li class="toctree-l1"><a class="reference internal" >Product contracts</a>
+    <ul>
+                <li class="toctree-l2"><a class="reference internal" href="../../../planning/failure_model/">Failure model</a>
+                </li>
+                <li class="toctree-l2"><a class="reference internal" href="../../../planning/failure_taxonomy/">Failure taxonomy</a>
+                </li>
+                <li class="toctree-l2"><a class="reference internal" href="../../../planning/explanation_layer/">Explanation layer</a>
+                </li>
+                <li class="toctree-l2"><a class="reference internal" href="../../../planning/storage_architecture/">Storage architecture</a>
+                </li>
+                <li class="toctree-l2"><a class="reference internal" href="../../../planning/ui_spec/">UI spec</a>
+                </li>
+                <li class="toctree-l2"><a class="reference internal" href="../../../planning/system_limitations/">System limitations</a>
+                </li>
+                <li class="toctree-l2"><a class="reference internal" href="../../../planning/constraints/">Constraints</a>
+                </li>
+                <li class="toctree-l2"><a class="reference internal" href="../../../planning/testing_strategy/">Testing strategy</a>
+                </li>
+    </ul>
+                  </li>
+              </ul>
+      </div>
+    </div>
+    </nav>
+
+    <section data-toggle="wy-nav-shift" class="wy-nav-content-wrap">
+      <nav class="wy-nav-top" role="navigation" aria-label="Mobile navigation menu">
+          <i data-toggle="wy-nav-top" class="fa fa-bars"></i>
+          <a href="../../..">Inferra</a>
+        
+      </nav>
+      <div class="wy-nav-content">
+        <div class="rst-content"><div role="navigation" aria-label="breadcrumbs navigation">
+  <ul class="wy-breadcrumbs">
+    <li><a href="../../.." class="icon icon-home" aria-label="Docs"></a></li>
+          <li class="breadcrumb-item">Reset Dossier</li>
+      <li class="breadcrumb-item active">AI investigation system</li>
+    <li class="wy-breadcrumbs-aside">
+    </li>
+  </ul>
+  <hr/>
+</div>
+          <div role="main" class="document" itemscope="itemscope" itemtype="http://schema.org/Article">
+            <div class="section" itemprop="articleBody">
+              
+                <h1 id="ai-investigation-system">AI Investigation System<a class="headerlink" href="#ai-investigation-system" title="Permanent link">&para;</a></h1>
+<p>AI should move from "optional explanation layer" to "investigation assistant." It still must respect the read-only safety model.</p>
+<h2 id="ai-responsibilities">AI Responsibilities<a class="headerlink" href="#ai-responsibilities" title="Permanent link">&para;</a></h2>
+<p>AI may:</p>
+<ul>
+<li>summarize current runtime state</li>
+<li>explain incidents</li>
+<li>compare hypotheses</li>
+<li>prioritize next inspection steps</li>
+<li>ask clarifying questions</li>
+<li>identify missing evidence</li>
+<li>generate safe commands for the user to run manually</li>
+<li>explain config implications</li>
+<li>translate developer-level signals into human language</li>
+<li>produce reports</li>
+</ul>
+<p>AI may not:</p>
+<ul>
+<li>execute commands</li>
+<li>restart services</li>
+<li>edit files</li>
+<li>change config silently</li>
+<li>change deterministic scores</li>
+<li>create hidden conclusions without evidence</li>
+<li>present guesses as facts</li>
+</ul>
+<h2 id="investigation-flow">Investigation Flow<a class="headerlink" href="#investigation-flow" title="Permanent link">&para;</a></h2>
+<p>Target flow:</p>
+<pre><code class="language-text">User opens dashboard or runs CLI
+  -&gt; Inferra builds current situation snapshot
+  -&gt; deterministic engine ranks incidents and hypotheses
+  -&gt; AI receives structured evidence bundle
+  -&gt; AI returns investigation plan
+  -&gt; UI/CLI displays prioritized next steps
+  -&gt; user asks follow-up or inspects evidence
+  -&gt; AI updates plan from new context
+</code></pre>
+<p>Implemented first pass:</p>
+<ul>
+<li><code>src/ai/investigation.py</code> builds structured investigation outputs with deterministic fallback behavior.</li>
+<li><code>src/web/routers/investigate.py</code> exposes investigation endpoints for current state, incidents, and services.</li>
+<li><code>src/web/routers/ai.py</code> exposes ask, doctor, report, and trace paths.</li>
+<li><code>src/cli_core/commands/ai.py</code> exposes AI investigation, ask, report, doctor, and trace commands.</li>
+<li>The React control plane includes an AI Investigator workspace that consumes these APIs.</li>
+</ul>
+<h2 id="evidence-bundle">Evidence Bundle<a class="headerlink" href="#evidence-bundle" title="Permanent link">&para;</a></h2>
+<p>AI should receive structured bundles:</p>
+<pre><code class="language-json">{
+  &quot;mode&quot;: &quot;operator&quot;,
+  &quot;incident&quot;: {},
+  &quot;hypotheses&quot;: [],
+  &quot;events&quot;: [],
+  &quot;services&quot;: [],
+  &quot;runtime&quot;: {},
+  &quot;workspace&quot;: {},
+  &quot;constraints&quot;: {
+    &quot;read_only&quot;: true,
+    &quot;do_not_execute&quot;: true,
+    &quot;must_cite_evidence&quot;: true
+  }
+}
+</code></pre>
+<h2 id="ai-output-contract">AI Output Contract<a class="headerlink" href="#ai-output-contract" title="Permanent link">&para;</a></h2>
+<p>AI investigation output should be structured:</p>
+<pre><code class="language-json">{
+  &quot;headline&quot;: &quot;Short summary&quot;,
+  &quot;risk_level&quot;: &quot;low|medium|high|critical&quot;,
+  &quot;confidence&quot;: 0.0,
+  &quot;what_happened&quot;: [],
+  &quot;why_it_matters&quot;: [],
+  &quot;likely_causes&quot;: [],
+  &quot;evidence&quot;: [],
+  &quot;missing_evidence&quot;: [],
+  &quot;next_steps&quot;: [
+    {
+      &quot;title&quot;: &quot;Check recent service errors&quot;,
+      &quot;reason&quot;: &quot;Evidence shows error spike after restart&quot;,
+      &quot;safety&quot;: &quot;read_only&quot;,
+      &quot;command&quot;: &quot;inferra services events api --limit 25&quot;,
+      &quot;requires_user_action&quot;: true
+    }
+  ],
+  &quot;uncertainty&quot;: [],
+  &quot;citations&quot;: []
+}
+</code></pre>
+<h2 id="investigation-commands">Investigation Commands<a class="headerlink" href="#investigation-commands" title="Permanent link">&para;</a></h2>
+<p>Implemented CLI:</p>
+<pre><code class="language-powershell">inferra investigate now
+inferra investigate latest
+inferra investigate incident inc-123
+inferra investigate service api
+inferra services events api --limit 25
+inferra incidents show inc-123
+inferra ai doctor
+inferra ai ask &quot;what should I inspect first?&quot;
+inferra ai investigate latest
+inferra ai investigate incident inc-123
+inferra ai investigate service api
+inferra ai report inc-123 --mode operator
+inferra ai report inc-123 --mode developer
+inferra ai trace inc-123
+</code></pre>
+<p>The AI commands are read-only. They may propose safe checks for the user to run, but they do not execute remediation.</p>
+<h2 id="web-ai-ux">Web AI UX<a class="headerlink" href="#web-ai-ux" title="Permanent link">&para;</a></h2>
+<p>The AI panel should be attached to:</p>
+<ul>
+<li>overview</li>
+<li>incident detail</li>
+<li>service detail</li>
+<li>workspace detail</li>
+</ul>
+<p>It should always show:</p>
+<ul>
+<li>evidence used</li>
+<li>safety boundary</li>
+<li>provider mode</li>
+<li>confidence</li>
+<li>next steps</li>
+</ul>
+<h2 id="prompt-trace">Prompt Trace<a class="headerlink" href="#prompt-trace" title="Permanent link">&para;</a></h2>
+<p>Developer mode must expose:</p>
+<ul>
+<li>system prompt</li>
+<li>sanitized user prompt</li>
+<li>redaction summary</li>
+<li>model</li>
+<li>latency</li>
+<li>token limits if available</li>
+<li>guardrail warnings</li>
+</ul>
+<h2 id="remote-provider-safety">Remote Provider Safety<a class="headerlink" href="#remote-provider-safety" title="Permanent link">&para;</a></h2>
+<p>If <code>ai.allow_remote = true</code>, the UI and CLI should show clear warnings:</p>
+<ul>
+<li>remote provider enabled</li>
+<li>token env configured or missing</li>
+<li>raw log redaction state</li>
+<li>paths/IP/env redaction state</li>
+</ul>
+<h2 id="guardrail-rule">Guardrail Rule<a class="headerlink" href="#guardrail-rule" title="Permanent link">&para;</a></h2>
+<p>Every AI conclusion must connect back to deterministic evidence, runtime context, or explicit uncertainty.</p>
+              
+            </div>
+          </div><footer>
+    <div class="rst-footer-buttons" role="navigation" aria-label="Footer Navigation">
+        <a href="../../control_plane/web_control_plane/" class="btn btn-neutral float-left" title="Web control plane"><span class="icon icon-circle-arrow-left"></span> Previous</a>
+        <a href="../../workspace/workspace_intelligence/" class="btn btn-neutral float-right" title="Workspace intelligence">Next <span class="icon icon-circle-arrow-right"></span></a>
+    </div>
+
+  <hr/>
+
+  <div role="contentinfo">
+    <!-- Copyright etc -->
+  </div>
+
+  Built with <a href="https://www.mkdocs.org/">MkDocs</a> using a <a href="https://github.com/readthedocs/sphinx_rtd_theme">theme</a> provided by <a href="https://readthedocs.org">Read the Docs</a>.
+</footer>
+          
+        </div>
+      </div>
+
+    </section>
+
+  </div>
+
+  <div class="rst-versions" role="note" aria-label="Versions">
+  <span class="rst-current-version" data-toggle="rst-current-version">
+    
+    
+      <span><a href="../../control_plane/web_control_plane/" style="color: #fcfcfc">&laquo; Previous</a></span>
+    
+    
+      <span><a href="../../workspace/workspace_intelligence/" style="color: #fcfcfc">Next &raquo;</a></span>
+    
+  </span>
+</div>
+    <script src="../../../js/jquery-3.6.0.min.js"></script>
+    <script>var base_url = "../../..";</script>
+    <script src="../../../js/theme_extra.js"></script>
+    <script src="../../../js/theme.js"></script>
+      <script src="../../../search/main.js"></script>
+    <script>
+        jQuery(function () {
+            SphinxRtdTheme.Navigation.enable(true);
+        });
+    </script>
+
+</body>
+</html>

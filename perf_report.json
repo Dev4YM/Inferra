@@ -1,7 +1,7 @@
 {
   "analysis_anomaly": {
     "budget_ms": 50.0,
-    "elapsed_ms": 0.1609,
+    "elapsed_ms": 0.1467,
     "event_count": 500,
     "metric": "aggregate_events_into_bucket_rows_500_events_ms",
     "passed": true
@@ -9,7 +9,7 @@
   "normalization": {
     "budget_ms": 2.0,
     "metric": "normalize_event_p99_ms",
-    "p99_ms": 0.1752,
+    "p99_ms": 0.1595,
     "passed": true
   },
   "overall_passed": true,
@@ -17,7 +17,7 @@
     "budget_ms": 5.0,
     "iterations": 200,
     "metric": "compute_score_breakdown_p99_ms",
-    "p99_ms": 0.0104,
+    "p99_ms": 0.01,
     "passed": true
   }
 }

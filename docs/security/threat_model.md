@@ -7,7 +7,7 @@ This document describes the security posture of Inferra as shipped: a local oper
 - **Operator host**: trusted. Configuration files, TLS material for upstream proxies, and the optional `auth_token_env` bearer secret live here.
 - **Inferra process**: trusted. It reads configured sources (logs, metrics, Kubernetes API, Docker socket) and writes only under `storage.data_dir` (events, incidents, JSON sidecars).
 - **Observed systems**: untrusted inputs (log lines, API payloads). Inferra treats them as data, not code; parsers enforce size limits and normalization budgets.
-- **Browser session**: semi-trusted. The bundled UI is static assets plus same-origin API/WebSocket calls.
+- **Browser session**: semi-trusted. The bundled React UI is served as static build assets plus same-origin API/WebSocket calls.
 
 ## Network exposure
 
@@ -23,7 +23,7 @@ This document describes the security posture of Inferra as shipped: a local oper
 
 ## Web UI hardening
 
-- **CSP**: `Content-Security-Policy` is set on HTTP responses with `default-src 'self'`, `script-src 'self'`, and `style-src 'self' 'unsafe-inline'` (Tailwind build emits utility classes). No inline script blocks are used after the UI build; entrypoint is `script type="module"` from `/static/js/main.js`.
+- **CSP**: `Content-Security-Policy` is set on HTTP responses with `default-src 'self'`, `script-src 'self'`, and `style-src 'self' 'unsafe-inline'`. No inline script blocks are used after the UI build; the React entrypoint is emitted under `/assets/`.
 - **Frame embedding**: `frame-ancestors 'none'` reduces clickjacking for operators who open the UI in a browser.
 
 ## Integrity and availability

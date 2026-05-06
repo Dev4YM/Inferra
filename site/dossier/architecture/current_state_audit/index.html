@@ -1,0 +1,459 @@
+<!DOCTYPE html>
+<html class="writer-html5" lang="en" >
+<head>
+    <meta charset="utf-8" />
+    <meta http-equiv="X-UA-Compatible" content="IE=edge" />
+    <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+      <link rel="shortcut icon" href="../../../img/favicon.ico" />
+    <title>Current state audit - Inferra</title>
+    <link rel="stylesheet" href="../../../css/theme.css" />
+    <link rel="stylesheet" href="../../../css/theme_extra.css" />
+        <link rel="stylesheet" href="https://cdnjs.cloudflare.com/ajax/libs/highlight.js/11.8.0/styles/github.min.css" />
+    
+      <script>
+        // Current page data
+        var mkdocs_page_name = "Current state audit";
+        var mkdocs_page_input_path = "dossier\\architecture\\current_state_audit.md";
+        var mkdocs_page_url = null;
+      </script>
+    
+    <!--[if lt IE 9]>
+      <script src="../../../js/html5shiv.min.js"></script>
+    <![endif]-->
+      <script src="https://cdnjs.cloudflare.com/ajax/libs/highlight.js/11.8.0/highlight.min.js"></script>
+      <script>hljs.highlightAll();</script> 
+</head>
+
+<body class="wy-body-for-nav" role="document">
+
+  <div class="wy-grid-for-nav">
+    <nav data-toggle="wy-nav-shift" class="wy-nav-side stickynav">
+    <div class="wy-side-scroll">
+      <div class="wy-side-nav-search">
+          <a href="../../.." class="icon icon-home"> Inferra
+        </a><div role="search">
+  <form id ="rtd-search-form" class="wy-form" action="../../../search.html" method="get">
+      <input type="text" name="q" placeholder="Search docs" aria-label="Search docs" title="Type search term here" />
+  </form>
+</div>
+      </div>
+
+      <div class="wy-menu wy-menu-vertical" data-spy="affix" role="navigation" aria-label="Navigation menu">
+              <ul>
+                <li class="toctree-l1"><a class="reference internal" href="../../..">Home</a>
+                </li>
+              </ul>
+              <p class="caption"><span class="caption-text">Operator Guides</span></p>
+              <ul>
+                  <li class="toctree-l1"><a class="reference internal" href="../../../operations/install/">Install</a>
+                  </li>
+                  <li class="toctree-l1"><a class="reference internal" href="../../../operations/windows_exe_build/">Windows exe - start here</a>
+                  </li>
+                  <li class="toctree-l1"><a class="reference internal" href="../../../operations/ai_provider/">AI provider</a>
+                  </li>
+                  <li class="toctree-l1"><a class="reference internal" href="../../../operations/collectors/">Collectors</a>
+                  </li>
+                  <li class="toctree-l1"><a class="reference internal" href="../../../operations/tuning/">Tuning</a>
+                  </li>
+                  <li class="toctree-l1"><a class="reference internal" href="../../../operations/upgrade/">Upgrade</a>
+                  </li>
+                  <li class="toctree-l1"><a class="reference internal" href="../../../operations/troubleshooting/">Troubleshooting</a>
+                  </li>
+                  <li class="toctree-l1"><a class="reference internal" href="../../../operations/ci/">CI</a>
+                  </li>
+                  <li class="toctree-l1"><a class="reference internal" href="../../../operations/release/">Release checklist</a>
+                  </li>
+                  <li class="toctree-l1"><a class="reference internal" href="../../../operations/release_signing/">Release signing</a>
+                  </li>
+              </ul>
+              <p class="caption"><span class="caption-text">Security</span></p>
+              <ul>
+                  <li class="toctree-l1"><a class="reference internal" href="../../../security/threat_model/">Threat model</a>
+                  </li>
+              </ul>
+              <p class="caption"><span class="caption-text">Reset Dossier</span></p>
+              <ul class="current">
+                  <li class="toctree-l1"><a class="reference internal" href="../../">Overview</a>
+                  </li>
+                  <li class="toctree-l1"><a class="reference internal" href="../../product/product_vision/">Product vision</a>
+                  </li>
+                  <li class="toctree-l1"><a class="reference internal" href="../../product/modes_and_personas/">Modes and personas</a>
+                  </li>
+                  <li class="toctree-l1 current"><a class="reference internal current" href="#">Current state audit</a>
+    <ul class="current">
+    <li class="toctree-l2"><a class="reference internal" href="#what-is-strong">What Is Strong</a>
+    </li>
+    <li class="toctree-l2"><a class="reference internal" href="#what-feels-unprofessional">What Feels Unprofessional</a>
+        <ul>
+    <li class="toctree-l3"><a class="reference internal" href="#ui-source-has-been-consolidated">UI Source Has Been Consolidated</a>
+    </li>
+    <li class="toctree-l3"><a class="reference internal" href="#frontend-dependencies-are-no-longer-source">Frontend Dependencies Are No Longer Source</a>
+    </li>
+    <li class="toctree-l3"><a class="reference internal" href="#backend-api-split-is-now-mostly-done">Backend API Split Is Now Mostly Done</a>
+    </li>
+    <li class="toctree-l3"><a class="reference internal" href="#cli-parser-still-needs-deeper-decomposition">CLI Parser Still Needs Deeper Decomposition</a>
+    </li>
+    <li class="toctree-l3"><a class="reference internal" href="#product-identity-too-narrow">Product Identity Too Narrow</a>
+    </li>
+    <li class="toctree-l3"><a class="reference internal" href="#dashboard-is-now-a-control-plane-but-needs-product-polish">Dashboard Is Now a Control Plane, but Needs Product Polish</a>
+    </li>
+        </ul>
+    </li>
+    <li class="toctree-l2"><a class="reference internal" href="#current-api-inventory">Current API Inventory</a>
+    </li>
+    <li class="toctree-l2"><a class="reference internal" href="#current-cli-inventory">Current CLI Inventory</a>
+    </li>
+    <li class="toctree-l2"><a class="reference internal" href="#immediate-cleanup-findings">Immediate Cleanup Findings</a>
+    </li>
+    </ul>
+                  </li>
+                  <li class="toctree-l1"><a class="reference internal" href="../target_architecture/">Target architecture</a>
+                  </li>
+                  <li class="toctree-l1"><a class="reference internal" href="../repository_reset_plan/">Repository reset plan</a>
+                  </li>
+                  <li class="toctree-l1"><a class="reference internal" href="../../control_plane/cli_control_plane/">CLI control plane</a>
+                  </li>
+                  <li class="toctree-l1"><a class="reference internal" href="../../control_plane/web_control_plane/">Web control plane</a>
+                  </li>
+                  <li class="toctree-l1"><a class="reference internal" href="../../ai/ai_investigation_system/">AI investigation system</a>
+                  </li>
+                  <li class="toctree-l1"><a class="reference internal" href="../../workspace/workspace_intelligence/">Workspace intelligence</a>
+                  </li>
+                  <li class="toctree-l1"><a class="reference internal" href="../../execution/execution_roadmap/">Execution roadmap</a>
+                  </li>
+                  <li class="toctree-l1"><a class="reference internal" href="../../execution/acceptance_gates/">Acceptance gates</a>
+                  </li>
+                  <li class="toctree-l1"><a class="reference internal" href="../../governance/open_decisions/">Open decisions</a>
+                  </li>
+              </ul>
+              <p class="caption"><span class="caption-text">Architecture Decision Records</span></p>
+              <ul>
+                  <li class="toctree-l1"><a class="reference internal" href="../../../adr/0001-local-first-guided-ai/">ADR 0001 - Local-first guided AI</a>
+                  </li>
+                  <li class="toctree-l1"><a class="reference internal" href="../../../adr/0002-flat-src-layout/">ADR 0002 - Flat src layout</a>
+                  </li>
+                  <li class="toctree-l1"><a class="reference internal" href="../../../adr/0003-storage-protocols/">ADR 0003 - Storage protocols</a>
+                  </li>
+                  <li class="toctree-l1"><a class="reference internal" href="../../../adr/0004-windows-first-collectors/">ADR 0004 - Windows-first collectors</a>
+                  </li>
+                  <li class="toctree-l1"><a class="reference internal" href="../../../adr/0005-ai-presentation-only/">ADR 0005 - AI presentation-only</a>
+                  </li>
+                  <li class="toctree-l1"><a class="reference internal" href="../../../adr/0006-ollama-gemma-default/">ADR 0006 - Ollama Gemma default</a>
+                  </li>
+              </ul>
+              <p class="caption"><span class="caption-text">Planning</span></p>
+              <ul>
+                  <li class="toctree-l1"><a class="reference internal" href="../../../implementation_roadmap/">Implementation roadmap</a>
+                  </li>
+                  <li class="toctree-l1"><a class="reference internal" href="../../../planning/architecture_overview/">Architecture overview</a>
+                  </li>
+                  <li class="toctree-l1"><a class="reference internal" href="../../../planning/full_build_architecture_plan/">Full build architecture plan</a>
+                  </li>
+                  <li class="toctree-l1"><a class="reference internal" href="../../../planning/data_flow_contracts/">Data flow contracts</a>
+                  </li>
+                  <li class="toctree-l1"><a class="reference internal" href="../../../planning/implementation_index/">Implementation index</a>
+                  </li>
+                  <li class="toctree-l1"><a class="reference internal" >Collectors and runtime</a>
+    <ul>
+                <li class="toctree-l2"><a class="reference internal" href="../../../planning/collector_architecture/">Collector architecture</a>
+                </li>
+                <li class="toctree-l2"><a class="reference internal" href="../../../planning/runtime_context_builder/">Runtime context builder</a>
+                </li>
+                <li class="toctree-l2"><a class="reference internal" href="../../../planning/log_normalization_pipeline/">Log normalization pipeline</a>
+                </li>
+                <li class="toctree-l2"><a class="reference internal" href="../../../planning/event_model/">Event model</a>
+                </li>
+                <li class="toctree-l2"><a class="reference internal" href="../../../planning/event_deduplication/">Event deduplication</a>
+                </li>
+                <li class="toctree-l2"><a class="reference internal" href="../../../planning/noise_filtering/">Noise filtering</a>
+                </li>
+    </ul>
+                  </li>
+                  <li class="toctree-l1"><a class="reference internal" >Analysis and reasoning</a>
+    <ul>
+                <li class="toctree-l2"><a class="reference internal" href="../../../planning/anomaly_detection/">Anomaly detection</a>
+                </li>
+                <li class="toctree-l2"><a class="reference internal" href="../../../planning/correlation_engine/">Correlation engine</a>
+                </li>
+                <li class="toctree-l2"><a class="reference internal" href="../../../planning/incident_lifecycle/">Incident lifecycle</a>
+                </li>
+                <li class="toctree-l2"><a class="reference internal" href="../../../planning/causal_graph_engine/">Causal graph engine</a>
+                </li>
+                <li class="toctree-l2"><a class="reference internal" href="../../../planning/hypothesis_engine/">Hypothesis engine</a>
+                </li>
+                <li class="toctree-l2"><a class="reference internal" href="../../../planning/hypothesis_validation/">Hypothesis validation</a>
+                </li>
+                <li class="toctree-l2"><a class="reference internal" href="../../../planning/scoring_engine/">Scoring engine</a>
+                </li>
+                <li class="toctree-l2"><a class="reference internal" href="../../../planning/contradiction_handling/">Contradiction handling</a>
+                </li>
+                <li class="toctree-l2"><a class="reference internal" href="../../../planning/confidence_calibration/">Confidence calibration</a>
+                </li>
+    </ul>
+                  </li>
+                  <li class="toctree-l1"><a class="reference internal" >Product contracts</a>
+    <ul>
+                <li class="toctree-l2"><a class="reference internal" href="../../../planning/failure_model/">Failure model</a>
+                </li>
+                <li class="toctree-l2"><a class="reference internal" href="../../../planning/failure_taxonomy/">Failure taxonomy</a>
+                </li>
+                <li class="toctree-l2"><a class="reference internal" href="../../../planning/explanation_layer/">Explanation layer</a>
+                </li>
+                <li class="toctree-l2"><a class="reference internal" href="../../../planning/storage_architecture/">Storage architecture</a>
+                </li>
+                <li class="toctree-l2"><a class="reference internal" href="../../../planning/ui_spec/">UI spec</a>
+                </li>
+                <li class="toctree-l2"><a class="reference internal" href="../../../planning/system_limitations/">System limitations</a>
+                </li>
+                <li class="toctree-l2"><a class="reference internal" href="../../../planning/constraints/">Constraints</a>
+                </li>
+                <li class="toctree-l2"><a class="reference internal" href="../../../planning/testing_strategy/">Testing strategy</a>
+                </li>
+    </ul>
+                  </li>
+              </ul>
+      </div>
+    </div>
+    </nav>
+
+    <section data-toggle="wy-nav-shift" class="wy-nav-content-wrap">
+      <nav class="wy-nav-top" role="navigation" aria-label="Mobile navigation menu">
+          <i data-toggle="wy-nav-top" class="fa fa-bars"></i>
+          <a href="../../..">Inferra</a>
+        
+      </nav>
+      <div class="wy-nav-content">
+        <div class="rst-content"><div role="navigation" aria-label="breadcrumbs navigation">
+  <ul class="wy-breadcrumbs">
+    <li><a href="../../.." class="icon icon-home" aria-label="Docs"></a></li>
+          <li class="breadcrumb-item">Reset Dossier</li>
+      <li class="breadcrumb-item active">Current state audit</li>
+    <li class="wy-breadcrumbs-aside">
+    </li>
+  </ul>
+  <hr/>
+</div>
+          <div role="main" class="document" itemscope="itemscope" itemtype="http://schema.org/Article">
+            <div class="section" itemprop="articleBody">
+              
+                <h1 id="current-state-audit">Current State Audit<a class="headerlink" href="#current-state-audit" title="Permanent link">&para;</a></h1>
+<p>This audit reflects the repo state after the dossier implementation and hardening pass.</p>
+<h2 id="what-is-strong">What Is Strong<a class="headerlink" href="#what-is-strong" title="Permanent link">&para;</a></h2>
+<p>The backend engine has real substance:</p>
+<ul>
+<li>collectors exist for multiple platforms</li>
+<li>normalization, deduplication, noise filtering, and storage are implemented</li>
+<li>SQLite migrations exist</li>
+<li>incident lifecycle exists</li>
+<li>deterministic reasoning and scoring exist</li>
+<li>Ollama AI integration exists</li>
+<li>structured AI investigation now exists through CLI and API paths</li>
+<li>workspace discovery and service mapping now exist</li>
+<li>the React dashboard has been consolidated into <code>src/web/frontend</code></li>
+<li>the backend API is split into domain routers for the major new control-plane areas</li>
+<li>the CLI now has domain command modules for the first control-plane slice</li>
+<li>tests are broad and currently pass</li>
+<li>Windows service support exists</li>
+<li>Docker, systemd, Helm, macOS, and release docs exist</li>
+</ul>
+<p>The project is no longer just a runtime failure explainer with scattered shells. It is now moving into the intended shape: a CLI-first, AI-assisted runtime intelligence control plane. The remaining issue is polish, consistency, deeper UX, and release-grade organization.</p>
+<h2 id="what-feels-unprofessional">What Feels Unprofessional<a class="headerlink" href="#what-feels-unprofessional" title="Permanent link">&para;</a></h2>
+<h3 id="ui-source-has-been-consolidated">UI Source Has Been Consolidated<a class="headerlink" href="#ui-source-has-been-consolidated" title="Permanent link">&para;</a></h3>
+<p>The older <code>src/web/static/</code> UI and top-level <code>webui/</code> product root have been removed from the active source layout.</p>
+<p>The official frontend source is now:</p>
+<pre><code class="language-text">src/web/frontend/
+</code></pre>
+<p>The packaged build output is:</p>
+<pre><code class="language-text">src/web/ui_dist/
+</code></pre>
+<p>This resolves the previous confusion about which UI should be edited and packaged. Remaining work is product polish: the React UI now has the right control-plane shape, but it still needs more refined workflows, stronger visual hierarchy, and browser-level coverage for the richer screens.</p>
+<h3 id="frontend-dependencies-are-no-longer-source">Frontend Dependencies Are No Longer Source<a class="headerlink" href="#frontend-dependencies-are-no-longer-source" title="Permanent link">&para;</a></h3>
+<p><code>node_modules</code> and TypeScript build-info files are ignored and should not be committed.</p>
+<h3 id="backend-api-split-is-now-mostly-done">Backend API Split Is Now Mostly Done<a class="headerlink" href="#backend-api-split-is-now-mostly-done" title="Permanent link">&para;</a></h3>
+<p><code>src/web/api.py</code> is no longer the only owner of web behavior. Frontend asset serving lives in <code>src/web/frontend_assets.py</code>, system/control-plane endpoints live in <code>src/web/routes/system.py</code>, and domain APIs now live under <code>src/web/routers/</code>.</p>
+<p>The active split includes:</p>
+<ul>
+<li><code>src/web/routers/ai.py</code></li>
+<li><code>src/web/routers/collectors.py</code></li>
+<li><code>src/web/routers/config.py</code></li>
+<li><code>src/web/routers/events.py</code></li>
+<li><code>src/web/routers/health.py</code></li>
+<li><code>src/web/routers/incidents.py</code></li>
+<li><code>src/web/routers/investigate.py</code></li>
+<li><code>src/web/routers/metrics.py</code></li>
+<li><code>src/web/routers/services.py</code></li>
+<li><code>src/web/routers/topology.py</code></li>
+<li><code>src/web/routers/workspace.py</code></li>
+</ul>
+<p><code>src/web/api.py</code> still owns app creation, lifespan wiring, websocket behavior, and some shared dashboard composition. That is acceptable for the current pass, but the next polish wave should keep moving shared API contracts and schemas into clearer modules.</p>
+<h3 id="cli-parser-still-needs-deeper-decomposition">CLI Parser Still Needs Deeper Decomposition<a class="headerlink" href="#cli-parser-still-needs-deeper-decomposition" title="Permanent link">&para;</a></h3>
+<p><code>src/cli.py</code> is the main control plane, but it is too large and owns too many domains in one file.</p>
+<p>The first command-module split now exists under <code>src/cli_core/commands/</code>, including AI, config, runtime, service, workspace, and related command handlers. However, <code>src/cli.py</code> still owns a lot of parser construction and legacy behavior.</p>
+<p>It still mixes:</p>
+<ul>
+<li>parser construction</li>
+<li>setup</li>
+<li>some config defaults</li>
+<li>some collector wiring</li>
+<li>storage/calibration command glue</li>
+<li>mode and status rendering glue</li>
+<li>HTTP client calls</li>
+</ul>
+<p>The CLI should remain the main control plane. The direction is right now; the next issue is making the parser and command registration as clean as the command handlers.</p>
+<h3 id="product-identity-too-narrow">Product Identity Too Narrow<a class="headerlink" href="#product-identity-too-narrow" title="Permanent link">&para;</a></h3>
+<p>The README now describes Inferra as a local-first AI-integrated runtime intelligence control plane. This matches the intended product direction better than the older "runtime failure explanation system" framing.</p>
+<h3 id="dashboard-is-now-a-control-plane-but-needs-product-polish">Dashboard Is Now a Control Plane, but Needs Product Polish<a class="headerlink" href="#dashboard-is-now-a-control-plane-but-needs-product-polish" title="Permanent link">&para;</a></h3>
+<p>The current React UI now has the official home under <code>src/web/frontend</code> and provides the intended top-level control-plane shape:</p>
+<ul>
+<li>Overview</li>
+<li>Incidents</li>
+<li>Systems</li>
+<li>Evidence</li>
+<li>AI Investigator</li>
+<li>Workspace</li>
+<li>Control</li>
+<li>Settings</li>
+</ul>
+<p>It is no longer just a JSON reader. Remaining work is polish: more guided empty states, browser QA, stronger mobile behavior, richer incident timelines, better service/workspace drilldowns, and persistence that cleanly reconciles UI mode with config mode.</p>
+<h2 id="current-api-inventory">Current API Inventory<a class="headerlink" href="#current-api-inventory" title="Permanent link">&para;</a></h2>
+<p>Current FastAPI endpoints include:</p>
+<pre><code class="language-text">GET  /api/version
+GET  /api/metrics
+GET  /api/config
+PUT  /api/config
+GET  /api/health
+GET  /api/dashboard
+GET  /api/runtime/context
+GET  /api/workspace/projects
+GET  /api/workspace/map
+GET  /api/workspace/services
+GET  /api/workspace/inspect
+POST /api/workspace/mappings
+GET  /api/overview
+GET  /api/collectors
+POST /api/collectors/start
+POST /api/collectors/stop
+POST /api/collectors/one/start
+POST /api/collectors/one/stop
+GET  /api/ai/status
+GET  /api/ai/models
+POST /api/ai/config
+GET  /api/ai/doctor
+POST /api/ai/ask
+GET  /api/ai/report/{incident_id}
+GET  /api/events
+GET  /api/events/{event_id}
+GET  /api/anomaly/{service}/status
+GET  /api/logs
+GET  /api/incidents
+GET  /api/incidents/{incident_id}
+GET  /api/incidents/{incident_id}/ai-trace
+GET  /api/ai/trace/{incident_id}
+GET  /api/incidents/{incident_id}/events
+GET  /api/incidents/{incident_id}/hypotheses
+POST /api/incidents/{incident_id}/feedback
+GET  /api/incidents/{incident_id}/clusters
+GET  /api/incidents/{incident_id}/explanation
+POST /api/incidents/{incident_id}/chat
+GET  /api/incidents/{incident_id}/chat/messages
+GET  /api/search/natural
+POST /api/incidents/{incident_id}/resolve
+GET  /api/services
+GET  /api/services/{service_id}
+GET  /api/services/{service_id}/events
+GET  /api/topology
+POST /api/topology/edges
+GET  /api/incidents/{incident_id}/state-log
+GET  /api/investigate/now
+GET  /api/investigate/incident/{incident_id}
+GET  /api/investigate/service/{service_id}
+</code></pre>
+<p>This is now a good control-plane foundation. The next step is contract hardening: shared response schemas, browser coverage, and better docs for each endpoint family.</p>
+<h2 id="current-cli-inventory">Current CLI Inventory<a class="headerlink" href="#current-cli-inventory" title="Permanent link">&para;</a></h2>
+<p>The CLI currently covers:</p>
+<pre><code class="language-text">run
+serve
+run-collectors
+onboard
+setup
+check-config
+config show/get/set/preset
+collectors status/start/stop
+ai status/setup/models/pull/test/doctor/ask/investigate/report/trace
+init-db
+reason-incident
+storage verify/vacuum/backup
+one-shot collectors
+reset-baselines
+reset-weights
+calibration show
+service status/install/start/stop/restart/remove/repair
+mode show/set
+status
+overview
+investigate now/latest/incident/service/workspace
+incidents list/show
+events list/show
+services list/show/events
+workspace map/services/inspect
+doctor
+demo seed/clear
+completion
+</code></pre>
+<p>This is now a credible CLI-first control plane. The next issue is implementation layout and UX finish: continue shrinking <code>src/cli.py</code>, make onboarding feel smoother, and ensure every important web action has an equally good CLI path.</p>
+<h2 id="immediate-cleanup-findings">Immediate Cleanup Findings<a class="headerlink" href="#immediate-cleanup-findings" title="Permanent link">&para;</a></h2>
+<ul>
+<li>Continue moving shared API contracts and remaining websocket/dashboard glue into clearer modules.</li>
+<li>Continue decomposing <code>src/cli.py</code> so parser registration and command execution are easier to trust.</li>
+<li>Add browser coverage for the new Overview, AI Investigator, Workspace, Control, and Settings screens.</li>
+<li>Reconcile web mode persistence with persisted config mode so operator/developer behavior feels consistent everywhere.</li>
+<li>Deliberately decide what to do with generated docs/site artifacts in git instead of letting staged generated deletions linger.</li>
+</ul>
+              
+            </div>
+          </div><footer>
+    <div class="rst-footer-buttons" role="navigation" aria-label="Footer Navigation">
+        <a href="../../product/modes_and_personas/" class="btn btn-neutral float-left" title="Modes and personas"><span class="icon icon-circle-arrow-left"></span> Previous</a>
+        <a href="../target_architecture/" class="btn btn-neutral float-right" title="Target architecture">Next <span class="icon icon-circle-arrow-right"></span></a>
+    </div>
+
+  <hr/>
+
+  <div role="contentinfo">
+    <!-- Copyright etc -->
+  </div>
+
+  Built with <a href="https://www.mkdocs.org/">MkDocs</a> using a <a href="https://github.com/readthedocs/sphinx_rtd_theme">theme</a> provided by <a href="https://readthedocs.org">Read the Docs</a>.
+</footer>
+          
+        </div>
+      </div>
+
+    </section>
+
+  </div>
+
+  <div class="rst-versions" role="note" aria-label="Versions">
+  <span class="rst-current-version" data-toggle="rst-current-version">
+    
+    
+      <span><a href="../../product/modes_and_personas/" style="color: #fcfcfc">&laquo; Previous</a></span>
+    
+    
+      <span><a href="../target_architecture/" style="color: #fcfcfc">Next &raquo;</a></span>
+    
+  </span>
+</div>
+    <script src="../../../js/jquery-3.6.0.min.js"></script>
+    <script>var base_url = "../../..";</script>
+    <script src="../../../js/theme_extra.js"></script>
+    <script src="../../../js/theme.js"></script>
+      <script src="../../../search/main.js"></script>
+    <script>
+        jQuery(function () {
+            SphinxRtdTheme.Navigation.enable(true);
+        });
+    </script>
+
+</body>
+</html>

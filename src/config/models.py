@@ -501,6 +501,35 @@ class AIConfig:
 
 
 @_config_dataclass
+class ExperienceConfig:
+    mode: Literal["operator", "developer"] = "operator"
+    ai_role: Literal["observer", "investigator", "researcher"] = "investigator"
+    suggest_safe_actions: bool = True
+    execute_actions: bool = False
+    show_raw_evidence_by_default: bool = False
+
+
+@_config_dataclass
+class WorkspaceServiceMapping:
+    service_id: str = Field(default="", min_length=1, max_length=128)
+    project_path: str = Field(default="", min_length=1)
+    confidence: float = Field(default=1.0, ge=0.0, le=1.0)
+    source: Literal["user", "auto", "compose", "process", "container"] = "user"
+    notes: str = ""
+
+
+@_config_dataclass
+class WorkspaceConfig:
+    enabled: bool = True
+    roots: list[str] = field(default_factory=list)
+    max_depth: int = Field(default=4, ge=1, le=10)
+    max_results: int = Field(default=100, ge=1, le=2000)
+    map_runtime: bool = True
+    redact_env_files: bool = True
+    service_mappings: list[WorkspaceServiceMapping] = field(default_factory=list)
+
+
+@_config_dataclass
 class InferraConfig:
     server: ServerConfig = field(default_factory=ServerConfig)
     storage: StorageConfig = field(default_factory=StorageConfig)
@@ -521,3 +550,5 @@ class InferraConfig:
     topology: TopologyConfig = field(default_factory=TopologyConfig)
     logging: LoggingConfig = field(default_factory=LoggingConfig)
     ai: AIConfig = field(default_factory=AIConfig)
+    experience: ExperienceConfig = field(default_factory=ExperienceConfig)
+    workspace: WorkspaceConfig = field(default_factory=WorkspaceConfig)

@@ -1,12 +1,12 @@
 # Inferra
 
-Inferra is a local-first runtime failure explanation system. It collects operational signals, stores them locally in SQLite, builds deterministic incident hypotheses, and optionally uses a local Ollama model to explain the evidence in plain language.
+Inferra is a local-first AI-integrated runtime intelligence control plane. It observes local systems, stores operational signals in SQLite, investigates incidents, explains evidence in plain language, and guides safe next steps without mutating the systems it watches.
 
 **Documentation (operator guides, install, troubleshooting):** all Markdown under [`docs/`](docs/) — browse in the repo or run a local site with MkDocs: `python -m pip install -e ".[docs]"` then `mkdocs serve` and open the URL it prints (usually [http://127.0.0.1:8000](http://127.0.0.1:8000)). A pre-built static copy may exist under `site/` after `mkdocs build`.
 
 | What Inferra **is** | What Inferra **is not** |
 | --- | --- |
-| A read-only diagnostic that correlates local signals into explainable incidents | An auto-remediation or remote-control tool |
+| A read-only observer, researcher, and investigator for local runtime signals | An auto-remediation or remote-control tool |
 | Deterministic ranking and scoring (rules + auditable state) with optional language explanations | A black-box “root cause AI” that silently changes scores |
 | Python + SQLite + optional on-prem Ollama | A cloud observability suite or mandatory SaaS dependency |
 
@@ -15,8 +15,12 @@ Product positioning and AI boundaries are documented in [ADR 0001: Local-first g
 ## Current Capabilities
 
 - Python + SQLite local storage.
-- CLI-first setup, configuration, collection, and server control.
-- Optional FastAPI web dashboard.
+- CLI-first onboarding, mode selection, configuration, collection, and server control.
+- Two experience modes: operator (default) and developer (raw detail, diagnostics, and workspace-linked debugging), toggleable from CLI (`inferra mode set ...`) and from the web UI.
+- React control plane under `src/web/frontend` with an Overview, Incidents, Systems, Evidence, AI Investigator, Workspace, Control, and Settings layout (no raw-JSON-first pages).
+- Structured AI investigation contract (`/api/investigate/now|incident|service`, `inferra ai investigate|ask|report|trace|doctor`) with cited evidence, explicit uncertainty, and a deterministic fallback when AI is disabled.
+- Workspace intelligence: project discovery, service-to-project mapping with confidence and signals, and explicit user mappings persisted into `inferra.toml` (`/api/workspace/*`, `inferra workspace map|services|inspect`).
+- Optional FastAPI web dashboard/control plane.
 - Optional Ollama AI explanations, incident chat (persisted in SQLite), operator-visible sanitized prompts on the AI Trace tab, and natural-language event search (`GET /api/search/natural?q=...` when AI is enabled).
 - Gemma 3 and Gemma 4 model registry for Ollama tags.
 - Windows-first collectors:
@@ -43,15 +47,19 @@ Product positioning and AI boundaries are documented in [ADR 0001: Local-first g
 Install the project in editable mode with `python -m pip install -e ".[dev]"`.
 
 ```powershell
-inferra --config inferra.toml setup --yes --skip-connection-test
+inferra --config inferra.toml onboard --yes --mode operator --preset windows-server --model gemma4:e4b --skip-connection-test
+inferra --config inferra.toml guide
 inferra --config inferra.toml init-db
+inferra --config inferra.toml mode show
 inferra --config inferra.toml serve --help
+inferra --config inferra.toml dashboard --no-open
+inferra --config inferra.toml investigate latest
 inferra --config inferra.toml collectors status
 ```
 
 Start the live server with `inferra --config inferra.toml serve`, then open `http://127.0.0.1:7433`.
 
-The static console uses a vendored Tailwind bundle (`src/web/static/tailwind.css`). Regenerate it after changing Tailwind classes in `index.html` or under `src/web/static/js/` by running `bash scripts/build-ui.sh` from the repository root (Git Bash on Windows is sufficient). Optional UI browser tests: `python -m pip install -e ".[ui]"`, `python -m playwright install chromium`, then `python -m pytest tests/integration/test_ui.py`.
+The web console source lives in `src/web/frontend` and builds into the packaged `src/web/ui_dist` bundle. Rebuild it with `scripts/build-web.ps1` on Windows or `bash scripts/build-web.sh` on Unix-like shells. Optional UI browser tests: `python -m pip install -e ".[ui]"`, `python -m playwright install chromium`, then `python -m pytest tests/integration/test_ui.py`.
 
 Service anomaly status (closed time buckets, spike/sustained/absence signals) is exposed at `GET /api/anomaly/{service}/status` with optional `window_hours` (default 24, max 168).
 
@@ -66,8 +74,8 @@ python -m cli --config inferra.toml serve --help
 AI is disabled by default. Prepare the config for local Gemma 4:
 
 ```powershell
-inferra --config inferra.toml config set ai.enabled false
-inferra --config inferra.toml config set ai.model gemma4:e4b
+inferra --config inferra.toml ai setup --disable
+inferra --config inferra.toml ai setup --enable --model gemma4:e4b
 inferra --config inferra.toml ai models
 ```
 
@@ -77,20 +85,40 @@ Remote Ollama-compatible servers are configured through `ai.base_url`, `ai.allow
 
 ## Command Surface
 
-- Lifecycle: `setup`, `serve`, `run`, `run-collectors`, `init-db`, `check-config`, `reason-incident <id>`, `reset-weights`, `calibration show`, `completion bash|zsh|fish|powershell`
-- AI: `ai status`, `ai models`, `ai test`, `ai pull`
+- Lifecycle: `onboard`, `setup`, `guide`, `dashboard`, `serve`, `run`, `run-collectors`, `init-db`, `check-config`, `reason-incident <id>`, `reset-weights`, `calibration show`, `completion bash|zsh|fish|powershell`
+- AI: `ai setup`, `ai status`, `ai models`, `ai test`, `ai pull`, `ai ask "<question>"`, `ai investigate latest|incident <id>|service <id>`, `ai report <incident_id>`, `ai trace <incident_id>`, `ai doctor`
+- Windows service: `service status`, `service install`, `service start`, `service stop`, `service restart`, `service remove`, `service repair`
+- Investigation: `investigate now`, `investigate latest`, `investigate incident <id>`, `investigate service <service>`, `doctor`, `doctor --release`
+- Runtime inspection: `incidents list|show`, `events list|show`, `services list|show|events`, `overview`, `status`, `workspace`
+- Workspace: `workspace`, `workspace scan`, `workspace map`, `workspace services`, `workspace inspect <path>`
+- Demo data: `demo seed [--service <id> --count <n>]`, `demo clear`
 - Collector control: `collectors status`, `collectors start`, `collectors stop`
 - One-shot collection: `collect-host`, `collect-processes`, `collect-services`, `collect-eventlog`, `collect-syslog`, `collect-journald`, `collect-kubernetes`
 - Config: `config show`, `config get`, `config set`, `config preset`
+- Experience: `mode show`, `mode set operator`, `mode set developer`
 
 ```powershell
 inferra --config inferra.toml check-config
 inferra --json --config inferra.toml check-config
+inferra --config inferra.toml guide --profile operator
+inferra --config inferra.toml guide --profile developer
+inferra --config inferra.toml guide --profile server
+inferra --config inferra.toml dashboard --section workspace
 inferra --config inferra.toml config show
 inferra --config inferra.toml config get ai.model
 inferra --config inferra.toml config set ai.enabled false
+inferra --config inferra.toml mode set developer
+inferra --config inferra.toml doctor
+inferra --config inferra.toml doctor --release
+inferra --config inferra.toml investigate latest
+inferra --config inferra.toml incidents list
+inferra --config inferra.toml events list --limit 25
+inferra --config inferra.toml services list
+inferra --config inferra.toml ai setup --enable --model gemma4:e4b
 inferra --config inferra.toml ai status
 inferra --config inferra.toml ai models
+inferra --config inferra.toml service status
+inferra --config inferra.toml service install --startup auto
 inferra --config inferra.toml collect-host
 inferra --config inferra.toml collect-processes
 inferra --config inferra.toml reset-weights
@@ -128,6 +156,7 @@ The project intentionally uses a flat `src/` layout with top-level packages:
 src/
   ai/
   analysis/
+  cli_core/         # CommandResult/Error and HTTP client helpers
   collectors/
   config/
   core/
@@ -135,9 +164,16 @@ src/
   explanation/
   normalization/
   reasoning/
-  runtime/
+  runtime/          # workspace_scan, workspace_map, runtime context
   storage/
   web/
+    api.py          # FastAPI factory + /ws websocket
+    _shared.py      # serialization helpers shared by routers
+    frontend/       # React Vite source
+    routers/        # ai, collectors, events, incidents, services,
+                    # topology, investigate, workspace
+    routes/system.py
+    ui_dist/        # built React bundle (packaged)
   app.py
   cli.py
   windows_service.py
@@ -192,4 +228,3 @@ python -m pytest -q
 - No hidden cloud dependency.
 - No replacement for full observability platforms.
 - No AI-based mutation of deterministic scores or incident evidence.
-

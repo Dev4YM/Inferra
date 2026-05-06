@@ -3,7 +3,7 @@
 <head>
     <meta charset="utf-8" />
     <meta http-equiv="X-UA-Compatible" content="IE=edge" />
-    <meta name="viewport" content="width=device-width, initial-scale=1.0" /><meta name="description" content="Local-first runtime failure explanation" />
+    <meta name="viewport" content="width=device-width, initial-scale=1.0" /><meta name="description" content="Local-first runtime intelligence control plane" />
       <link rel="shortcut icon" href="img/favicon.ico" />
     <title>Inferra</title>
     <link rel="stylesheet" href="css/theme.css" />
@@ -42,12 +42,16 @@
               <ul class="current">
                 <li class="toctree-l1 current"><a class="reference internal current" href="#">Home</a>
     <ul class="current">
+    <li class="toctree-l2"><a class="reference internal" href="#how-to-read-these-docs">How To Read These Docs</a>
+    </li>
     </ul>
                 </li>
               </ul>
-              <p class="caption"><span class="caption-text">Operator guides</span></p>
+              <p class="caption"><span class="caption-text">Operator Guides</span></p>
               <ul>
                   <li class="toctree-l1"><a class="reference internal" href="operations/install/">Install</a>
+                  </li>
+                  <li class="toctree-l1"><a class="reference internal" href="operations/windows_exe_build/">Windows exe - start here</a>
                   </li>
                   <li class="toctree-l1"><a class="reference internal" href="operations/ai_provider/">AI provider</a>
                   </li>
@@ -61,26 +65,64 @@
                   </li>
                   <li class="toctree-l1"><a class="reference internal" href="operations/ci/">CI</a>
                   </li>
+                  <li class="toctree-l1"><a class="reference internal" href="operations/release/">Release checklist</a>
+                  </li>
                   <li class="toctree-l1"><a class="reference internal" href="operations/release_signing/">Release signing</a>
+                  </li>
+              </ul>
+              <p class="caption"><span class="caption-text">Security</span></p>
+              <ul>
+                  <li class="toctree-l1"><a class="reference internal" href="security/threat_model/">Threat model</a>
+                  </li>
+              </ul>
+              <p class="caption"><span class="caption-text">Reset Dossier</span></p>
+              <ul>
+                  <li class="toctree-l1"><a class="reference internal" href="dossier/">Overview</a>
+                  </li>
+                  <li class="toctree-l1"><a class="reference internal" href="dossier/product/product_vision/">Product vision</a>
+                  </li>
+                  <li class="toctree-l1"><a class="reference internal" href="dossier/product/modes_and_personas/">Modes and personas</a>
+                  </li>
+                  <li class="toctree-l1"><a class="reference internal" href="dossier/architecture/current_state_audit/">Current state audit</a>
+                  </li>
+                  <li class="toctree-l1"><a class="reference internal" href="dossier/architecture/target_architecture/">Target architecture</a>
+                  </li>
+                  <li class="toctree-l1"><a class="reference internal" href="dossier/architecture/repository_reset_plan/">Repository reset plan</a>
+                  </li>
+                  <li class="toctree-l1"><a class="reference internal" href="dossier/control_plane/cli_control_plane/">CLI control plane</a>
+                  </li>
+                  <li class="toctree-l1"><a class="reference internal" href="dossier/control_plane/web_control_plane/">Web control plane</a>
+                  </li>
+                  <li class="toctree-l1"><a class="reference internal" href="dossier/ai/ai_investigation_system/">AI investigation system</a>
+                  </li>
+                  <li class="toctree-l1"><a class="reference internal" href="dossier/workspace/workspace_intelligence/">Workspace intelligence</a>
+                  </li>
+                  <li class="toctree-l1"><a class="reference internal" href="dossier/execution/execution_roadmap/">Execution roadmap</a>
+                  </li>
+                  <li class="toctree-l1"><a class="reference internal" href="dossier/execution/acceptance_gates/">Acceptance gates</a>
+                  </li>
+                  <li class="toctree-l1"><a class="reference internal" href="dossier/governance/open_decisions/">Open decisions</a>
                   </li>
               </ul>
               <p class="caption"><span class="caption-text">Architecture Decision Records</span></p>
               <ul>
-                  <li class="toctree-l1"><a class="reference internal" href="adr/0001-local-first-guided-ai/">ADR 0001 — Local-first guided AI</a>
+                  <li class="toctree-l1"><a class="reference internal" href="adr/0001-local-first-guided-ai/">ADR 0001 - Local-first guided AI</a>
                   </li>
-                  <li class="toctree-l1"><a class="reference internal" href="adr/0002-flat-src-layout/">ADR 0002 — Flat src layout</a>
+                  <li class="toctree-l1"><a class="reference internal" href="adr/0002-flat-src-layout/">ADR 0002 - Flat src layout</a>
                   </li>
-                  <li class="toctree-l1"><a class="reference internal" href="adr/0003-storage-protocols/">ADR 0003 — Storage protocols</a>
+                  <li class="toctree-l1"><a class="reference internal" href="adr/0003-storage-protocols/">ADR 0003 - Storage protocols</a>
                   </li>
-                  <li class="toctree-l1"><a class="reference internal" href="adr/0004-windows-first-collectors/">ADR 0004 — Windows-first collectors</a>
+                  <li class="toctree-l1"><a class="reference internal" href="adr/0004-windows-first-collectors/">ADR 0004 - Windows-first collectors</a>
                   </li>
-                  <li class="toctree-l1"><a class="reference internal" href="adr/0005-ai-presentation-only/">ADR 0005 — AI presentation-only</a>
+                  <li class="toctree-l1"><a class="reference internal" href="adr/0005-ai-presentation-only/">ADR 0005 - AI presentation-only</a>
                   </li>
-                  <li class="toctree-l1"><a class="reference internal" href="adr/0006-ollama-gemma-default/">ADR 0006 — Ollama Gemma default</a>
+                  <li class="toctree-l1"><a class="reference internal" href="adr/0006-ollama-gemma-default/">ADR 0006 - Ollama Gemma default</a>
                   </li>
               </ul>
               <p class="caption"><span class="caption-text">Planning</span></p>
               <ul>
+                  <li class="toctree-l1"><a class="reference internal" href="implementation_roadmap/">Implementation roadmap</a>
+                  </li>
                   <li class="toctree-l1"><a class="reference internal" href="planning/architecture_overview/">Architecture overview</a>
                   </li>
                   <li class="toctree-l1"><a class="reference internal" href="planning/full_build_architecture_plan/">Full build architecture plan</a>
@@ -88,6 +130,64 @@
                   <li class="toctree-l1"><a class="reference internal" href="planning/data_flow_contracts/">Data flow contracts</a>
                   </li>
                   <li class="toctree-l1"><a class="reference internal" href="planning/implementation_index/">Implementation index</a>
+                  </li>
+                  <li class="toctree-l1"><a class="reference internal" >Collectors and runtime</a>
+    <ul>
+                <li class="toctree-l2"><a class="reference internal" href="planning/collector_architecture/">Collector architecture</a>
+                </li>
+                <li class="toctree-l2"><a class="reference internal" href="planning/runtime_context_builder/">Runtime context builder</a>
+                </li>
+                <li class="toctree-l2"><a class="reference internal" href="planning/log_normalization_pipeline/">Log normalization pipeline</a>
+                </li>
+                <li class="toctree-l2"><a class="reference internal" href="planning/event_model/">Event model</a>
+                </li>
+                <li class="toctree-l2"><a class="reference internal" href="planning/event_deduplication/">Event deduplication</a>
+                </li>
+                <li class="toctree-l2"><a class="reference internal" href="planning/noise_filtering/">Noise filtering</a>
+                </li>
+    </ul>
+                  </li>
+                  <li class="toctree-l1"><a class="reference internal" >Analysis and reasoning</a>
+    <ul>
+                <li class="toctree-l2"><a class="reference internal" href="planning/anomaly_detection/">Anomaly detection</a>
+                </li>
+                <li class="toctree-l2"><a class="reference internal" href="planning/correlation_engine/">Correlation engine</a>
+                </li>
+                <li class="toctree-l2"><a class="reference internal" href="planning/incident_lifecycle/">Incident lifecycle</a>
+                </li>
+                <li class="toctree-l2"><a class="reference internal" href="planning/causal_graph_engine/">Causal graph engine</a>
+                </li>
+                <li class="toctree-l2"><a class="reference internal" href="planning/hypothesis_engine/">Hypothesis engine</a>
+                </li>
+                <li class="toctree-l2"><a class="reference internal" href="planning/hypothesis_validation/">Hypothesis validation</a>
+                </li>
+                <li class="toctree-l2"><a class="reference internal" href="planning/scoring_engine/">Scoring engine</a>
+                </li>
+                <li class="toctree-l2"><a class="reference internal" href="planning/contradiction_handling/">Contradiction handling</a>
+                </li>
+                <li class="toctree-l2"><a class="reference internal" href="planning/confidence_calibration/">Confidence calibration</a>
+                </li>
+    </ul>
+                  </li>
+                  <li class="toctree-l1"><a class="reference internal" >Product contracts</a>
+    <ul>
+                <li class="toctree-l2"><a class="reference internal" href="planning/failure_model/">Failure model</a>
+                </li>
+                <li class="toctree-l2"><a class="reference internal" href="planning/failure_taxonomy/">Failure taxonomy</a>
+                </li>
+                <li class="toctree-l2"><a class="reference internal" href="planning/explanation_layer/">Explanation layer</a>
+                </li>
+                <li class="toctree-l2"><a class="reference internal" href="planning/storage_architecture/">Storage architecture</a>
+                </li>
+                <li class="toctree-l2"><a class="reference internal" href="planning/ui_spec/">UI spec</a>
+                </li>
+                <li class="toctree-l2"><a class="reference internal" href="planning/system_limitations/">System limitations</a>
+                </li>
+                <li class="toctree-l2"><a class="reference internal" href="planning/constraints/">Constraints</a>
+                </li>
+                <li class="toctree-l2"><a class="reference internal" href="planning/testing_strategy/">Testing strategy</a>
+                </li>
+    </ul>
                   </li>
               </ul>
       </div>
@@ -113,10 +213,23 @@
           <div role="main" class="document" itemscope="itemscope" itemtype="http://schema.org/Article">
             <div class="section" itemprop="articleBody">
               
-                <h1 id="inferra-documentation">Inferra documentation<a class="headerlink" href="#inferra-documentation" title="Permanent link">&para;</a></h1>
-<p>Inferra is a local-first runtime failure explanation system: it reads operational signals, stores them in SQLite, builds deterministic incident hypotheses, and optionally uses an Ollama-compatible model for operator-facing language.</p>
-<p>Open <code>README.md</code> at the repository root for installation and quick start, then use the operator guides under <strong>Install</strong>, <strong>AI provider</strong>, <strong>Collectors</strong>, <strong>Tuning</strong>, <strong>Upgrade</strong>, and <strong>Troubleshooting</strong>.</p>
-<p>Architecture decisions are recorded under <strong>Architecture Decision Records</strong>. Deeper design notes live under <strong>Planning</strong>, especially <a href="planning/architecture_overview/">Architecture overview</a>, the <a href="planning/implementation_index/">implementation index</a>, and the <a href="planning/full_build_architecture_plan/">full build architecture plan</a>.</p>
+                <h1 id="inferra-documentation">Inferra Documentation<a class="headerlink" href="#inferra-documentation" title="Permanent link">&para;</a></h1>
+<p>Inferra is a local-first AI-integrated runtime intelligence control plane. It reads operational signals, stores them in SQLite, builds deterministic incident hypotheses, maps runtime behavior back to local workspace context, and uses AI to guide safe investigation without mutating observed systems.</p>
+<h2 id="how-to-read-these-docs">How To Read These Docs<a class="headerlink" href="#how-to-read-these-docs" title="Permanent link">&para;</a></h2>
+<ul>
+<li><strong>In GitHub or your editor:</strong> start here, then open the <strong>Operator guides</strong> section in the navigation, beginning with <a href="operations/install/">Install</a> or <a href="operations/troubleshooting/">Troubleshooting</a>.</li>
+<li><strong>As a local website (recommended):</strong> from the repository root, install doc tooling and serve:</li>
+</ul>
+<pre><code class="language-powershell">python -m pip install -e &quot;.[docs]&quot;
+mkdocs serve
+</code></pre>
+<p>Then open the URL MkDocs prints, typically <a href="http://127.0.0.1:8000">http://127.0.0.1:8000</a>.</p>
+<ul>
+<li><strong>Pre-built HTML:</strong> after <code>mkdocs build</code>, open <code>site/index.html</code> in a browser. Serving through <code>mkdocs serve</code> is smoother for local navigation.</li>
+</ul>
+<p>Deployment-focused guides include <a href="operations/install/">Install</a>, <strong><a href="operations/windows_exe_build/">Windows exe - start here</a></strong>, and <a href="operations/troubleshooting/">Troubleshooting</a>.</p>
+<p>The repository root README has the shortest quick start (<code>pip install</code>, <code>onboard</code>, <code>guide</code>, <code>serve</code>) and links back here for deeper install paths.</p>
+<p>Architecture decisions are under <strong>Architecture Decision Records</strong>. Design notes live under <strong>Planning</strong>, especially <a href="planning/architecture_overview/">Architecture overview</a>, the <a href="planning/implementation_index/">implementation index</a>, and the <a href="planning/full_build_architecture_plan/">full build architecture plan</a>.</p>
               
             </div>
           </div><footer>
@@ -165,5 +278,5 @@
 
 <!--
 MkDocs version : 1.6.1
-Build Date UTC : 2026-05-05 14:22:07.240848+00:00
+Build Date UTC : 2026-05-06 14:13:57.898656+00:00
 -->

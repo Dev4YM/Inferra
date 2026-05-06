@@ -26,7 +26,7 @@ Each planning document describes intent and contracts; this index maps those doc
 | [explanation_layer.md](explanation_layer.md) | `explanation/`, `ai/` (presentation only) |
 | [runtime_context_builder.md](runtime_context_builder.md) | `runtime/context.py` |
 | [storage_architecture.md](storage_architecture.md) | `storage/` |
-| [ui_spec.md](ui_spec.md) | `web/static/`, `web/api.py`, `web/live_hub.py` |
+| [ui_spec.md](ui_spec.md) | `web/frontend/`, `web/ui_dist/`, `web/api.py`, `web/live_hub.py` |
 | [system_limitations.md](system_limitations.md) | Cross-cutting constraints; see code references in doc |
 | [constraints.md](constraints.md) | `config/`, `core/` |
 | [testing_strategy.md](testing_strategy.md) | `tests/` |

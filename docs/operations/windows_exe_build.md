@@ -1,6 +1,6 @@
 # Windows one-file executable (PyInstaller)
 
-**Use this page as your single checklist.** Commands use `**python -m pip`** / `**python.exe -m pip`** on purpose: calling `**Scripts\pip.exe**` to upgrade pip fails on pip 24+ with *“To modify pip, please run … python.exe -m pip …”*.
+**Use this page as your single checklist.** Commands use `**python -m pip`** / `**python.exe -m pip`** on purpose: calling `**Scripts\pip.exe`** to upgrade pip fails on pip 24+ with *“To modify pip, please run … python.exe -m pip …”*.
 
 ## Start here (Windows, copy/paste)
 
@@ -27,7 +27,7 @@ If pip upgrade is blocked by policy, try:
 
 If the **Inferra** service is running (or another `inferra.exe` is open), this script stops them before overwriting `**dist\inferra.exe`**.
 
-When you see `**Primary artifact: ...\dist\inferra.exe`**, the build is done — continue to **step 3**. To sanity-check: `**.\dist\inferra.exe --version`** should match `**[project].version`** in `pyproject.toml`. If you only need the portable binary (no service), you can stop after this step.
+When you see `**Primary artifact: ...\dist\inferra.exe`**, the build is done — continue to step 3. To sanity-check: `**.\dist\inferra.exe --version`** should match `**[project].version`** in `pyproject.toml`. If you only need the portable binary (no service), you can stop after this step.
 
 ### 3) Install Windows service (Administrator PowerShell)
 
@@ -67,7 +67,7 @@ Supporting implementation:
 
 ## Isolated build virtualenv (details)
 
-If you skipped **Start here** above: a clean `**.venv-inferra-build`** keeps unrelated packages (and bad `**PYTHONPATH`**) out of PyInstaller Analysis. `**prepare-build-venv.ps1**` only invokes `**python.exe -m pip**` for installs/upgrades.
+If you skipped **Start here** above: a clean `**.venv-inferra-build`** keeps unrelated packages (and bad `**PYTHONPATH`**) out of PyInstaller Analysis. `**prepare-build-venv.ps1`** only invokes `**python.exe -m pip**` for installs/upgrades.
 
 ## Standard workstation build (same interpreter every time)
 
@@ -95,8 +95,8 @@ Parameters (all optional):
 After success you should have:
 
 - `**dist\inferra.exe`** — stable name consumed by `**install-service.ps1`** and release signing.
-- `**dist\inferra-<pyproject-version>.exe**` — immutable, versioned artifact (matches `[project].version` in `pyproject.toml`).
-- `**dist\_inferra_exe_stage\inferra.exe**` — last staged build (still overwritten on the next build).
+- `**dist\inferra-<pyproject-version>.exe`** — immutable, versioned artifact (matches `[project].version` in `pyproject.toml`).
+- `**dist\_inferra_exe_stage\inferra.exe`** — last staged build (still overwritten on the next build).
 
 Exit codes:
 
@@ -126,15 +126,15 @@ Use this **only** when you intentionally want every `inferra.exe` stopped (for e
 | Symptom                                                                                        | Likely cause                                | Mitigation                                                                                                                                                                                                |
 | ---------------------------------------------------------------------------------------------- | ------------------------------------------- | --------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
 | `**ERROR: To modify pip, please run … python.exe -m pip`** during `**prepare-build-venv.ps1`** | `**pip.exe` cannot self-upgrade** (pip 24+) | Already fixed in repo: script uses `**python -m pip`**. Update your checkout or run: `**.\venv\Scripts\python.exe -m pip install --upgrade pip wheel`**. Or `**prepare-build-venv.ps1 -SkipPipUpgrade**`. |
-| Promotion exits `**2**` or copy errors mention **sharing violation** / **being used**          | Lock on `**dist\inferra.exe`**              | Run `**Stop-Service Inferra`**, confirm `**Get-Process inferra**` is empty, retry. Import `**InferraWindows.psm1**` and run `**Stop-InferraWindowsExecutionLocks**`.                                      |
-| PyInstaller Analysis pulls **torch**, huge `**pkg`**, multi-minute builds                      | Polluted global Python or `**PYTHONPATH`**  | Use `**prepare-build-venv.ps1**`; ensure no foreign paths are injected into the build shell.                                                                                                              |
+| Promotion exits `**2**` or copy errors mention **sharing violation** / **being used**          | Lock on `**dist\inferra.exe`**              | Run `**Stop-Service Inferra`**, confirm `**Get-Process inferra`** is empty, retry. Import `**InferraWindows.psm1**` and run `**Stop-InferraWindowsExecutionLocks**`.                                      |
+| PyInstaller Analysis pulls **torch**, huge `**pkg`**, multi-minute builds                      | Polluted global Python or `**PYTHONPATH`**  | Use `**prepare-build-venv.ps1`**; ensure no foreign paths are injected into the build shell.                                                                                                              |
 | `**inferra.exe --version` smoke failure**                                                      | Frozen metadata / broken build              | Inspect PyInstaller warnings; run staged exe manually from `**dist\_inferra_exe_stage\`**.                                                                                                                |
-| Service runs but HTTP never listens                                                            | Child `**serve`** crashed                   | See `**%ProgramData%\Inferra\logs\serve.log**` (written by the Windows service wrapper).                                                                                                                  |
+| Service runs but HTTP never listens                                                            | Child `**serve`** crashed                   | See `**%ProgramData%\Inferra\logs\serve.log`** (written by the Windows service wrapper).                                                                                                                  |
 
 
 ## Manual commands (advanced)
 
-If you must invoke PyInstaller yourself, mirror what `**Invoke-InferraWindowsExeBuild**` does:
+If you must invoke PyInstaller yourself, mirror what `**Invoke-InferraWindowsExeBuild`** does:
 
 ```powershell
 python -m PyInstaller --noconfirm `

@@ -60,9 +60,9 @@ The UI is a local web application served by Inferra's built-in HTTP server.
 | Component | Technology | Rationale |
 |---|---|---|
 | Server | FastAPI (Python) | Consistent with backend; async WebSocket support |
-| Frontend | Static HTML/JS/CSS (no build step) | Zero toolchain, instant load, no node_modules |
+| Frontend | React/Vite source under `src/web/frontend`, built to `src/web/ui_dist` | One official frontend source with packaged static output |
 | Reactivity | WebSocket for live updates, REST for initial load | Incidents and events update in real-time |
-| Styling | Minimal CSS framework (Pico CSS or similar) | Clean, readable, no design system overhead |
+| Styling | Product-specific CSS and component structure | Dense operator UI with room for developer detail |
 | Charts | Lightweight charting (uPlot or Chart.js) | Time-series visualization for metrics/timelines |
 
 **Access**: `http://localhost:{port}` (default port: 7433). No authentication (local-only tool).

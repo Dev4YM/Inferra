@@ -17,12 +17,14 @@ From a Git checkout or sdist:
 
 ```powershell
 python -m pip install -e ".[dev]"
-inferra --config inferra.toml setup --yes --skip-connection-test
+inferra --config inferra.toml onboard --yes --mode operator --skip-connection-test
+inferra --config inferra.toml guide
 inferra --config inferra.toml init-db
+inferra --config inferra.toml dashboard --no-open
 inferra --config inferra.toml serve --help
 ```
 
-`setup` writes `inferra.toml`, creates `storage.data_dir`, and runs migrations. `init-db` is idempotent and safe after upgrades. Use `inferra serve` (same as `inferra run`) without `--help` to bind `[server].host`:`[server].port` and open the dashboard at `http://127.0.0.1:7433` by default.
+`onboard` writes `inferra.toml`, creates `storage.data_dir`, and runs migrations. `guide` is read-only and prints the next best path for the current profile (`operator`, `developer`, `server`, or `contributor`). `dashboard --no-open` prints the configured control-plane URL and API reachability without opening a browser. `init-db` is idempotent and safe after upgrades. Use `inferra serve` (same as `inferra run`) without `--help` to bind `[server].host`:`[server].port` and open the dashboard at `http://127.0.0.1:7433` by default.
 
 ## Windows desktop
 

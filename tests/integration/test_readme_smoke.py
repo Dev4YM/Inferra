@@ -89,6 +89,8 @@ def _skip_cli_smoke(argv: list[str]) -> bool:
         return True
     if _argv_requires_ollama_network(argv):
         return True
+    if _argv_requires_service_admin(argv):
+        return True
     if _argv_platform_mismatch(argv):
         return True
     return False
@@ -128,9 +130,12 @@ def _argv_contains_long_running(argv: list[str]) -> bool:
 
 
 def _argv_requires_live_api(argv: list[str]) -> bool:
-    if "collectors" not in argv:
+    parts = _strip_global_cli_flags(argv)
+    if not parts:
         return False
-    if "start" in argv or "stop" in argv:
+    if parts[0] in {"overview", "investigate", "incidents", "events", "services"}:
+        return True
+    if "collectors" in parts and ("start" in parts or "stop" in parts):
         return True
     return False
 
@@ -155,3 +160,10 @@ def _argv_platform_mismatch(argv: list[str]) -> bool:
         if "collect-services" in joined or "collect-eventlog" in joined:
             return True
     return False
+
+
+def _argv_requires_service_admin(argv: list[str]) -> bool:
+    parts = _strip_global_cli_flags(argv)
+    if not parts or parts[0] != "service":
+        return False
+    return any(verb in parts for verb in ("install", "start", "stop", "restart", "remove"))

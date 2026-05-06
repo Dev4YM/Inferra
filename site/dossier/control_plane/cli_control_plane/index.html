@@ -1,0 +1,503 @@
+<!DOCTYPE html>
+<html class="writer-html5" lang="en" >
+<head>
+    <meta charset="utf-8" />
+    <meta http-equiv="X-UA-Compatible" content="IE=edge" />
+    <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+      <link rel="shortcut icon" href="../../../img/favicon.ico" />
+    <title>CLI control plane - Inferra</title>
+    <link rel="stylesheet" href="../../../css/theme.css" />
+    <link rel="stylesheet" href="../../../css/theme_extra.css" />
+        <link rel="stylesheet" href="https://cdnjs.cloudflare.com/ajax/libs/highlight.js/11.8.0/styles/github.min.css" />
+    
+      <script>
+        // Current page data
+        var mkdocs_page_name = "CLI control plane";
+        var mkdocs_page_input_path = "dossier\\control_plane\\cli_control_plane.md";
+        var mkdocs_page_url = null;
+      </script>
+    
+    <!--[if lt IE 9]>
+      <script src="../../../js/html5shiv.min.js"></script>
+    <![endif]-->
+      <script src="https://cdnjs.cloudflare.com/ajax/libs/highlight.js/11.8.0/highlight.min.js"></script>
+      <script>hljs.highlightAll();</script> 
+</head>
+
+<body class="wy-body-for-nav" role="document">
+
+  <div class="wy-grid-for-nav">
+    <nav data-toggle="wy-nav-shift" class="wy-nav-side stickynav">
+    <div class="wy-side-scroll">
+      <div class="wy-side-nav-search">
+          <a href="../../.." class="icon icon-home"> Inferra
+        </a><div role="search">
+  <form id ="rtd-search-form" class="wy-form" action="../../../search.html" method="get">
+      <input type="text" name="q" placeholder="Search docs" aria-label="Search docs" title="Type search term here" />
+  </form>
+</div>
+      </div>
+
+      <div class="wy-menu wy-menu-vertical" data-spy="affix" role="navigation" aria-label="Navigation menu">
+              <ul>
+                <li class="toctree-l1"><a class="reference internal" href="../../..">Home</a>
+                </li>
+              </ul>
+              <p class="caption"><span class="caption-text">Operator Guides</span></p>
+              <ul>
+                  <li class="toctree-l1"><a class="reference internal" href="../../../operations/install/">Install</a>
+                  </li>
+                  <li class="toctree-l1"><a class="reference internal" href="../../../operations/windows_exe_build/">Windows exe - start here</a>
+                  </li>
+                  <li class="toctree-l1"><a class="reference internal" href="../../../operations/ai_provider/">AI provider</a>
+                  </li>
+                  <li class="toctree-l1"><a class="reference internal" href="../../../operations/collectors/">Collectors</a>
+                  </li>
+                  <li class="toctree-l1"><a class="reference internal" href="../../../operations/tuning/">Tuning</a>
+                  </li>
+                  <li class="toctree-l1"><a class="reference internal" href="../../../operations/upgrade/">Upgrade</a>
+                  </li>
+                  <li class="toctree-l1"><a class="reference internal" href="../../../operations/troubleshooting/">Troubleshooting</a>
+                  </li>
+                  <li class="toctree-l1"><a class="reference internal" href="../../../operations/ci/">CI</a>
+                  </li>
+                  <li class="toctree-l1"><a class="reference internal" href="../../../operations/release/">Release checklist</a>
+                  </li>
+                  <li class="toctree-l1"><a class="reference internal" href="../../../operations/release_signing/">Release signing</a>
+                  </li>
+              </ul>
+              <p class="caption"><span class="caption-text">Security</span></p>
+              <ul>
+                  <li class="toctree-l1"><a class="reference internal" href="../../../security/threat_model/">Threat model</a>
+                  </li>
+              </ul>
+              <p class="caption"><span class="caption-text">Reset Dossier</span></p>
+              <ul class="current">
+                  <li class="toctree-l1"><a class="reference internal" href="../../">Overview</a>
+                  </li>
+                  <li class="toctree-l1"><a class="reference internal" href="../../product/product_vision/">Product vision</a>
+                  </li>
+                  <li class="toctree-l1"><a class="reference internal" href="../../product/modes_and_personas/">Modes and personas</a>
+                  </li>
+                  <li class="toctree-l1"><a class="reference internal" href="../../architecture/current_state_audit/">Current state audit</a>
+                  </li>
+                  <li class="toctree-l1"><a class="reference internal" href="../../architecture/target_architecture/">Target architecture</a>
+                  </li>
+                  <li class="toctree-l1"><a class="reference internal" href="../../architecture/repository_reset_plan/">Repository reset plan</a>
+                  </li>
+                  <li class="toctree-l1 current"><a class="reference internal current" href="#">CLI control plane</a>
+    <ul class="current">
+    <li class="toctree-l2"><a class="reference internal" href="#cli-principles">CLI Principles</a>
+    </li>
+    <li class="toctree-l2"><a class="reference internal" href="#target-command-groups">Target Command Groups</a>
+    </li>
+    <li class="toctree-l2"><a class="reference internal" href="#setup">Setup</a>
+    </li>
+    <li class="toctree-l2"><a class="reference internal" href="#mode">Mode</a>
+    </li>
+    <li class="toctree-l2"><a class="reference internal" href="#status-and-dashboard">Status and Dashboard</a>
+    </li>
+    <li class="toctree-l2"><a class="reference internal" href="#investigation">Investigation</a>
+    </li>
+    <li class="toctree-l2"><a class="reference internal" href="#runtime-inspection">Runtime Inspection</a>
+    </li>
+    <li class="toctree-l2"><a class="reference internal" href="#ai">AI</a>
+    </li>
+    <li class="toctree-l2"><a class="reference internal" href="#workspace">Workspace</a>
+    </li>
+    <li class="toctree-l2"><a class="reference internal" href="#service">Service</a>
+    </li>
+    <li class="toctree-l2"><a class="reference internal" href="#json-contract">JSON Contract</a>
+    </li>
+    <li class="toctree-l2"><a class="reference internal" href="#implementation-note">Implementation Note</a>
+    </li>
+    </ul>
+                  </li>
+                  <li class="toctree-l1"><a class="reference internal" href="../web_control_plane/">Web control plane</a>
+                  </li>
+                  <li class="toctree-l1"><a class="reference internal" href="../../ai/ai_investigation_system/">AI investigation system</a>
+                  </li>
+                  <li class="toctree-l1"><a class="reference internal" href="../../workspace/workspace_intelligence/">Workspace intelligence</a>
+                  </li>
+                  <li class="toctree-l1"><a class="reference internal" href="../../execution/execution_roadmap/">Execution roadmap</a>
+                  </li>
+                  <li class="toctree-l1"><a class="reference internal" href="../../execution/acceptance_gates/">Acceptance gates</a>
+                  </li>
+                  <li class="toctree-l1"><a class="reference internal" href="../../governance/open_decisions/">Open decisions</a>
+                  </li>
+              </ul>
+              <p class="caption"><span class="caption-text">Architecture Decision Records</span></p>
+              <ul>
+                  <li class="toctree-l1"><a class="reference internal" href="../../../adr/0001-local-first-guided-ai/">ADR 0001 - Local-first guided AI</a>
+                  </li>
+                  <li class="toctree-l1"><a class="reference internal" href="../../../adr/0002-flat-src-layout/">ADR 0002 - Flat src layout</a>
+                  </li>
+                  <li class="toctree-l1"><a class="reference internal" href="../../../adr/0003-storage-protocols/">ADR 0003 - Storage protocols</a>
+                  </li>
+                  <li class="toctree-l1"><a class="reference internal" href="../../../adr/0004-windows-first-collectors/">ADR 0004 - Windows-first collectors</a>
+                  </li>
+                  <li class="toctree-l1"><a class="reference internal" href="../../../adr/0005-ai-presentation-only/">ADR 0005 - AI presentation-only</a>
+                  </li>
+                  <li class="toctree-l1"><a class="reference internal" href="../../../adr/0006-ollama-gemma-default/">ADR 0006 - Ollama Gemma default</a>
+                  </li>
+              </ul>
+              <p class="caption"><span class="caption-text">Planning</span></p>
+              <ul>
+                  <li class="toctree-l1"><a class="reference internal" href="../../../implementation_roadmap/">Implementation roadmap</a>
+                  </li>
+                  <li class="toctree-l1"><a class="reference internal" href="../../../planning/architecture_overview/">Architecture overview</a>
+                  </li>
+                  <li class="toctree-l1"><a class="reference internal" href="../../../planning/full_build_architecture_plan/">Full build architecture plan</a>
+                  </li>
+                  <li class="toctree-l1"><a class="reference internal" href="../../../planning/data_flow_contracts/">Data flow contracts</a>
+                  </li>
+                  <li class="toctree-l1"><a class="reference internal" href="../../../planning/implementation_index/">Implementation index</a>
+                  </li>
+                  <li class="toctree-l1"><a class="reference internal" >Collectors and runtime</a>
+    <ul>
+                <li class="toctree-l2"><a class="reference internal" href="../../../planning/collector_architecture/">Collector architecture</a>
+                </li>
+                <li class="toctree-l2"><a class="reference internal" href="../../../planning/runtime_context_builder/">Runtime context builder</a>
+                </li>
+                <li class="toctree-l2"><a class="reference internal" href="../../../planning/log_normalization_pipeline/">Log normalization pipeline</a>
+                </li>
+                <li class="toctree-l2"><a class="reference internal" href="../../../planning/event_model/">Event model</a>
+                </li>
+                <li class="toctree-l2"><a class="reference internal" href="../../../planning/event_deduplication/">Event deduplication</a>
+                </li>
+                <li class="toctree-l2"><a class="reference internal" href="../../../planning/noise_filtering/">Noise filtering</a>
+                </li>
+    </ul>
+                  </li>
+                  <li class="toctree-l1"><a class="reference internal" >Analysis and reasoning</a>
+    <ul>
+                <li class="toctree-l2"><a class="reference internal" href="../../../planning/anomaly_detection/">Anomaly detection</a>
+                </li>
+                <li class="toctree-l2"><a class="reference internal" href="../../../planning/correlation_engine/">Correlation engine</a>
+                </li>
+                <li class="toctree-l2"><a class="reference internal" href="../../../planning/incident_lifecycle/">Incident lifecycle</a>
+                </li>
+                <li class="toctree-l2"><a class="reference internal" href="../../../planning/causal_graph_engine/">Causal graph engine</a>
+                </li>
+                <li class="toctree-l2"><a class="reference internal" href="../../../planning/hypothesis_engine/">Hypothesis engine</a>
+                </li>
+                <li class="toctree-l2"><a class="reference internal" href="../../../planning/hypothesis_validation/">Hypothesis validation</a>
+                </li>
+                <li class="toctree-l2"><a class="reference internal" href="../../../planning/scoring_engine/">Scoring engine</a>
+                </li>
+                <li class="toctree-l2"><a class="reference internal" href="../../../planning/contradiction_handling/">Contradiction handling</a>
+                </li>
+                <li class="toctree-l2"><a class="reference internal" href="../../../planning/confidence_calibration/">Confidence calibration</a>
+                </li>
+    </ul>
+                  </li>
+                  <li class="toctree-l1"><a class="reference internal" >Product contracts</a>
+    <ul>
+                <li class="toctree-l2"><a class="reference internal" href="../../../planning/failure_model/">Failure model</a>
+                </li>
+                <li class="toctree-l2"><a class="reference internal" href="../../../planning/failure_taxonomy/">Failure taxonomy</a>
+                </li>
+                <li class="toctree-l2"><a class="reference internal" href="../../../planning/explanation_layer/">Explanation layer</a>
+                </li>
+                <li class="toctree-l2"><a class="reference internal" href="../../../planning/storage_architecture/">Storage architecture</a>
+                </li>
+                <li class="toctree-l2"><a class="reference internal" href="../../../planning/ui_spec/">UI spec</a>
+                </li>
+                <li class="toctree-l2"><a class="reference internal" href="../../../planning/system_limitations/">System limitations</a>
+                </li>
+                <li class="toctree-l2"><a class="reference internal" href="../../../planning/constraints/">Constraints</a>
+                </li>
+                <li class="toctree-l2"><a class="reference internal" href="../../../planning/testing_strategy/">Testing strategy</a>
+                </li>
+    </ul>
+                  </li>
+              </ul>
+      </div>
+    </div>
+    </nav>
+
+    <section data-toggle="wy-nav-shift" class="wy-nav-content-wrap">
+      <nav class="wy-nav-top" role="navigation" aria-label="Mobile navigation menu">
+          <i data-toggle="wy-nav-top" class="fa fa-bars"></i>
+          <a href="../../..">Inferra</a>
+        
+      </nav>
+      <div class="wy-nav-content">
+        <div class="rst-content"><div role="navigation" aria-label="breadcrumbs navigation">
+  <ul class="wy-breadcrumbs">
+    <li><a href="../../.." class="icon icon-home" aria-label="Docs"></a></li>
+          <li class="breadcrumb-item">Reset Dossier</li>
+      <li class="breadcrumb-item active">CLI control plane</li>
+    <li class="wy-breadcrumbs-aside">
+    </li>
+  </ul>
+  <hr/>
+</div>
+          <div role="main" class="document" itemscope="itemscope" itemtype="http://schema.org/Article">
+            <div class="section" itemprop="articleBody">
+              
+                <h1 id="cli-control-plane">CLI Control Plane<a class="headerlink" href="#cli-control-plane" title="Permanent link">&para;</a></h1>
+<p>The CLI is the primary control plane. The web UI should never be the only way to configure, inspect, or operate Inferra.</p>
+<h2 id="cli-principles">CLI Principles<a class="headerlink" href="#cli-principles" title="Permanent link">&para;</a></h2>
+<ul>
+<li>Every major web action should have a CLI equivalent.</li>
+<li>Every CLI command should support human output and JSON output where useful.</li>
+<li>Operator mode should be friendly by default.</li>
+<li>Developer mode should expose raw detail.</li>
+<li>Commands should guide the next step.</li>
+<li>CLI should be safe: no observed-system mutation.</li>
+</ul>
+<h2 id="target-command-groups">Target Command Groups<a class="headerlink" href="#target-command-groups" title="Permanent link">&para;</a></h2>
+<pre><code class="language-text">inferra setup
+inferra onboard
+inferra mode
+inferra status
+inferra dashboard
+inferra investigate
+inferra incidents
+inferra events
+inferra services
+inferra collectors
+inferra ai
+inferra workspace
+inferra config
+inferra storage
+inferra service
+inferra export
+inferra doctor
+</code></pre>
+<h2 id="setup">Setup<a class="headerlink" href="#setup" title="Permanent link">&para;</a></h2>
+<p>Target:</p>
+<pre><code class="language-powershell">inferra setup
+inferra onboard
+inferra setup --yes
+inferra setup --mode operator
+inferra setup --mode developer
+inferra setup --preset windows-server --mode operator --model gemma4:e4b
+</code></pre>
+<p>Setup should configure:</p>
+<ul>
+<li>data directory</li>
+<li>experience mode</li>
+<li>collector preset</li>
+<li>AI provider</li>
+<li>model</li>
+<li>local/remote AI policy</li>
+<li>service install recommendation</li>
+<li>workspace scan</li>
+<li>dashboard launch</li>
+</ul>
+<h2 id="mode">Mode<a class="headerlink" href="#mode" title="Permanent link">&para;</a></h2>
+<p>Target:</p>
+<pre><code class="language-powershell">inferra mode
+inferra mode show
+inferra mode set operator
+inferra mode set developer
+</code></pre>
+<p>Mode affects:</p>
+<ul>
+<li>CLI output density</li>
+<li>default columns</li>
+<li>whether raw JSON appears</li>
+<li>AI prompt style</li>
+<li>dashboard default view</li>
+</ul>
+<h2 id="status-and-dashboard">Status and Dashboard<a class="headerlink" href="#status-and-dashboard" title="Permanent link">&para;</a></h2>
+<p>Target:</p>
+<pre><code class="language-powershell">inferra status
+inferra dashboard
+inferra dashboard --json
+</code></pre>
+<p>Operator output:</p>
+<ul>
+<li>overall state</li>
+<li>active incidents</li>
+<li>top concern</li>
+<li>AI availability</li>
+<li>collector status</li>
+<li>next recommended command</li>
+</ul>
+<p>Developer output:</p>
+<ul>
+<li>database paths</li>
+<li>queue depth</li>
+<li>degraded reasons</li>
+<li>collector health internals</li>
+<li>storage state</li>
+<li>AI resolved model</li>
+<li>API reachability</li>
+</ul>
+<h2 id="investigation">Investigation<a class="headerlink" href="#investigation" title="Permanent link">&para;</a></h2>
+<p>Target:</p>
+<pre><code class="language-powershell">inferra investigate now
+inferra investigate latest
+inferra investigate service api
+inferra investigate incident inc-123
+inferra investigate workspace
+</code></pre>
+<p>Investigation should return:</p>
+<ul>
+<li>situation summary</li>
+<li>prioritized findings</li>
+<li>evidence list</li>
+<li>missing evidence</li>
+<li>suggested safe checks</li>
+<li>links to incidents/events/services</li>
+<li>confidence and uncertainty</li>
+</ul>
+<p>Implemented first pass:</p>
+<pre><code class="language-powershell">inferra investigate now
+inferra investigate latest
+inferra investigate incident inc-123
+inferra investigate service api
+inferra investigate workspace
+</code></pre>
+<p>These commands are read-only. They prioritize evidence and print safe next commands, but they do not execute remediation.</p>
+<h2 id="runtime-inspection">Runtime Inspection<a class="headerlink" href="#runtime-inspection" title="Permanent link">&para;</a></h2>
+<p>Implemented first pass:</p>
+<pre><code class="language-powershell">inferra incidents list
+inferra incidents show inc-123
+inferra events list --limit 25
+inferra events show evt-123
+inferra services list
+inferra services show api
+inferra services events api --limit 25
+inferra doctor
+</code></pre>
+<p><code>doctor</code> combines local config validation with live API reachability and suggests safe next steps.</p>
+<h2 id="ai">AI<a class="headerlink" href="#ai" title="Permanent link">&para;</a></h2>
+<p>The first AI control-plane pass is implemented. AI is now available both as setup/status tooling and as an investigation assistant.</p>
+<p>Target:</p>
+<pre><code class="language-powershell">inferra ai setup
+inferra ai status
+inferra ai models
+inferra ai pull gemma4:e4b
+inferra ai test
+inferra ai doctor
+inferra ai ask &quot;what is most suspicious right now?&quot;
+inferra ai investigate latest
+inferra ai investigate incident inc-123
+inferra ai investigate service api
+inferra ai report inc-123 --mode operator
+inferra ai report inc-123 --mode developer
+inferra ai trace inc-123
+</code></pre>
+<p>Investigation is exposed through both <code>inferra investigate ...</code> and <code>inferra ai investigate ...</code>. The former is the user-facing investigation namespace; the latter makes the AI role explicit for users who want that framing.</p>
+<p>Implemented first pass:</p>
+<pre><code class="language-powershell">inferra ai doctor
+inferra ai ask &quot;what should I inspect first?&quot;
+inferra ai investigate latest
+inferra ai investigate incident inc-123
+inferra ai investigate service api
+inferra ai report inc-123 --mode operator
+inferra ai report inc-123 --mode developer
+inferra ai trace inc-123
+</code></pre>
+<p><code>ai doctor</code> should check:</p>
+<ul>
+<li>enabled flag</li>
+<li>provider URL</li>
+<li>local/remote policy</li>
+<li>token env</li>
+<li>installed models</li>
+<li>selected model availability</li>
+<li>latency</li>
+<li>prompt redaction settings</li>
+<li>remote safety warnings</li>
+</ul>
+<h2 id="workspace">Workspace<a class="headerlink" href="#workspace" title="Permanent link">&para;</a></h2>
+<p>Implemented first pass:</p>
+<pre><code class="language-powershell">inferra workspace
+inferra workspace map
+inferra workspace services
+inferra workspace inspect D:\Projects\app
+inferra investigate workspace
+inferra services list
+inferra services show api
+</code></pre>
+<p>Future target:</p>
+<pre><code class="language-powershell">inferra workspace explain
+</code></pre>
+<p>Workspace commands should become core because the product is not just observing runtime. It is connecting runtime behavior to local project context.</p>
+<h2 id="service">Service<a class="headerlink" href="#service" title="Permanent link">&para;</a></h2>
+<p>Inferra service commands manage Inferra itself.</p>
+<p>Target:</p>
+<pre><code class="language-powershell">inferra service status
+inferra service install --startup auto
+inferra service start
+inferra service stop
+inferra service restart
+inferra service remove
+inferra service logs
+inferra service repair
+</code></pre>
+<p><code>service repair</code> should inspect:</p>
+<ul>
+<li>service runtime file</li>
+<li>config path</li>
+<li>data dir</li>
+<li>log path</li>
+<li>port conflicts</li>
+<li>missing exe</li>
+<li>permissions</li>
+<li>pywin32 availability</li>
+</ul>
+<p>Implemented first pass:</p>
+<pre><code class="language-powershell">inferra service repair
+</code></pre>
+<p>The repair command is read-only: it inspects Inferra's own service setup and prints suggested corrective actions instead of mutating the observed system.</p>
+<h2 id="json-contract">JSON Contract<a class="headerlink" href="#json-contract" title="Permanent link">&para;</a></h2>
+<p>All investigation and control commands should support:</p>
+<pre><code class="language-powershell">inferra &lt;command&gt; --json
+</code></pre>
+<p>JSON output should be stable enough for scripts.</p>
+<h2 id="implementation-note">Implementation Note<a class="headerlink" href="#implementation-note" title="Permanent link">&para;</a></h2>
+<p>The first command split exists under <code>src/cli_core/commands/</code>. Keep moving parser registration and remaining legacy command glue out of <code>src/cli.py</code> before adding another large command family.</p>
+              
+            </div>
+          </div><footer>
+    <div class="rst-footer-buttons" role="navigation" aria-label="Footer Navigation">
+        <a href="../../architecture/repository_reset_plan/" class="btn btn-neutral float-left" title="Repository reset plan"><span class="icon icon-circle-arrow-left"></span> Previous</a>
+        <a href="../web_control_plane/" class="btn btn-neutral float-right" title="Web control plane">Next <span class="icon icon-circle-arrow-right"></span></a>
+    </div>
+
+  <hr/>
+
+  <div role="contentinfo">
+    <!-- Copyright etc -->
+  </div>
+
+  Built with <a href="https://www.mkdocs.org/">MkDocs</a> using a <a href="https://github.com/readthedocs/sphinx_rtd_theme">theme</a> provided by <a href="https://readthedocs.org">Read the Docs</a>.
+</footer>
+          
+        </div>
+      </div>
+
+    </section>
+
+  </div>
+
+  <div class="rst-versions" role="note" aria-label="Versions">
+  <span class="rst-current-version" data-toggle="rst-current-version">
+    
+    
+      <span><a href="../../architecture/repository_reset_plan/" style="color: #fcfcfc">&laquo; Previous</a></span>
+    
+    
+      <span><a href="../web_control_plane/" style="color: #fcfcfc">Next &raquo;</a></span>
+    
+  </span>
+</div>
+    <script src="../../../js/jquery-3.6.0.min.js"></script>
+    <script>var base_url = "../../..";</script>
+    <script src="../../../js/theme_extra.js"></script>
+    <script src="../../../js/theme.js"></script>
+      <script src="../../../search/main.js"></script>
+    <script>
+        jQuery(function () {
+            SphinxRtdTheme.Navigation.enable(true);
+        });
+    </script>
+
+</body>
+</html>

@@ -48,8 +48,30 @@ def test_console_index_loads_offline_bundle(tmp_path) -> None:
             pytest.skip(f"playwright browser unavailable: {exc}")
         page = browser.new_page()
         page.goto(f"http://{host}:{port}/", wait_until="domcontentloaded", timeout=30_000)
-        page.wait_for_selector("#page-title", timeout=10_000)
-        assert "Dashboard" in page.inner_text("#page-title")
-        assert page.locator('link[href="/static/tailwind.css"]').count() == 1
-        assert page.locator('script[type="module"][src="/static/js/main.js"]').count() == 1
+        page.wait_for_selector("#root", timeout=10_000)
+        assert "Inferra" in page.inner_text("body")
+        assert page.locator('script[type="module"][src^="/assets/"]').count() >= 1
+        for label, heading in (
+            ("Incidents", "Incidents"),
+            ("Systems", "Systems"),
+            ("Evidence", "Evidence"),
+            ("AI Investigator", "AI Investigator"),
+            ("Workspace", "Workspace"),
+            ("Control", "Control"),
+            ("Settings", "Settings"),
+        ):
+            page.get_by_role("link", name=label).click()
+            page.wait_for_selector("h2.page-title", timeout=10_000)
+            assert page.locator("h2.page-title").inner_text() == heading
+
+        page.get_by_role("button", name="Developer").click()
+        page.wait_for_function("() => document.body.innerText.includes('Mode saved')", timeout=10_000)
+        saved_mode = page.evaluate(
+            """async () => {
+                const response = await fetch('/api/config');
+                const payload = await response.json();
+                return payload.config.experience.mode;
+            }"""
+        )
+        assert saved_mode == "developer"
         browser.close()

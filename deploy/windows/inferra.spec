@@ -23,6 +23,7 @@ a = Analysis(
         (str(_REPO_ROOT / "pyproject.toml"), "."),
         (str(_SRC / "config" / "defaults.toml"), "config"),
         (str(_SRC / "web" / "static"), "web/static"),
+        (str(_SRC / "web" / "ui_dist"), "web/ui_dist"),
     ],
     hiddenimports=[
         "win32timezone",

@@ -8,14 +8,17 @@ from .loader import (
     validate_config,
     write_config,
 )
-from .models import AIConfig, InferraConfig, StorageConfig
+from .models import AIConfig, ExperienceConfig, InferraConfig, StorageConfig, WorkspaceConfig, WorkspaceServiceMapping
 from .presets import PRESET_NAMES, apply_preset
 
 __all__ = [
     "AIConfig",
+    "ExperienceConfig",
     "InferraConfig",
     "PRESET_NAMES",
     "StorageConfig",
+    "WorkspaceConfig",
+    "WorkspaceServiceMapping",
     "apply_preset",
     "config_to_dict",
     "dump_config",

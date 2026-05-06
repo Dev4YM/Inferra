@@ -11,9 +11,13 @@ coverage.xml
 htmlcov/
 build/
 dist/
+site/
+perf_report.json
 .venv/
 .venv-inferra-build/
 venv/
+node_modules/
+*.tsbuildinfo
 .idea/
 .vscode/
 .env

@@ -355,3 +355,19 @@ cache_ttl_seconds = 3600
 max_context_events = 30
 redact_raw_logs = true
 nl_search_min_confidence = 0.55
+
+[experience]
+mode = "operator"
+ai_role = "investigator"
+suggest_safe_actions = true
+execute_actions = false
+show_raw_evidence_by_default = false
+
+[workspace]
+enabled = true
+roots = []
+max_depth = 4
+max_results = 100
+map_runtime = true
+redact_env_files = true
+service_mappings = []

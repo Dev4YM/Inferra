@@ -30,6 +30,73 @@ def test_setup_writes_ai_config_without_contacting_ollama(tmp_path):
     assert config.ai.model == "gemma4:e2b"
     assert config.storage.data_dir == data_dir
     assert (data_dir / "events.db").exists()
+    assert config.experience.mode == "operator"
+    assert config.experience.ai_role == "investigator"
+
+
+def test_onboard_can_set_control_plane_mode_and_ai_role(tmp_path):
+    config_path = tmp_path / "inferra.toml"
+
+    result = main(
+        [
+            "--config",
+            str(config_path),
+            "onboard",
+            "--yes",
+            "--mode",
+            "developer",
+            "--ai-role",
+            "researcher",
+            "--skip-connection-test",
+        ]
+    )
+
+    assert result == 0
+    config = load_config(config_path)
+    assert config.experience.mode == "developer"
+    assert config.experience.ai_role == "researcher"
+    assert config.experience.show_raw_evidence_by_default is True
+
+
+def test_mode_set_updates_experience_mode(tmp_path, capsys):
+    config_path = tmp_path / "inferra.toml"
+    assert main(["--config", str(config_path), "setup", "--yes", "--skip-connection-test"]) == 0
+    capsys.readouterr()
+
+    result = main(["--json", "--config", str(config_path), "mode", "set", "developer"])
+    payload = json.loads(capsys.readouterr().out)
+
+    assert result == 0
+    assert payload["experience"]["mode"] == "developer"
+    config = load_config(config_path)
+    assert config.experience.mode == "developer"
+    assert config.experience.show_raw_evidence_by_default is True
+
+
+def test_setup_can_apply_preset_and_disable_ai(tmp_path):
+    config_path = tmp_path / "inferra.toml"
+
+    result = main(
+        [
+            "--config",
+            str(config_path),
+            "setup",
+            "--yes",
+            "--preset",
+            "linux-node",
+            "--disable-ai",
+            "--base-url",
+            "http://127.0.0.1:11434",
+            "--skip-connection-test",
+        ]
+    )
+
+    assert result == 0
+    config = load_config(config_path)
+    assert config.ai.enabled is False
+    assert config.ai.base_url == "http://127.0.0.1:11434"
+    assert config.collectors.auto_start is True
+    assert config.collectors.journald.enabled is True
 
 
 def test_config_set_updates_nested_value(tmp_path):
@@ -113,6 +180,53 @@ def test_ai_status_json_uses_service_payload(monkeypatch, tmp_path, capsys):
     assert result == 0
     assert payload["available"] is True
     assert payload["resolved_model"] == "gemma4:e4b-it-q4_K_M"
+
+
+def test_ai_setup_json_updates_config_and_runs_probe(monkeypatch, tmp_path, capsys):
+    config_path = tmp_path / "inferra.toml"
+
+    async def fake_status(self):
+        return {
+            "enabled": True,
+            "provider": "ollama",
+            "base_url": "http://10.0.0.12:11434",
+            "model": "gemma4:31b",
+            "resolved_model": "gemma4:31b-it-q4_K_M",
+            "available": True,
+            "installed": True,
+            "reason": None,
+        }
+
+    monkeypatch.setattr(ai.AIService, "status", fake_status)
+
+    result = main(
+        [
+            "--json",
+            "--config",
+            str(config_path),
+            "ai",
+            "setup",
+            "--enable",
+            "--model",
+            "gemma4:31b",
+            "--base-url",
+            "http://10.0.0.12:11434",
+            "--allow-remote",
+            "--token-env",
+            "OLLAMA_TOKEN",
+        ]
+    )
+    payload = json.loads(capsys.readouterr().out)
+
+    assert result == 0
+    config = load_config(config_path)
+    assert config.ai.enabled is True
+    assert config.ai.model == "gemma4:31b"
+    assert config.ai.base_url == "http://10.0.0.12:11434"
+    assert config.ai.allow_remote is True
+    assert config.ai.token_env == "OLLAMA_TOKEN"
+    assert payload["connection_test"]["available"] is True
+    assert payload["next_steps"]
 
 
 def test_ai_models_json_marks_alias_as_installed(monkeypatch, tmp_path, capsys):

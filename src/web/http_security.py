@@ -37,7 +37,7 @@ class LocalSecurityMiddleware(BaseHTTPMiddleware):
         if request.method == "OPTIONS":
             return await call_next(request)
         path = request.url.path
-        if path in self.allow_paths or path.startswith("/static/"):
+        if path in self.allow_paths or path.startswith("/static/") or path.startswith("/assets/"):
             return await call_next(request)
         client_host = request.client.host if request.client else None
         if self.require_loopback and client_host not in (None, "127.0.0.1", "::1", "testclient"):

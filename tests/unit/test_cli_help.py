@@ -16,6 +16,9 @@ def test_root_help_lists_top_level_and_readme_commands(capsys: pytest.CaptureFix
     assert "usage: inferra" in help_text
     for command in (
         "setup",
+        "onboard",
+        "guide",
+        "dashboard",
         "serve",
         "run",
         "run-collectors",
@@ -34,6 +37,16 @@ def test_root_help_lists_top_level_and_readme_commands(capsys: pytest.CaptureFix
         "config",
         "reset-weights",
         "calibration",
+        "service",
+        "mode",
+        "status",
+        "overview",
+        "investigate",
+        "incidents",
+        "events",
+        "services",
+        "workspace",
+        "doctor",
         "completion",
     ):
         assert command in help_text
@@ -65,9 +78,15 @@ def test_completion_command_returns_shellcode(monkeypatch: pytest.MonkeyPatch, c
 @pytest.mark.parametrize(
     ("argv", "expected_commands"),
     [
-        (["ai", "--help"], ("status", "models", "pull", "test")),
+        (["ai", "--help"], ("status", "setup", "models", "pull", "test")),
         (["collectors", "--help"], ("status", "start", "stop")),
         (["config", "--help"], ("show", "get", "set", "preset")),
+        (["service", "--help"], ("status", "install", "start", "stop", "restart", "remove")),
+        (["mode", "--help"], ("show", "set")),
+        (["investigate", "--help"], ("now", "latest", "incident", "service", "workspace")),
+        (["incidents", "--help"], ("list", "show")),
+        (["events", "--help"], ("list", "show")),
+        (["services", "--help"], ("list", "show", "events")),
     ],
 )
 def test_group_help_outputs_include_expected_subcommands(

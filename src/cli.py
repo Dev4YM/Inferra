@@ -6,14 +6,12 @@ import asyncio
 import json
 import os
 import platform
-import shutil
+import subprocess
 import sys
-from dataclasses import dataclass, field, replace
+from dataclasses import replace
 from importlib.metadata import PackageNotFoundError, version
 from pathlib import Path
 from typing import Any
-
-import aiohttp
 
 try:
     import argcomplete
@@ -30,21 +28,59 @@ if str(SRC_DIR) not in sys.path:
     sys.path.insert(0, str(SRC_DIR))
 
 from config import (  # noqa: E402
+    PRESET_NAMES,
     apply_preset,
-    config_to_dict,
-    dump_config,
-    get_config_value,
     load_config,
-    set_config_value,
     validate_config,
-    write_config,
 )
 from core.errors import ConfigError  # noqa: E402
 from core.logging import configure_logging, get_logger  # noqa: E402
 
-_LOCAL_API_TIMEOUT_SECONDS = 2.0
+# These are re-exported here so command modules and tests can reach them via
+# the ``cli`` module surface (e.g. ``cli._local_api_json``); ruff would flag
+# them as unused otherwise.
+from cli_core import (  # noqa: E402, F401
+    CommandError,
+    CommandResult,
+    LOCAL_API_TIMEOUT_SECONDS as _LOCAL_API_TIMEOUT_SECONDS,
+    emit_result as _emit_result,
+    json_ready as _json_ready,
+    local_api_json as _local_api_json,
+    print_json as _print_json,
+    server_url as _server_url,
+)
+from cli_core.commands import ai as _ai_cmds  # noqa: E402
+from cli_core.commands import ai_provider as _ai_provider_cmds  # noqa: E402
+from cli_core.commands import collectors as _collectors_cmds  # noqa: E402
+from cli_core.commands import config as _config_cmds  # noqa: E402
+from cli_core.commands import dashboard as _dashboard_cmds  # noqa: E402
+from cli_core.commands import demo as _demo_cmds  # noqa: E402
+from cli_core.commands import guide as _guide_cmds  # noqa: E402
+from cli_core.commands import incidents as _incidents_cmds  # noqa: E402
+from cli_core.commands import reasoning as _reasoning_cmds  # noqa: E402
+from cli_core.commands import service as _service_cmds  # noqa: E402
+from cli_core.commands import setup as _setup_cmds  # noqa: E402
+from cli_core.commands import storage as _storage_cmds  # noqa: E402
+from cli_core.commands import workspace as _workspace_cmds  # noqa: E402
+
+
+async def _require_local_api(
+    config: Any,
+    method: str,
+    path: str,
+    payload: dict[str, Any] | None = None,
+) -> dict[str, Any]:
+    """Thin wrapper so test monkeypatching on `cli._local_api_json` is honored."""
+    try:
+        return await _local_api_json(config, method, path, payload)
+    except CommandError as exc:
+        raise CommandError(
+            f"{exc} Start it with `inferra serve` or `inferra service start`."
+        ) from exc
 _RUN_COMMANDS = ("run", "serve", "run-collectors")
 _ACTIVE_INCIDENT_STATES = ("open", "investigating", "explained")
+_EXPERIENCE_MODES = ("operator", "developer")
+_AI_ROLES = ("observer", "investigator", "researcher")
 
 _ONE_SHOT_COMMANDS: dict[str, dict[str, str]] = {
     "collect-host": {
@@ -90,15 +126,45 @@ _ONE_SHOT_COMMANDS: dict[str, dict[str, str]] = {
 
 _README_HELP_COMMANDS = [
     "inferra setup --yes --skip-connection-test",
+    "inferra setup --preset windows-server --model gemma4:e4b",
+    "inferra onboard --mode operator --ai-role investigator",
+    "inferra guide",
+    "inferra guide --profile developer",
+    "inferra guide --profile server",
+    "inferra dashboard",
+    "inferra dashboard --section ai",
+    "inferra dashboard --no-open",
     "inferra serve",
+    "inferra status",
+    "inferra overview",
+    "inferra investigate latest",
+    "inferra ai ask \"what should I inspect first?\"",
+    "inferra ai investigate latest",
+    "inferra ai report inc-abcdef1234567890 --mode operator",
+    "inferra ai trace inc-abcdef1234567890",
+    "inferra ai doctor",
+    "inferra incidents list",
+    "inferra events list --limit 25",
+    "inferra services list",
+    "inferra doctor",
+    "inferra workspace",
+    "inferra workspace map",
+    "inferra workspace services",
+    "inferra workspace inspect D:\\Projects\\app",
+    "inferra demo seed",
+    "inferra demo clear",
     "inferra init-db",
     "inferra reason-incident inc-abcdef1234567890",
     "inferra check-config",
     "inferra check-config --json",
     "inferra ai status",
+    "inferra ai setup --model gemma4:e4b",
     "inferra ai models",
     "inferra ai test",
     "inferra ai pull gemma4:e4b",
+    "inferra service status",
+    "inferra service install --startup auto",
+    "inferra service repair",
     "inferra collectors status",
     "inferra collectors start",
     "inferra collectors stop",
@@ -114,21 +180,13 @@ _README_HELP_COMMANDS = [
     "inferra config get ai.model",
     "inferra config set ai.enabled true",
     "inferra config preset windows-server",
+    "inferra mode show",
+    "inferra mode set developer",
     "inferra calibration show",
     "inferra completion powershell",
 ]
 
 
-@dataclass(slots=True)
-class CommandResult:
-    payload: dict[str, Any]
-    stdout_lines: list[str] = field(default_factory=list)
-    stderr_lines: list[str] = field(default_factory=list)
-    exit_code: int = 0
-
-
-class CommandError(RuntimeError):
-    """Raised for user-facing CLI failures."""
 
 
 def main(argv: list[str] | None = None) -> int:
@@ -183,12 +241,36 @@ def _build_parser() -> argparse.ArgumentParser:
     _add_server_bind_options(run_collectors)
     run_collectors.set_defaults(handler=_handle_run_collectors)
 
+    onboard = sub.add_parser("onboard", help="Guided first-run onboarding for CLI, AI, collectors, and mode")
+    _add_shared_command_options(onboard)
+    _add_setup_options(onboard)
+    onboard.set_defaults(handler=_handle_setup)
+
     setup = sub.add_parser("setup", help="Create local config, storage, and first-run defaults")
     _add_shared_command_options(setup)
-    setup.add_argument("--yes", action="store_true", help="Accept defaults and skip interactive prompts")
-    setup.add_argument("--model", default=None, help="Ollama model tag to configure")
-    setup.add_argument("--skip-connection-test", action="store_true", help="Skip Ollama connectivity checks")
+    _add_setup_options(setup)
     setup.set_defaults(handler=_handle_setup)
+
+    guide = sub.add_parser("guide", help="Show the next best setup or operating path for a user profile")
+    _add_shared_command_options(guide)
+    guide.add_argument(
+        "--profile",
+        choices=("operator", "developer", "server", "contributor"),
+        default=None,
+        help="Guide profile; defaults to configured experience mode",
+    )
+    guide.set_defaults(handler=_handle_guide)
+
+    dashboard_cmd = sub.add_parser("dashboard", help="Open or print the local web control-plane URL")
+    _add_shared_command_options(dashboard_cmd)
+    dashboard_cmd.add_argument(
+        "--section",
+        choices=("overview", "incidents", "systems", "evidence", "ai", "workspace", "control", "settings"),
+        default="overview",
+        help="Dashboard section to open",
+    )
+    dashboard_cmd.add_argument("--no-open", action="store_true", help="Print the URL without opening a browser")
+    dashboard_cmd.set_defaults(handler=_handle_dashboard)
 
     check = sub.add_parser("check-config", help="Validate inferra.toml and local prerequisites")
     _add_shared_command_options(check)
@@ -234,6 +316,19 @@ def _build_parser() -> argparse.ArgumentParser:
     ai_status = ai_sub.add_parser("status", help="Probe the configured Ollama provider")
     ai_status.set_defaults(handler=_handle_ai_status)
 
+    ai_setup = ai_sub.add_parser("setup", help="Configure AI defaults and optionally probe the provider")
+    ai_setup.add_argument("--model", default=None, help="Ollama model tag to configure")
+    ai_setup.add_argument("--base-url", default=None, help="Override the Ollama-compatible base URL")
+    ai_setup.add_argument("--token-env", default=None, help="Environment variable name for remote Ollama auth")
+    ai_toggle = ai_setup.add_mutually_exclusive_group()
+    ai_toggle.add_argument("--enable", dest="setup_ai_enabled", action="store_true", default=None, help="Enable AI in config")
+    ai_toggle.add_argument("--disable", dest="setup_ai_enabled", action="store_false", help="Disable AI in config")
+    remote_toggle = ai_setup.add_mutually_exclusive_group()
+    remote_toggle.add_argument("--allow-remote", dest="setup_allow_remote", action="store_true", default=None, help="Allow non-loopback AI base URLs")
+    remote_toggle.add_argument("--local-only", dest="setup_allow_remote", action="store_false", help="Require a local loopback AI base URL")
+    ai_setup.add_argument("--skip-connection-test", action="store_true", help="Skip Ollama connectivity checks")
+    ai_setup.set_defaults(handler=_handle_ai_setup)
+
     ai_models = ai_sub.add_parser("models", help="List Gemma registry entries and installed Ollama models")
     ai_models.set_defaults(handler=_handle_ai_models)
 
@@ -243,6 +338,30 @@ def _build_parser() -> argparse.ArgumentParser:
 
     ai_test = ai_sub.add_parser("test", help="Run a short provider health prompt")
     ai_test.set_defaults(handler=_handle_ai_test)
+
+    ai_ask = ai_sub.add_parser("ask", help="Ask the AI investigator a question with cited evidence")
+    ai_ask.add_argument("question", help="Free-form question, e.g. \"what should I inspect first?\"")
+    ai_ask.add_argument("--scope", default="overview", help="Investigation scope (overview, incident:<id>, service:<id>)")
+    ai_ask.add_argument("--mode", choices=_EXPERIENCE_MODES, default=None, help="Override the response density mode")
+    ai_ask.set_defaults(handler=_handle_ai_ask)
+
+    ai_investigate = ai_sub.add_parser("investigate", help="Run a structured AI investigation on the latest incident")
+    ai_investigate.add_argument("target", nargs="?", default="latest", help="latest | incident <id> | service <id>")
+    ai_investigate.add_argument("identifier", nargs="?", default=None, help="Optional id when target is 'incident' or 'service'")
+    ai_investigate.add_argument("--mode", choices=_EXPERIENCE_MODES, default=None)
+    ai_investigate.set_defaults(handler=_handle_ai_investigate)
+
+    ai_report = ai_sub.add_parser("report", help="Produce an operator/developer investigation report for an incident")
+    ai_report.add_argument("incident_id")
+    ai_report.add_argument("--mode", choices=_EXPERIENCE_MODES, default="operator")
+    ai_report.set_defaults(handler=_handle_ai_report)
+
+    ai_trace = ai_sub.add_parser("trace", help="Show the most recent AI prompt trace for an incident")
+    ai_trace.add_argument("incident_id")
+    ai_trace.set_defaults(handler=_handle_ai_trace)
+
+    ai_doctor = ai_sub.add_parser("doctor", help="Inspect AI provider readiness, redaction policy, and remote risk")
+    ai_doctor.set_defaults(handler=_handle_ai_doctor)
 
     init_db = sub.add_parser("init-db", help="Idempotently create or upgrade database schemas")
     _add_shared_command_options(init_db)
@@ -289,10 +408,172 @@ def _build_parser() -> argparse.ArgumentParser:
     calib_show = calib_sub.add_parser("show", help="Print calibration buckets and staleness")
     calib_show.set_defaults(handler=_handle_calibration_show)
 
+    service = sub.add_parser("service", help="Manage the Windows Inferra service from the main CLI")
+    _add_shared_command_options(service)
+    service_sub = service.add_subparsers(dest="service_command")
+
+    service_status = service_sub.add_parser("status", help="Show Windows service state, runtime config, and log path")
+    service_status.set_defaults(handler=_handle_service_status)
+
+    service_install = service_sub.add_parser("install", help="Install the Windows service using the current config path")
+    service_install.add_argument("--startup", choices=("auto", "manual", "delayed"), default="auto")
+    service_install.set_defaults(handler=_handle_service_install)
+
+    for verb in ("start", "stop", "restart", "remove"):
+        service_cmd = service_sub.add_parser(verb, help=f"{verb.capitalize()} the Windows Inferra service")
+        service_cmd.set_defaults(handler=_handle_service_control, service_verb=verb)
+
+    service_repair = service_sub.add_parser(
+        "repair",
+        help="Inspect Inferra service prerequisites and report safe next steps",
+    )
+    service_repair.set_defaults(handler=_handle_service_repair)
+
+    mode = sub.add_parser("mode", help="Show or switch operator/developer control-plane mode")
+    _add_shared_command_options(mode)
+    mode.set_defaults(handler=_handle_mode_show)
+    mode_sub = mode.add_subparsers(dest="mode_command")
+
+    mode_show = mode_sub.add_parser("show", help="Show the active control-plane mode")
+    mode_show.set_defaults(handler=_handle_mode_show)
+
+    mode_set = mode_sub.add_parser("set", help="Switch the active control-plane mode")
+    mode_set.add_argument("value", choices=_EXPERIENCE_MODES)
+    mode_set.set_defaults(handler=_handle_mode_set)
+
+    status_cmd = sub.add_parser("status", help="Rich health dashboard (live API, or host snapshot if offline)")
+    _add_shared_command_options(status_cmd)
+    status_cmd.set_defaults(handler=_handle_status)
+
+    overview_cmd = sub.add_parser(
+        "overview",
+        help="Quick analysis across incidents, Docker, processes, and detected repos (requires inferra run)",
+    )
+    _add_shared_command_options(overview_cmd)
+    overview_cmd.set_defaults(handler=_handle_overview)
+
+    investigate = sub.add_parser("investigate", help="Drive a read-only investigation flow and suggest safe next steps")
+    _add_shared_command_options(investigate)
+    investigate_sub = investigate.add_subparsers(dest="investigate_command", required=True)
+
+    investigate_now = investigate_sub.add_parser("now", help="Investigate the current system overview")
+    investigate_now.set_defaults(handler=_handle_investigate_now)
+
+    investigate_latest = investigate_sub.add_parser("latest", help="Investigate the highest-priority active incident")
+    investigate_latest.set_defaults(handler=_handle_investigate_latest)
+
+    investigate_incident = investigate_sub.add_parser("incident", help="Investigate a specific incident")
+    investigate_incident.add_argument("incident_id")
+    investigate_incident.set_defaults(handler=_handle_investigate_incident)
+
+    investigate_service = investigate_sub.add_parser("service", help="Investigate a specific service")
+    investigate_service.add_argument("service_id")
+    investigate_service.set_defaults(handler=_handle_investigate_service)
+
+    investigate_workspace = investigate_sub.add_parser("workspace", help="Inspect local workspace signals")
+    investigate_workspace.set_defaults(handler=_handle_workspace)
+
+    incidents = sub.add_parser("incidents", help="Inspect active incidents from the running supervisor")
+    _add_shared_command_options(incidents)
+    incidents_sub = incidents.add_subparsers(dest="incidents_command")
+    incidents.set_defaults(handler=_handle_incidents_list)
+
+    incidents_list = incidents_sub.add_parser("list", help="List active incidents")
+    incidents_list.set_defaults(handler=_handle_incidents_list)
+
+    incidents_show = incidents_sub.add_parser("show", help="Show incident evidence and hypotheses")
+    incidents_show.add_argument("incident_id")
+    incidents_show.set_defaults(handler=_handle_incident_show)
+
+    events = sub.add_parser("events", help="Inspect normalized events from the running supervisor")
+    _add_shared_command_options(events)
+    events_sub = events.add_subparsers(dest="events_command")
+    events.set_defaults(handler=_handle_events_list)
+
+    events_list = events_sub.add_parser("list", help="List recent normalized events")
+    events_list.add_argument("--limit", type=int, default=25, help="Maximum events to show")
+    events_list.set_defaults(handler=_handle_events_list)
+
+    events_show = events_sub.add_parser("show", help="Show one normalized event")
+    events_show.add_argument("event_id")
+    events_show.set_defaults(handler=_handle_event_show)
+
+    services = sub.add_parser("services", help="Inspect services from the running supervisor")
+    _add_shared_command_options(services)
+    services_sub = services.add_subparsers(dest="services_command")
+    services.set_defaults(handler=_handle_services_list)
+
+    services_list = services_sub.add_parser("list", help="List observed services")
+    services_list.set_defaults(handler=_handle_services_list)
+
+    services_show = services_sub.add_parser("show", help="Show one service")
+    services_show.add_argument("service_id")
+    services_show.add_argument("--limit", type=int, default=50, help="Maximum related events to include")
+    services_show.set_defaults(handler=_handle_service_show)
+
+    services_events = services_sub.add_parser("events", help="List recent events for one service")
+    services_events.add_argument("service_id")
+    services_events.add_argument("--limit", type=int, default=25, help="Maximum events to show")
+    services_events.set_defaults(handler=_handle_service_events)
+
+    workspace_cmd = sub.add_parser("workspace", help="Scan disk for code-project markers (works offline)")
+    _add_shared_command_options(workspace_cmd)
+    workspace_cmd.set_defaults(handler=_handle_workspace)
+    workspace_sub = workspace_cmd.add_subparsers(dest="workspace_command")
+
+    workspace_scan = workspace_sub.add_parser("scan", help="Scan local disk for code projects (default action)")
+    workspace_scan.set_defaults(handler=_handle_workspace)
+
+    workspace_map = workspace_sub.add_parser("map", help="Show service-to-project mappings with confidence (requires inferra serve)")
+    workspace_map.set_defaults(handler=_handle_workspace_map)
+
+    workspace_services = workspace_sub.add_parser("services", help="Show service mapping coverage (requires inferra serve)")
+    workspace_services.set_defaults(handler=_handle_workspace_services)
+
+    workspace_inspect = workspace_sub.add_parser("inspect", help="Inspect markers and likely commands for one project path")
+    workspace_inspect.add_argument("path")
+    workspace_inspect.set_defaults(handler=_handle_workspace_inspect)
+
+    demo = sub.add_parser("demo", help="Demo data and onboarding helpers")
+    _add_shared_command_options(demo)
+    demo_sub = demo.add_subparsers(dest="demo_command", required=True)
+    demo_seed = demo_sub.add_parser("seed", help="Seed demo events into the local database for first-run review")
+    demo_seed.add_argument("--service", default="api", help="Demo service id to attach events to")
+    demo_seed.add_argument("--count", type=int, default=8, help="Number of demo events to insert")
+    demo_seed.set_defaults(handler=_handle_demo_seed)
+    demo_clear = demo_sub.add_parser("clear", help="Remove demo-tagged events and incidents from the local database")
+    demo_clear.set_defaults(handler=_handle_demo_clear)
+
+    doctor_cmd = sub.add_parser("doctor", help="Run local readiness checks and suggest safe next steps")
+    _add_shared_command_options(doctor_cmd)
+    doctor_cmd.add_argument(
+        "--release",
+        action="store_true",
+        help="Also run repository release-readiness checks for docs, UI packaging, and dropped artifacts",
+    )
+    doctor_cmd.set_defaults(handler=_handle_doctor)
+
     completion = sub.add_parser("completion", help="Generate shell completion for bash, zsh, fish, or PowerShell")
     completion.add_argument("shell", choices=("bash", "zsh", "fish", "powershell"))
     completion.set_defaults(handler=_handle_completion)
     return parser
+
+
+def _add_setup_options(parser: argparse.ArgumentParser) -> None:
+    parser.add_argument("--yes", action="store_true", help="Accept defaults and skip interactive prompts")
+    parser.add_argument("--preset", choices=PRESET_NAMES, default=None, help="Apply a collector preset during setup")
+    parser.add_argument("--mode", choices=_EXPERIENCE_MODES, default=None, help="Set the control-plane experience mode")
+    parser.add_argument("--ai-role", choices=_AI_ROLES, default=None, help="Set the primary AI role")
+    parser.add_argument("--model", default=None, help="Ollama model tag to configure")
+    parser.add_argument("--base-url", default=None, help="Override the Ollama-compatible base URL")
+    parser.add_argument("--token-env", default=None, help="Environment variable name for remote Ollama auth")
+    ai_toggle = parser.add_mutually_exclusive_group()
+    ai_toggle.add_argument("--enable-ai", dest="setup_ai_enabled", action="store_true", default=None, help="Enable AI in the written config")
+    ai_toggle.add_argument("--disable-ai", dest="setup_ai_enabled", action="store_false", help="Disable AI in the written config")
+    remote_toggle = parser.add_mutually_exclusive_group()
+    remote_toggle.add_argument("--allow-remote", dest="setup_allow_remote", action="store_true", default=None, help="Allow non-loopback AI base URLs")
+    remote_toggle.add_argument("--local-only", dest="setup_allow_remote", action="store_false", help="Require a local loopback AI base URL")
+    parser.add_argument("--skip-connection-test", action="store_true", help="Skip Ollama connectivity checks")
 
 
 def _add_shared_command_options(parser: argparse.ArgumentParser) -> None:
@@ -311,85 +592,9 @@ def _add_server_bind_options(parser: argparse.ArgumentParser) -> None:
     parser.add_argument("--port", type=int, default=None, help="Override [server].port for this process")
 
 
-async def _handle_setup(args: argparse.Namespace, parser: argparse.ArgumentParser) -> int:
-    from ai import AIService
-    from storage.migrations import migrate
-
-    config_path = _config_path(args)
-    config_exists = config_path.exists()
-    current = load_config(config_path)
-    config = replace(current, ai=replace(current.ai, enabled=True, provider="ollama"))
-
-    if args.data_dir is not None:
-        config = replace(config, storage=replace(config.storage, data_dir=Path(args.data_dir)))
-    if args.model is not None:
-        config = replace(config, ai=replace(config.ai, model=args.model.strip()))
-
-    skip_connection_test = bool(args.skip_connection_test)
-    if not args.yes:
-        if not sys.stdin.isatty():
-            raise CommandError("Interactive setup requires a TTY. Re-run with `--yes` for non-interactive setup.")
-        config, skip_connection_test = _interactive_setup(config, config_path, config_exists, skip_connection_test)
-
-    data_dir = Path(config.storage.data_dir)
-    data_dir.mkdir(parents=True, exist_ok=True)
-    events_path = data_dir / config.storage.events_db
-    incidents_path = data_dir / config.storage.incidents_db
-    events_version = migrate(events_path)
-    incidents_version = migrate(incidents_path)
-
-    current_data = config_to_dict(current)
-    updated_data = config_to_dict(config)
-    wrote_config = not config_exists or current_data != updated_data
-    if wrote_config:
-        write_config(config, config_path)
-
-    connection_test: dict[str, Any]
-    exit_code = 0
-    stderr_lines: list[str] = []
-    if skip_connection_test:
-        connection_test = {"skipped": True}
-    else:
-        payload = await AIService(config).status()
-        connection_test = {
-            "skipped": False,
-            "available": payload.get("available", False),
-            "reason": payload.get("reason"),
-            "error": payload.get("error"),
-            "installed": payload.get("installed", False),
-            "resolved_model": payload.get("resolved_model"),
-            "version": payload.get("version"),
-        }
-        if not payload.get("available", False):
-            exit_code = 1
-            stderr_lines.append(
-                f"Ollama probe failed at {config.ai.base_url}: {payload.get('error') or payload.get('reason') or 'unknown error'}"
-            )
-
-    payload = {
-        "command": "setup",
-        "config_path": str(config_path),
-        "created_config": not config_exists,
-        "wrote_config": wrote_config,
-        "data_dir": str(data_dir),
-        "events_db": {"path": str(events_path), "schema_version": events_version},
-        "incidents_db": {"path": str(incidents_path), "schema_version": incidents_version},
-        "ai": {
-            "enabled": config.ai.enabled,
-            "provider": config.ai.provider,
-            "model": config.ai.model,
-            "base_url": config.ai.base_url,
-        },
-        "connection_test": connection_test,
-    }
-    stdout_lines = [
-        f"{'Wrote' if wrote_config else 'Validated'} config at {config_path}",
-        f"Initialized storage under {data_dir}",
-        f"{events_path.name}: schema version {events_version}",
-        f"{incidents_path.name}: schema version {incidents_version}",
-        "Skipped Ollama connection test" if skip_connection_test else _human_connection_line(connection_test, config.ai.base_url),
-    ]
-    return _emit_result(args, CommandResult(payload=payload, stdout_lines=stdout_lines, stderr_lines=stderr_lines, exit_code=exit_code))
+_handle_setup = _setup_cmds.handle_setup
+_handle_guide = _guide_cmds.handle_guide
+_handle_dashboard = _dashboard_cmds.handle_dashboard
 
 
 async def _handle_run(args: argparse.Namespace, parser: argparse.ArgumentParser) -> int:
@@ -441,554 +646,279 @@ async def _handle_run_collectors(args: argparse.Namespace, parser: argparse.Argu
     return await _handle_run(args, parser)
 
 
-async def _handle_check_config(args: argparse.Namespace, parser: argparse.ArgumentParser) -> int:
-    config_path, config = _load_config_for_command(args)
-    report = await _build_check_report(config_path, config=config)
-    stdout_lines: list[str] = []
-    stderr_lines: list[str] = []
-    if report["errors"]:
-        stderr_lines.extend(f"Error: {error['message']}" for error in report["errors"])
-    else:
-        stdout_lines.append(f"Inferra config OK: {report['config_path']}")
-        stdout_lines.extend(f"{key}={value}" for key, value in report["summary"].items())
-    stderr_lines.extend(f"Warning: {warning['message']}" for warning in report["warnings"])
-    return _emit_result(
-        args,
-        CommandResult(payload=report, stdout_lines=stdout_lines, stderr_lines=stderr_lines, exit_code=0 if report["ok"] else 1),
-    )
+_handle_check_config = _config_cmds.handle_check_config
+_handle_config_show = _config_cmds.handle_config_show
+_handle_config_get = _config_cmds.handle_config_get
+_handle_config_set = _config_cmds.handle_config_set
+_handle_config_preset = _config_cmds.handle_config_preset
+_handle_mode_show = _config_cmds.handle_mode_show
+_handle_mode_set = _config_cmds.handle_mode_set
 
 
-async def _handle_config_show(args: argparse.Namespace, parser: argparse.ArgumentParser) -> int:
-    config_path, config = _load_config_for_command(args)
-    payload = {"command": "config show", "config_path": str(config_path), "config": config_to_dict(config)}
-    return _emit_result(args, CommandResult(payload=payload, stdout_lines=[dump_config(config).rstrip("\n")]))
+_handle_collectors_status = _collectors_cmds.handle_collectors_status
+_handle_collectors_start = _collectors_cmds.handle_collectors_start
+_handle_collectors_stop = _collectors_cmds.handle_collectors_stop
 
 
-async def _handle_config_get(args: argparse.Namespace, parser: argparse.ArgumentParser) -> int:
-    config_path, config = _load_config_for_command(args)
-    value = get_config_value(config, args.key)
-    payload = {"command": "config get", "config_path": str(config_path), "key": args.key, "value": _json_ready(value)}
-    return _emit_result(args, CommandResult(payload=payload, stdout_lines=[_format_config_value(value)]))
+_handle_ai_status = _ai_provider_cmds.handle_ai_status
 
 
-async def _handle_config_set(args: argparse.Namespace, parser: argparse.ArgumentParser) -> int:
-    config_path, config = _load_config_for_command(args)
-    previous = get_config_value(config, args.key)
-    updated = set_config_value(config_path, args.key, args.value)
-    payload = {
-        "command": "config set",
-        "config_path": str(config_path),
-        "key": args.key,
-        "previous": _json_ready(previous),
-        "value": _json_ready(get_config_value(updated, args.key)),
-    }
-    return _emit_result(
-        args,
-        CommandResult(payload=payload, stdout_lines=[f"Updated {args.key}={_format_config_value(get_config_value(updated, args.key))}"]),
-    )
+_handle_ai_setup = _ai_provider_cmds.handle_ai_setup
 
 
-async def _handle_config_preset(args: argparse.Namespace, parser: argparse.ArgumentParser) -> int:
-    config_path, config = _load_config_for_command(args)
-    try:
-        updated = apply_preset(config, args.name)
-    except ValueError as exc:
-        raise CommandError(str(exc)) from exc
-    write_config(updated, config_path)
-    payload = {
-        "command": "config preset",
-        "config_path": str(config_path),
-        "preset": args.name,
-        "collectors": config_to_dict(updated)["collectors"],
-    }
-    return _emit_result(args, CommandResult(payload=payload, stdout_lines=[f"Applied preset {args.name}"]))
+_handle_ai_models = _ai_provider_cmds.handle_ai_models
+_handle_ai_pull = _ai_provider_cmds.handle_ai_pull
+_handle_ai_test = _ai_provider_cmds.handle_ai_test
 
 
-async def _handle_collectors_status(args: argparse.Namespace, parser: argparse.ArgumentParser) -> int:
-    config_path, config = _load_config_for_command(args)
-    server_url = _server_url(config)
-    live_payload: dict[str, Any] | None = None
-    live_error: str | None = None
-    try:
-        live_payload = await _local_api_json(config, "GET", "/api/collectors")
-    except CommandError as exc:
-        live_error = str(exc)
-
-    if live_payload is not None:
-        payload = {
-            "command": "collectors status",
-            "mode": "live",
-            "config_path": str(config_path),
-            "server_url": server_url,
-            "running": True,
-            "queue_depth": int(live_payload.get("queue_depth", 0)),
-            "collectors": list(live_payload.get("collectors", [])),
-        }
-        stdout_lines = [f"Live collectors: {len(payload['collectors'])} ({server_url})"]
-        stdout_lines.extend(_format_collector_line(item) for item in payload["collectors"])
-        return _emit_result(args, CommandResult(payload=payload, stdout_lines=stdout_lines))
-
-    payload = {
-        "command": "collectors status",
-        "mode": "configured",
-        "config_path": str(config_path),
-        "server_url": server_url,
-        "running": False,
-        "queue_depth": 0,
-        "collectors": _configured_collectors(config),
-        "hint": "Start the live supervisor with `inferra run`.",
-    }
-    stdout_lines = [f"Configured collectors: {len(payload['collectors'])}"]
-    stdout_lines.extend(_format_collector_line(item) for item in payload["collectors"])
-    stderr_lines = [f"No running Inferra supervisor found at {server_url}. Start it with `inferra run`."] if live_error else []
-    return _emit_result(args, CommandResult(payload=payload, stdout_lines=stdout_lines, stderr_lines=stderr_lines))
+_handle_reason_incident = _reasoning_cmds.handle_reason_incident
+_handle_init_db = _storage_cmds.handle_init_db
+_handle_storage_verify = _storage_cmds.handle_storage_verify
+_handle_storage_vacuum = _storage_cmds.handle_storage_vacuum
+_handle_storage_backup = _storage_cmds.handle_storage_backup
+_handle_collect_once = _reasoning_cmds.handle_collect_once
+_handle_reset_baselines = _reasoning_cmds.handle_reset_baselines
+_handle_reset_weights = _reasoning_cmds.handle_reset_weights
+_handle_calibration_show = _reasoning_cmds.handle_calibration_show
 
 
-async def _handle_collectors_start(args: argparse.Namespace, parser: argparse.ArgumentParser) -> int:
-    config_path, config = _load_config_for_command(args)
-    payload = await _require_local_api(config, "POST", "/api/collectors/start")
-    payload = {
-        "command": "collectors start",
-        "config_path": str(config_path),
-        "server_url": _server_url(config),
-        **payload,
-    }
-    stdout_lines = [f"Started collectors through {_server_url(config)}"]
-    stdout_lines.extend(_format_collector_line(item) for item in payload.get("collectors", []))
-    return _emit_result(args, CommandResult(payload=payload, stdout_lines=stdout_lines))
+_handle_service_status = _service_cmds.handle_service_status
+_handle_service_install = _service_cmds.handle_service_install
+_handle_service_control = _service_cmds.handle_service_control
 
 
-async def _handle_collectors_stop(args: argparse.Namespace, parser: argparse.ArgumentParser) -> int:
-    config_path, config = _load_config_for_command(args)
-    payload = await _require_local_api(config, "POST", "/api/collectors/stop")
-    payload = {
-        "command": "collectors stop",
-        "config_path": str(config_path),
-        "server_url": _server_url(config),
-        **payload,
-    }
-    stdout_lines = [f"Stopped collectors through {_server_url(config)}"]
-    stdout_lines.extend(_format_collector_line(item) for item in payload.get("collectors", []))
-    return _emit_result(args, CommandResult(payload=payload, stdout_lines=stdout_lines))
+_handle_status = _incidents_cmds.handle_status
+_handle_overview = _incidents_cmds.handle_overview
+_handle_incidents_list = _incidents_cmds.handle_incidents_list
+_handle_incident_show = _incidents_cmds.handle_incident_show
+_handle_events_list = _incidents_cmds.handle_events_list
+_handle_event_show = _incidents_cmds.handle_event_show
+_handle_services_list = _incidents_cmds.handle_services_list
+_handle_service_show = _incidents_cmds.handle_service_show
+_handle_service_events = _incidents_cmds.handle_service_events
+_handle_investigate_now = _incidents_cmds.handle_investigate_now
+_handle_investigate_latest = _incidents_cmds.handle_investigate_latest
+_handle_investigate_incident = _incidents_cmds.handle_investigate_incident
+_handle_investigate_service = _incidents_cmds.handle_investigate_service
 
 
-async def _handle_ai_status(args: argparse.Namespace, parser: argparse.ArgumentParser) -> int:
-    from ai import AIService
-
-    config_path, config = _load_config_for_command(args)
-    payload = await AIService(config).status()
-    payload["command"] = "ai status"
-    payload["config_path"] = str(config_path)
-    stdout_lines = [
-        f"AI enabled={payload['enabled']} provider={payload['provider']} model={payload['model']}",
-        f"available={payload.get('available', False)} installed={payload.get('installed', False)} base_url={payload['base_url']}",
-    ]
-    if payload.get("resolved_model"):
-        stdout_lines.append(f"resolved_model={payload['resolved_model']}")
-    if payload.get("reason"):
-        stdout_lines.append(f"reason={payload['reason']}")
-    exit_code = 0 if payload.get("available") or not payload.get("enabled") else 1
-    return _emit_result(args, CommandResult(payload=payload, stdout_lines=stdout_lines, exit_code=exit_code))
+# --- handlers extracted to cli_core.commands.* ----------------------------
+# Workspace and AI investigation handlers now live in dedicated modules; we
+# expose the public ``_handle_*`` names for argparse registration and existing
+# tests that import them by attribute.
+_handle_workspace = _workspace_cmds.handle_workspace_scan
+_handle_workspace_map = _workspace_cmds.handle_workspace_map
+_handle_workspace_services = _workspace_cmds.handle_workspace_services
+_handle_workspace_inspect = _workspace_cmds.handle_workspace_inspect
+_handle_ai_ask = _ai_cmds.handle_ai_ask
+_handle_ai_investigate = _ai_cmds.handle_ai_investigate
+_handle_ai_report = _ai_cmds.handle_ai_report
+_handle_ai_trace = _ai_cmds.handle_ai_trace
+_handle_ai_doctor = _ai_cmds.handle_ai_doctor
 
 
-async def _handle_ai_models(args: argparse.Namespace, parser: argparse.ArgumentParser) -> int:
-    from ai import AIService
-
-    config_path, config = _load_config_for_command(args)
-    service = AIService(config)
-    installed: list[str] = []
-    error: str | None = None
-    if config.ai.enabled:
-        try:
-            installed = await service.installed_models()
-        except Exception as exc:
-            error = str(exc)
-    registry = service.registry()
-    installed_set = set(installed)
-    payload = {
-        "command": "ai models",
-        "config_path": str(config_path),
-        "installed": installed,
-        "error": error,
-        "registry": [
-            {
-                **model,
-                "installed": bool(model["name"] in installed_set or (model.get("resolves_to") in installed_set)),
-            }
-            for model in registry
-        ],
-    }
-    stdout_lines = [
-        f"{model['name']:<34} {model['size']:<7} {model['context_window']:<5} {model['quantization']:<8} "
-        f"{'installed' if model['installed'] else 'available'}"
-        for model in payload["registry"]
-    ]
-    stderr_lines = [f"Ollama unavailable: {error}"] if error else []
-    return _emit_result(
-        args,
-        CommandResult(payload=payload, stdout_lines=stdout_lines, stderr_lines=stderr_lines, exit_code=1 if error else 0),
-    )
+_handle_demo_seed = _demo_cmds.handle_demo_seed
+_handle_demo_clear = _demo_cmds.handle_demo_clear
 
 
-async def _handle_ai_pull(args: argparse.Namespace, parser: argparse.ArgumentParser) -> int:
-    from ai import AIService
-
-    config_path, config = _load_config_for_command(args)
-    service = AIService(config)
-    model = (args.model or config.ai.model).strip()
-    if not model:
-        raise CommandError("Model tag is required.")
-    if args.json:
-        await service.pull_model(model)
-        payload = {"command": "ai pull", "config_path": str(config_path), "model": model, "complete": True}
-        return _emit_result(args, CommandResult(payload=payload, stdout_lines=[]))
-
-    async for progress in service.pull_model_stream(model):
-        percent = f"{progress.percent:5.1f}%" if progress.percent is not None else "  ... "
-        status = progress.status or "pulling"
-        digest = f" {progress.digest[:12]}" if progress.digest else ""
-        print(f"\r{model} {percent} {status}{digest}", end="", flush=True)
-    print(f"\r{model} 100.0% complete{' ' * 24}")
-    return 0
+_handle_service_repair = _service_cmds.handle_service_repair
 
 
-async def _handle_ai_test(args: argparse.Namespace, parser: argparse.ArgumentParser) -> int:
-    from ai import AIService
-
-    config_path, config = _load_config_for_command(args)
-    if not config.ai.enabled:
-        payload = {
-            "command": "ai test",
-            "config_path": str(config_path),
-            "enabled": False,
-            "ok": False,
-            "reason": "AI is disabled in config.",
-        }
-        return _emit_result(args, CommandResult(payload=payload, stdout_lines=["AI is disabled in config."], exit_code=1))
-    response = await AIService(config).test()
-    payload = {
-        "command": "ai test",
-        "config_path": str(config_path),
-        "enabled": True,
-        "ok": True,
-        "model": config.ai.model,
-        "response": response,
-    }
-    return _emit_result(args, CommandResult(payload=payload, stdout_lines=[response]))
-
-
-async def _handle_reason_incident(args: argparse.Namespace, parser: argparse.ArgumentParser) -> int:
-    from dataclasses import replace
-
-    from core.time import utc_now
-    from reasoning.engine import HypothesisEngine, hypothesis_dict_to_scored
-    from runtime.service_graph import ServiceGraph
-    from storage.event_store import SqliteEventStore
-    from storage.incident_store import SqliteIncidentStore
-
-    config_path, config = _load_config_for_command(args)
-    data_dir = Path(config.storage.data_dir)
-    events_path = data_dir / config.storage.events_db
-    incidents_path = data_dir / config.storage.incidents_db
-    if not events_path.exists() or not incidents_path.exists():
-        raise CommandError("Storage databases are missing. Run `inferra init-db` first.")
-
-    service_graph = ServiceGraph()
-    for edge in config.topology.edges:
-        service_graph.add_relation(edge.source, edge.target, edge.type)
-
-    mmap_bytes = int(config.storage.mmap_size_mb) * 1024 * 1024 if config.storage.enable_mmap else 0
-    event_store = SqliteEventStore(
-        events_path,
-        batch_size=config.storage.batch_size,
-        retention_hours=config.storage.retention_hours,
-        prune_interval_seconds=config.storage.prune_interval_seconds,
-        wal_mode=config.storage.wal_mode,
-        start_pruner=False,
-        mmap_size_bytes=mmap_bytes,
-    )
-    incident_store = SqliteIncidentStore(
-        incidents_path,
-        wal_mode=config.storage.wal_mode,
-        mmap_size_bytes=mmap_bytes,
-        start_archiver=False,
-    )
-    try:
-        incident = incident_store.get_incident(args.incident_id)
-        if incident is None:
-            raise CommandError(f"Incident not found: {args.incident_id}")
-        events: list[Any] = []
-        for event_id in incident.events:
-            stored = event_store.get_event(event_id)
-            if stored is not None:
-                events.append(stored)
-        from storage.calibration_store import CalibrationStore
-        from storage.weight_store import WeightStore
-
-        engine = HypothesisEngine(
-            service_graph,
-            config,
-            weight_store=WeightStore(data_dir / "scoring_weights.json", data_dir / "weight_history.jsonl"),
-            calibration_store=CalibrationStore(data_dir / "calibration.json"),
-        )
-        payloads = engine.generate(args.incident_id, events, incident=incident, incident_event_ids=list(incident.events))
-        scored = [hypothesis_dict_to_scored(item) for item in payloads]
-        incident_store.add_hypotheses(args.incident_id, scored)
-        if engine.last_inference_graph is not None:
-            incident_store.save_inference_graph(args.incident_id, engine.last_inference_graph)
-            incident_store.update_incident(
-                replace(incident, inference_graph=engine.last_inference_graph, updated_at=utc_now())
-            )
-        payload: dict[str, Any] = {
-            "command": "reason-incident",
-            "config_path": str(config_path),
-            "incident_id": args.incident_id,
-            "hypothesis_count": len(payloads),
-            "hypotheses": payloads,
-        }
-        stdout_lines = [
-            f"{item['rank']}. {item['cause_type']} score={item['total_score']} {str(item['description'])[:120]}"
-            for item in payloads
-        ]
-        return _emit_result(args, CommandResult(payload=payload, stdout_lines=stdout_lines))
-    finally:
-        event_store.close()
-        incident_store.close()
-
-
-async def _handle_init_db(args: argparse.Namespace, parser: argparse.ArgumentParser) -> int:
-    from storage.migrations import CURRENT_SCHEMA_VERSION, integrity_check, migrate
-
-    _config_path_for_logging, config = _load_config_for_command(args)
-    data_dir = Path(config.storage.data_dir)
-    data_dir.mkdir(parents=True, exist_ok=True)
-    events_path = data_dir / config.storage.events_db
-    incidents_path = data_dir / config.storage.incidents_db
-
-    events_version = migrate(events_path)
-    incidents_version = migrate(incidents_path)
-    integrity_check(events_path)
-    integrity_check(incidents_path)
-
-    payload = {
-        "command": "init-db",
-        "data_dir": str(data_dir),
-        "schema_version": CURRENT_SCHEMA_VERSION,
-        "databases": [
-            {"path": str(events_path), "schema_version": events_version, "integrity_ok": True},
-            {"path": str(incidents_path), "schema_version": incidents_version, "integrity_ok": True},
-        ],
-    }
-    stdout_lines = [
-        f"{events_path.name}: schema version {events_version}",
-        f"{incidents_path.name}: schema version {incidents_version}",
-        f"Databases initialized at version {CURRENT_SCHEMA_VERSION} under {data_dir}",
-    ]
-    return _emit_result(args, CommandResult(payload=payload, stdout_lines=stdout_lines))
-
-
-async def _handle_storage_verify(args: argparse.Namespace, parser: argparse.ArgumentParser) -> int:
-    from storage.migrations import integrity_check
-
-    _config_path_for_logging, config = _load_config_for_command(args)
-    results: list[dict[str, Any]] = []
-    stdout_lines: list[str] = []
-    stderr_lines: list[str] = []
-    exit_code = 0
-    for db_path in _database_paths(config):
-        row = {"path": str(db_path), "name": db_path.name, "exists": db_path.exists()}
-        if not db_path.exists():
-            row["status"] = "missing"
-            stderr_lines.append(f"SKIP {db_path.name}: file does not exist")
-            results.append(row)
-            continue
-        try:
-            integrity_check(db_path)
-            row["status"] = "ok"
-            stdout_lines.append(f"OK   {db_path.name}")
-        except Exception as exc:  # pragma: no cover - exercised in storage tests elsewhere
-            row["status"] = "failed"
-            row["error"] = str(exc)
-            stderr_lines.append(f"FAIL {db_path.name}: {exc}")
-            exit_code = 1
-        results.append(row)
-    payload = {"command": "storage verify", "databases": results}
-    return _emit_result(args, CommandResult(payload=payload, stdout_lines=stdout_lines, stderr_lines=stderr_lines, exit_code=exit_code))
-
-
-async def _handle_storage_vacuum(args: argparse.Namespace, parser: argparse.ArgumentParser) -> int:
-    from storage.migrations import vacuum_db
-
-    _config_path_for_logging, config = _load_config_for_command(args)
-    results: list[dict[str, Any]] = []
-    stdout_lines: list[str] = []
-    for db_path in _database_paths(config):
-        if not db_path.exists():
-            results.append({"path": str(db_path), "name": db_path.name, "status": "missing"})
-            continue
-        vacuum_db(db_path)
-        results.append({"path": str(db_path), "name": db_path.name, "status": "vacuumed"})
-        stdout_lines.append(f"Vacuumed {db_path.name}")
-    payload = {"command": "storage vacuum", "databases": results}
-    return _emit_result(args, CommandResult(payload=payload, stdout_lines=stdout_lines))
-
-
-async def _handle_storage_backup(args: argparse.Namespace, parser: argparse.ArgumentParser) -> int:
-    from storage.migrations import backup_db
-
-    _config_path_for_logging, config = _load_config_for_command(args)
-    dest_dir = Path(args.path)
-    dest_dir.mkdir(parents=True, exist_ok=True)
-    results: list[dict[str, Any]] = []
-    stdout_lines: list[str] = []
-    for db_path in _database_paths(config):
-        if not db_path.exists():
-            results.append({"path": str(db_path), "name": db_path.name, "status": "missing"})
-            continue
-        dest_path = backup_db(db_path, dest_dir / db_path.name)
-        results.append({"path": str(db_path), "backup_path": str(dest_path), "status": "backed_up"})
-        stdout_lines.append(f"Backed up {db_path.name} -> {dest_path}")
-    payload = {"command": "storage backup", "destination": str(dest_dir), "databases": results}
-    return _emit_result(args, CommandResult(payload=payload, stdout_lines=stdout_lines))
-
-
-async def _handle_collect_once(args: argparse.Namespace, parser: argparse.ArgumentParser) -> int:
-    from app import InferraRuntime
-
-    expected_platform = args.__dict__.get("platform")
-    current_platform = platform.system().lower()
-    if expected_platform and current_platform != expected_platform:
-        raise CommandError(f"`{args.command}` is only available on {expected_platform}.")
-
-    config_path, config = _load_config_for_command(args)
-    runtime = InferraRuntime(config)
-    try:
-        await runtime.start(start_collectors=False)
-        try:
-            summary = await runtime.collect_source_once(args.source_type)
-        except ValueError as exc:
-            raise CommandError(
-                f"No enabled {args.label} collector is configured. Enable `{args.config_key}` or apply a preset."
-            ) from exc
-    finally:
-        await runtime.stop()
-
-    payload = {
-        "command": args.command,
-        "config_path": str(config_path),
-        "label": args.label,
-        **summary,
-    }
-    stdout_lines = [
-        f"Ran {args.label} collector once.",
-        f"raw_events_emitted={summary['raw_events_emitted']}",
-        f"events_stored={summary['events_stored']}",
-        f"collector_count={summary['collector_count']}",
-    ]
-    return _emit_result(args, CommandResult(payload=payload, stdout_lines=stdout_lines))
-
-
-async def _handle_reset_baselines(args: argparse.Namespace, parser: argparse.ArgumentParser) -> int:
-    _config_path_for_logging, config = _load_config_for_command(args)
-    baseline_dir = Path(config.storage.data_dir) / "baselines"
-    if baseline_dir.exists():
-        shutil.rmtree(baseline_dir)
-    baseline_dir.mkdir(parents=True, exist_ok=True)
-    payload = {"command": "reset-baselines", "baseline_dir": str(baseline_dir), "deleted": True}
-    return _emit_result(args, CommandResult(payload=payload, stdout_lines=[f"Deleted baseline data under {baseline_dir}"]))
-
-
-async def _handle_reset_weights(args: argparse.Namespace, parser: argparse.ArgumentParser) -> int:
-    from reasoning.scoring import merge_config_weights
-    from storage.weight_store import WeightStore, reset_weights
-
-    _config_path_for_logging, config = _load_config_for_command(args)
-    data_dir = Path(config.storage.data_dir)
-    data_dir.mkdir(parents=True, exist_ok=True)
-    defaults = merge_config_weights({}, config)
-    store = WeightStore(data_dir / "scoring_weights.json", data_dir / "weight_history.jsonl")
-    state = store.load()
-    state.default_weights = dict(defaults)
-    reset_weights(state)
-    store.save(state)
-    path = store.path
-    payload = {"command": "reset-weights", "path": str(path), "weights": dict(state.weights)}
-    return _emit_result(args, CommandResult(payload=payload, stdout_lines=[f"Reset scoring weights at {path}"]))
-
-
-async def _handle_calibration_show(args: argparse.Namespace, parser: argparse.ArgumentParser) -> int:
-    from storage.calibration_store import CalibrationStore, check_calibration_staleness
-
-    _config_path_for_logging, config = _load_config_for_command(args)
-    path = Path(config.storage.data_dir) / "calibration.json"
-    store = CalibrationStore(path)
-    model = store.load()
-    stale = check_calibration_staleness(
-        model,
-        staleness_days=int(config.calibration.staleness_threshold_days),
-        min_feedback=20,
-    )
-    payload = {
-        "command": "calibration show",
-        "path": str(path),
-        "staleness": stale,
-        "total_feedback_count": model.total_feedback_count,
-        "buckets": [
-            {
-                "score_lower": bucket.score_lower,
-                "score_upper": bucket.score_upper,
-                "total_predictions": bucket.total_predictions,
-                "correct_predictions": bucket.correct_predictions,
-                "accuracy": bucket.accuracy,
-                "sample_confidence": bucket.sample_confidence,
-            }
-            for bucket in model.buckets
-        ],
-    }
-    lines = [f"Calibration file: {path}", f"staleness={stale}", f"total_feedback_count={model.total_feedback_count}"]
-    for bucket in model.buckets:
+def _investigation_output_lines(payload: dict[str, Any]) -> list[str]:
+    output = payload.get("output") or {}
+    headline = str(output.get("headline") or "(no headline)")
+    risk = str(output.get("risk_level") or "low")
+    confidence = output.get("confidence", 0)
+    lines = [f"risk={risk} confidence={confidence}", headline]
+    for entry in output.get("what_happened") or []:
+        lines.append(f"- {entry}")
+    if output.get("why_it_matters"):
+        lines.append("Why it matters:")
+        lines.extend(f"  - {item}" for item in output["why_it_matters"])
+    if output.get("likely_causes"):
+        lines.append("Likely causes:")
+        lines.extend(f"  - {item}" for item in output["likely_causes"])
+    next_steps = output.get("next_steps") or []
+    if next_steps:
+        lines.append("Safe next steps:")
+        for step in next_steps[:8]:
+            command = step.get("command") or ""
+            title = step.get("title") or "next step"
+            lines.append(f"  - {title}" + (f" -> {command}" if command else ""))
+    if output.get("uncertainty"):
+        lines.append("Uncertainty:")
+        lines.extend(f"  - {item}" for item in output["uncertainty"])
+    if not payload.get("used_ai", True):
+        reason = str(payload.get("fallback_reason") or "")
+        lines.append(f"AI fallback: {reason}" if reason else "AI fallback used (deterministic).")
+    provider = payload.get("provider") or {}
+    if provider:
         lines.append(
-            f"  [{bucket.score_lower},{bucket.score_upper}) n={bucket.total_predictions} "
-            f"correct={bucket.correct_predictions} acc={bucket.accuracy:.3f} {bucket.sample_confidence}"
+            f"provider: enabled={provider.get('enabled')} available={provider.get('available')} "
+            f"model={provider.get('model')} allow_remote={provider.get('allow_remote')}"
         )
-    return _emit_result(args, CommandResult(payload=payload, stdout_lines=lines))
+    return lines
 
 
-async def _handle_completion(args: argparse.Namespace, parser: argparse.ArgumentParser) -> int:
-    if argcomplete is None:
-        raise CommandError("Shell completion requires `argcomplete`. Install the dev extras or add the dependency.")
-    script = argcomplete.shellcode(["inferra"], shell=args.shell)
-    payload = {"command": "completion", "shell": args.shell, "script": script}
-    return _emit_result(args, CommandResult(payload=payload, stdout_lines=[script.rstrip("\n")]))
+_handle_doctor = _service_cmds.handle_doctor
+_handle_completion = _service_cmds.handle_completion
 
 
-def _emit_result(args: argparse.Namespace, result: CommandResult) -> int:
-    if getattr(args, "json", False):
-        _print_json(result.payload)
+def _experience_payload(config: Any) -> dict[str, Any]:
+    return {
+        "mode": config.experience.mode,
+        "ai_role": config.experience.ai_role,
+        "suggest_safe_actions": config.experience.suggest_safe_actions,
+        "execute_actions": config.experience.execute_actions,
+        "show_raw_evidence_by_default": config.experience.show_raw_evidence_by_default,
+    }
+
+
+def _cli_limit(value: Any, *, maximum: int) -> int:
+    try:
+        parsed = int(value)
+    except (TypeError, ValueError):
+        parsed = maximum
+    return max(1, min(parsed, maximum))
+
+
+def _severity_label(value: Any) -> str:
+    labels = {0: "debug", 1: "info", 2: "warn", 3: "error", 4: "critical"}
+    try:
+        return labels.get(int(value), str(value))
+    except (TypeError, ValueError):
+        return str(value or "unknown")
+
+
+def _format_incident_line(item: dict[str, Any]) -> str:
+    return (
+        f"{item.get('incident_id', '?')} state={item.get('state', '?')} "
+        f"severity={_severity_label(item.get('severity'))} service={item.get('primary_service') or 'unknown'} "
+        f"events={len(item.get('events') or [])}"
+    )
+
+
+def _format_event_line(item: dict[str, Any]) -> str:
+    message = str(item.get("message") or "").replace("\n", " ")
+    if len(message) > 120:
+        message = message[:117] + "..."
+    return (
+        f"{item.get('event_id', '?')} {item.get('timestamp', '?')} "
+        f"{_severity_label(item.get('severity'))} {item.get('service_id', 'unknown')}: {message}"
+    )
+
+
+def _format_service_line(item: dict[str, Any]) -> str:
+    return (
+        f"{item.get('service_id', '?')} status={item.get('status', 'unknown')} "
+        f"events={item.get('event_count', 0)} errors={item.get('error_count', 0)} "
+        f"last={item.get('last_event_at') or '?'}"
+    )
+
+
+def _investigation_from_overview(command: str, config_path: str, overview: dict[str, Any]) -> dict[str, Any]:
+    quick = overview.get("quick_analysis") or {}
+    dashboard = overview.get("dashboard") or {}
+    incidents = list(dashboard.get("incidents") or [])
+    services = list(dashboard.get("services") or [])
+    risky_services = [item for item in services if item.get("status") in {"critical", "degraded", "elevated"}]
+    summary = str(quick.get("headline") or "No overview headline available.")
+    return {
+        "command": command,
+        "config_path": config_path,
+        "focus": "overview",
+        "summary": summary,
+        "priority": "high" if quick.get("risk_level") == "high" else "normal",
+        "evidence": {
+            "active_incident_count": len(incidents),
+            "risky_services": risky_services[:10],
+            "top_incident": incidents[0] if incidents else None,
+            "mode": quick.get("mode"),
+            "ai_role": quick.get("ai_role"),
+        },
+        "safe_next_steps": _safe_next_steps_for_overview(incidents, risky_services),
+    }
+
+
+def _investigation_lines(payload: dict[str, Any]) -> list[str]:
+    lines = [
+        f"priority={payload.get('priority', 'normal')}",
+        str(payload.get("summary") or "No summary available."),
+    ]
+    evidence = payload.get("evidence") or {}
+    if evidence.get("top_incident"):
+        lines.append("top_incident: " + _format_incident_line(evidence["top_incident"]))
+    for service in evidence.get("risky_services") or []:
+        lines.append("service: " + _format_service_line(service))
+    for event in evidence.get("sample_events") or []:
+        lines.append("event: " + _format_event_line(event))
+    lines.extend(payload.get("safe_next_steps") or [])
+    return lines
+
+
+def _safe_next_steps_for_overview(incidents: list[dict[str, Any]], services: list[dict[str, Any]]) -> list[str]:
+    steps = ["Safe next steps:"]
+    if incidents:
+        incident_id = incidents[0].get("incident_id")
+        steps.append(f"inferra investigate incident {incident_id}")
+        steps.append(f"inferra incidents show {incident_id}")
+    elif services:
+        service_id = services[0].get("service_id")
+        steps.append(f"inferra investigate service {service_id}")
+        steps.append(f"inferra services show {service_id}")
     else:
-        for line in result.stdout_lines:
-            print(line)
-        for line in result.stderr_lines:
-            print(line, file=sys.stderr)
-    return result.exit_code
+        steps.append("inferra events list --limit 25")
+        steps.append("inferra collectors status")
+    return steps
 
 
-def _print_json(payload: Any) -> None:
-    print(json.dumps(_json_ready(payload), indent=2, sort_keys=True))
+def _safe_next_steps_for_incident(
+    incident_id: str,
+    incident: dict[str, Any],
+    hypotheses: list[dict[str, Any]],
+) -> list[str]:
+    steps = ["Safe next steps:"]
+    primary_service = incident.get("primary_service")
+    if primary_service:
+        steps.append(f"inferra services show {primary_service}")
+        steps.append(f"inferra services events {primary_service} --limit 25")
+    steps.append(f"inferra reason-incident {incident_id}")
+    if hypotheses:
+        steps.append("Review supporting and contradicting evidence before changing the observed system.")
+    else:
+        steps.append("No hypotheses recorded yet; keep collectors running and re-check the incident.")
+    return steps
 
 
-def _json_ready(value: Any) -> Any:
-    if isinstance(value, Path):
-        return str(value)
-    if isinstance(value, tuple):
-        return [_json_ready(item) for item in value]
-    if isinstance(value, list):
-        return [_json_ready(item) for item in value]
-    if isinstance(value, set):
-        return [_json_ready(item) for item in sorted(value)]
-    if isinstance(value, dict):
-        return {str(key): _json_ready(item) for key, item in value.items()}
-    return value
+def _safe_next_steps_for_service(
+    service_id: str,
+    service: dict[str, Any],
+    incidents: list[dict[str, Any]],
+) -> list[str]:
+    steps = ["Safe next steps:"]
+    if incidents:
+        incident_id = incidents[0].get("incident_id")
+        steps.append(f"inferra investigate incident {incident_id}")
+        steps.append(f"inferra incidents show {incident_id}")
+    steps.append(f"inferra services events {service_id} --limit 25")
+    if service.get("status") in {"critical", "degraded"}:
+        steps.append("Inspect recent errors and dependencies before taking any manual action.")
+    else:
+        steps.append("No unsafe action suggested; continue observing or narrow by recent events.")
+    return steps
+
+
+def _doctor_next_steps(report: dict[str, Any], api_status: dict[str, Any]) -> list[str]:
+    steps = ["Safe next steps:"]
+    if report.get("errors"):
+        steps.append("Fix config errors shown above, then run `inferra doctor` again.")
+    elif not api_status.get("reachable"):
+        steps.append("Start the supervisor with `inferra serve` or `inferra service start`.")
+    elif api_status.get("degraded"):
+        steps.append("Run `inferra investigate now` to prioritize the degraded area.")
+    else:
+        steps.append("Run `inferra overview` or `inferra investigate latest` for the current operating picture.")
+    return steps
 
 
 def _config_path(args: argparse.Namespace) -> Path:
@@ -1025,6 +955,8 @@ async def _build_check_report(config_path: Path, config: Any | None = None) -> d
         "server": f"{config.server.host}:{config.server.port}",
         "data_dir": str(config.storage.data_dir),
         "ai_enabled": config.ai.enabled,
+        "mode": config.experience.mode,
+        "ai_role": config.experience.ai_role,
         "topology_edges": len(config.topology.edges),
     }
     _check_data_dir_writable(config, report)
@@ -1038,23 +970,46 @@ async def _build_check_report(config_path: Path, config: Any | None = None) -> d
 def _interactive_setup(config: Any, config_path: Path, config_exists: bool, skip_connection_test: bool) -> tuple[Any, bool]:
     print(f"Config path: {config_path}")
     print(f"Current data_dir: {config.storage.data_dir}")
+    print(f"Current mode: {config.experience.mode}")
+    print(f"Current AI role: {config.experience.ai_role}")
+    print(f"Current AI enabled: {config.ai.enabled}")
     print(f"Current AI model: {config.ai.model}")
+    print(f"Current AI base_url: {config.ai.base_url}")
     data_dir = _prompt_value("Storage data_dir", str(config.storage.data_dir))
+    mode = _prompt_choice("Control-plane mode", config.experience.mode, _EXPERIENCE_MODES)
+    ai_role = _prompt_choice("Primary AI role", config.experience.ai_role, _AI_ROLES)
+    preset = _prompt_value("Collector preset (blank to keep current)", "")
+    ai_enabled = _prompt_yes_no("Enable AI explanations?", default=config.ai.enabled)
     model = _prompt_value("Ollama model", config.ai.model)
+    base_url = _prompt_value("Ollama base URL", config.ai.base_url)
+    allow_remote = _prompt_yes_no("Allow non-loopback AI base URL?", default=config.ai.allow_remote)
     run_probe = not skip_connection_test and _prompt_yes_no("Probe Ollama connection now?", default=True)
     if not _prompt_yes_no("Continue with setup?", default=True):
         raise CommandError("Setup cancelled.")
     updated = replace(
         config,
         storage=replace(config.storage, data_dir=Path(data_dir)),
-        ai=replace(config.ai, enabled=True, provider="ollama", model=model),
+        experience=replace(config.experience, mode=mode, ai_role=ai_role, show_raw_evidence_by_default=mode == "developer"),
+        ai=replace(config.ai, enabled=ai_enabled, provider="ollama", model=model, base_url=base_url, allow_remote=allow_remote),
     )
+    if preset:
+        try:
+            updated = apply_preset(updated, preset)
+        except ValueError as exc:
+            raise CommandError(str(exc)) from exc
     return updated, not run_probe
 
 
 def _prompt_value(label: str, default: str) -> str:
     response = input(f"{label} [{default}]: ").strip()
     return response or default
+
+
+def _prompt_choice(label: str, default: str, choices: tuple[str, ...]) -> str:
+    raw = _prompt_value(f"{label} ({'/'.join(choices)})", default)
+    if raw not in choices:
+        raise CommandError(f"{label} must be one of: {', '.join(choices)}")
+    return raw
 
 
 def _prompt_yes_no(label: str, *, default: bool) -> bool:
@@ -1072,6 +1027,123 @@ def _human_connection_line(connection_test: dict[str, Any], base_url: str) -> st
             return f"Ollama reachable at {base_url} (resolved_model={resolved})"
         return f"Ollama reachable at {base_url}"
     return f"Ollama unavailable at {base_url}"
+
+
+def _apply_setup_overrides(config: Any, args: argparse.Namespace) -> Any:
+    updated = config
+    preset = getattr(args, "preset", None)
+    if preset:
+        try:
+            updated = apply_preset(updated, preset)
+        except ValueError as exc:
+            raise CommandError(str(exc)) from exc
+    if getattr(args, "data_dir", None) is not None:
+        updated = replace(updated, storage=replace(updated.storage, data_dir=Path(args.data_dir)))
+    mode = getattr(args, "mode", None)
+    ai_role = getattr(args, "ai_role", None)
+    experience = updated.experience
+    if mode is not None:
+        experience = replace(experience, mode=mode, show_raw_evidence_by_default=mode == "developer")
+    if ai_role is not None:
+        experience = replace(experience, ai_role=ai_role)
+
+    ai_enabled = getattr(args, "setup_ai_enabled", None)
+    ai_allow_remote = getattr(args, "setup_allow_remote", None)
+    ai = updated.ai
+    if ai_enabled is not None:
+        ai = replace(ai, enabled=bool(ai_enabled))
+    if getattr(args, "model", None) is not None:
+        ai = replace(ai, model=str(args.model).strip())
+    if getattr(args, "base_url", None) is not None:
+        ai = replace(ai, base_url=str(args.base_url).strip())
+    if getattr(args, "token_env", None) is not None:
+        ai = replace(ai, token_env=str(args.token_env).strip())
+    if ai_allow_remote is not None:
+        ai = replace(ai, allow_remote=bool(ai_allow_remote))
+    return replace(updated, ai=ai, experience=experience)
+
+
+def _onboarding_next_steps(config_path: Path, config: Any, connection_test: dict[str, Any]) -> list[str]:
+    quoted = str(config_path)
+    steps = [
+        f'inferra --config "{quoted}" check-config',
+        f'inferra --config "{quoted}" serve',
+        f'inferra --config "{quoted}" status',
+    ]
+    if config.ai.enabled:
+        steps.insert(1, f'inferra --config "{quoted}" ai status')
+        if not connection_test.get("skipped") and not connection_test.get("available", False):
+            steps.insert(2, f'inferra --config "{quoted}" ai pull {config.ai.model}')
+        else:
+            steps.insert(2, f'inferra --config "{quoted}" ai test')
+    else:
+        steps.insert(1, f'inferra --config "{quoted}" ai setup --enable --model {config.ai.model}')
+    if getattr(config.collectors, "auto_start", False):
+        steps.append(f'inferra --config "{quoted}" collectors status')
+    if platform.system().lower() == "windows":
+        steps.append(f'inferra --config "{quoted}" service install --startup auto')
+    return steps
+
+
+def _require_windows_service_support() -> None:
+    if platform.system().lower() != "windows":
+        raise CommandError("Windows service management is only available on Windows.")
+
+
+def _build_windows_service_command(
+    verb: str,
+    config_path: Path,
+    data_dir: Path | None,
+    *,
+    startup: str | None = None,
+) -> list[str]:
+    if getattr(sys, "frozen", False):
+        command = [sys.executable, verb]
+    else:
+        command = [sys.executable, "-m", "windows_service", verb]
+    if startup:
+        command.extend(["--startup", startup])
+    command.extend(["--config", str(config_path)])
+    if data_dir is not None:
+        command.extend(["--data-dir", str(data_dir)])
+    return command
+
+
+def _run_subprocess_capture(command: list[str]) -> subprocess.CompletedProcess[str]:
+    return subprocess.run(command, capture_output=True, text=True, check=False)
+
+
+def _subprocess_failure_message(label: str, completed: subprocess.CompletedProcess[str]) -> str:
+    stderr = (completed.stderr or "").strip()
+    stdout = (completed.stdout or "").strip()
+    detail = stderr or stdout or f"exit code {completed.returncode}"
+    return f"{label} failed: {detail}"
+
+
+def _parse_sc_state(output: str) -> str | None:
+    for line in output.splitlines():
+        if "STATE" not in line:
+            continue
+        _, _, tail = line.partition(":")
+        parts = tail.strip().split()
+        if len(parts) >= 2:
+            return parts[1].lower()
+        if parts:
+            return parts[0].lower()
+    return None
+
+
+def _parse_sc_start_type(output: str) -> str | None:
+    for line in output.splitlines():
+        if "START_TYPE" not in line:
+            continue
+        _, _, tail = line.partition(":")
+        parts = tail.strip().split()
+        if len(parts) >= 2:
+            return parts[1].lower()
+        if parts:
+            return parts[0].lower()
+    return None
 
 
 def _configured_collectors(config: Any) -> list[dict[str, Any]]:
@@ -1110,42 +1182,6 @@ def _format_collector_line(item: dict[str, Any]) -> str:
             f"last_event_at={item.get('last_event_at') or '-'}",
         ]
     )
-
-
-def _server_url(config: Any) -> str:
-    return f"http://{config.server.host}:{config.server.port}"
-
-
-async def _require_local_api(config: Any, method: str, path: str, payload: dict[str, Any] | None = None) -> dict[str, Any]:
-    try:
-        return await _local_api_json(config, method, path, payload)
-    except CommandError as exc:
-        raise CommandError(f"{exc} Start it with `inferra run`.") from exc
-
-
-async def _local_api_json(
-    config: Any,
-    method: str,
-    path: str,
-    payload: dict[str, Any] | None = None,
-) -> dict[str, Any]:
-    url = f"{_server_url(config)}{path}"
-    timeout = aiohttp.ClientTimeout(total=_LOCAL_API_TIMEOUT_SECONDS)
-    try:
-        async with aiohttp.ClientSession(timeout=timeout) as session:
-            async with session.request(method, url, json=payload) as response:
-                body = await response.text()
-                if response.status >= 400:
-                    raise CommandError(f"Inferra is reachable at {url} but returned HTTP {response.status}: {body}")
-    except (aiohttp.ClientError, asyncio.TimeoutError) as exc:
-        raise CommandError(f"No running Inferra supervisor found at {url}.") from exc
-    try:
-        decoded = json.loads(body or "{}")
-    except json.JSONDecodeError as exc:
-        raise CommandError(f"Inferra returned invalid JSON from {url}.") from exc
-    if not isinstance(decoded, dict):
-        raise CommandError(f"Inferra returned an unexpected payload from {url}.")
-    return decoded
 
 
 def _database_paths(config: Any) -> list[Path]:
