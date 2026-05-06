@@ -1,0 +1,1 @@
+{"timestamp":"2026-05-04T10:23:30Z","level":"warn","service":"payments-api","host":"node-a","message":"kubernetes warning BackOff: Back-off restarting failed container","kubernetes":{"kind":"Event","namespace":"prod","reason":"BackOff","type":"Warning","count":5,"involved_object":{"kind":"Pod","name":"payments-api-6d4c7c9d8f-zfj2r"}}}

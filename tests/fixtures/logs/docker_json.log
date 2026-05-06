@@ -1,0 +1,1 @@
+{"log":"GET /health failed for user 42 at /srv/app/main.py\n","stream":"stderr","time":"2026-05-04T10:24:30.000000Z","attrs":{"com.docker.compose.service":"gateway"}}

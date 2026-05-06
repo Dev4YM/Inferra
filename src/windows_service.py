@@ -325,10 +325,15 @@ if win32serviceutil is not None:
 
         servicemanager.Initialize()
         servicemanager.PrepareToHostSingle(InferraWindowsService)
+        scm_failed_connect = winerror.ERROR_FAILED_SERVICE_CONTROLLER_CONNECT
         try:
             servicemanager.StartServiceCtrlDispatcher()
         except pywintypes.error as exc:
-            if exc.winerror != winerror.ERROR_FAILED_SERVICE_CONTROLLER_CONNECT:
+            # Some pywin32 builds only populate args=(winerror, funcname, msg), not .winerror.
+            code = getattr(exc, "winerror", None)
+            if code is None and exc.args:
+                code = exc.args[0]
+            if int(code) != int(scm_failed_connect):
                 raise
             return False
         return True

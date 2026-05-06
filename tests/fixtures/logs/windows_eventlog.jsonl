@@ -1,0 +1,1 @@
+{"timestamp":"2026-05-04T10:22:30Z","level":"error","service":"Service Control Manager","host":"WIN-01","message":"The BackupSvc service terminated unexpectedly after 3 attempts.","windows_eventlog":{"channel":"System","record_number":4242,"provider":"Service Control Manager","event_id":7031,"event_type":1,"computer_name":"WIN-01"}}

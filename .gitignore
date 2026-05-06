@@ -22,7 +22,9 @@ inferra.local.toml
 missing_inferra.toml
 data/
 logs/
+!tests/fixtures/logs/
 *.log
+!tests/fixtures/logs/*.log
 *.db
 *.db-wal
 *.db-shm
