@@ -22,7 +22,7 @@ a = Analysis(
     datas=[
         (str(_REPO_ROOT / "pyproject.toml"), "."),
         (str(_SRC / "config" / "defaults.toml"), "config"),
-        (str(_SRC / "web" / "static"), "web/static"),
+        # UI is the Vite bundle under ui_dist (see web.frontend_assets); legacy src/web/static was removed.
         (str(_SRC / "web" / "ui_dist"), "web/ui_dist"),
     ],
     hiddenimports=[
