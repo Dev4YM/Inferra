@@ -15,6 +15,18 @@ spec:
       serviceAccountName: {{ include "inferra.serviceAccountName" . }}
       securityContext:
 {{ toYaml .Values.podSecurityContext | indent 8 }}
+      initContainers:
+        - name: inferra-init-db
+          image: "{{ .Values.image.repository }}:{{ .Values.image.tag }}"
+          imagePullPolicy: {{ .Values.image.pullPolicy }}
+          command: ["/bin/sh", "-lc"]
+          args:
+            - inferra --config /etc/inferra/inferra.toml init-db
+          volumeMounts:
+            - name: config
+              mountPath: /etc/inferra
+            - name: data
+              mountPath: /data
       containers:
         - name: inferra
           image: "{{ .Values.image.repository }}:{{ .Values.image.tag }}"
@@ -25,12 +37,6 @@ spec:
             - "--config"
             - "/etc/inferra/inferra.toml"
             - "serve"
-            - "--data-dir"
-            - "/data"
-            - "--host"
-            - "0.0.0.0"
-            - "--port"
-            - "{{ .Values.service.port | toString }}"
           ports:
             - name: http
               containerPort: {{ .Values.service.port }}

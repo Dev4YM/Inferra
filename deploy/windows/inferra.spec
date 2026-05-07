@@ -1,7 +1,11 @@
 # -*- mode: python ; coding: utf-8 -*-
-# Single-file inferra.exe (CLI + Windows SCM verbs via deploy/windows/pyi_entry.py).
+# Deprecated single-file inferra.exe path retained for migration fallback only.
 #
-# Production builds MUST use deploy/windows/build-exe.ps1 (or Import-Module InferraWindows.psm1;
+# Production builds MUST prefer deploy/windows/build-rust-exe.ps1. This legacy
+# spec survives only so the archived PyInstaller path remains reproducible.
+# The old Python-first wrapper now lives under deprecated/windows-pyinstaller/.
+# Historical builds can still use deploy/windows/build-exe.ps1 (compat shim) or
+# Import-Module InferraWindows.psm1;
 # Invoke-InferraWindowsExeBuild): PyInstaller is invoked with an isolated --distpath staging folder
 # and artifacts are promoted with retries. Direct "python -m PyInstaller ... inferra.spec" writes
 # to ./dist by default and can hit PermissionError if inferra.exe is loaded by the SCM.
@@ -13,11 +17,11 @@ from pathlib import Path
 _spec_dir = Path(SPEC).resolve().parent
 _REPO_ROOT = _spec_dir.parent.parent
 _SRC = _REPO_ROOT / "src"
-_ENTRY = _spec_dir / "pyi_entry.py"
+_ENTRY = _REPO_ROOT / "deprecated" / "windows-pyinstaller" / "pyi_entry.py"
 
 a = Analysis(
     [str(_ENTRY)],
-    pathex=[str(_SRC)],
+    pathex=[str(_SRC), str(_REPO_ROOT / "deprecated")],
     binaries=[],
     datas=[
         (str(_REPO_ROOT / "pyproject.toml"), "."),

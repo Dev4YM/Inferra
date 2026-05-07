@@ -1,0 +1,12 @@
+[package]
+name = "inferra-storage"
+version.workspace = true
+edition.workspace = true
+license.workspace = true
+
+[dependencies]
+anyhow = { workspace = true }
+inferra-contracts = { path = "../inferra-contracts" }
+rusqlite = { workspace = true }
+serde_json = { workspace = true }
+time = { workspace = true }

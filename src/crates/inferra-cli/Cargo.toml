@@ -1,0 +1,25 @@
+[package]
+name = "inferra-cli"
+version.workspace = true
+edition.workspace = true
+license.workspace = true
+
+[[bin]]
+name = "inferra"
+path = "src/main.rs"
+
+[dependencies]
+anyhow = { workspace = true }
+clap = { workspace = true }
+inferra-api = { path = "../inferra-api" }
+inferra-collectors = { path = "../inferra-collectors" }
+inferra-config = { path = "../inferra-config" }
+inferra-core = { path = "../inferra-core" }
+inferra-storage = { path = "../inferra-storage" }
+inferra-windows-service = { path = "../inferra-windows-service" }
+reqwest = { workspace = true }
+serde_json = { workspace = true }
+tokio = { workspace = true }
+toml = { workspace = true }
+tracing = { workspace = true }
+tracing-subscriber = { workspace = true }

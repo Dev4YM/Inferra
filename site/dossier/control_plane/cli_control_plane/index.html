@@ -452,7 +452,7 @@ inferra service repair
 </code></pre>
 <p>JSON output should be stable enough for scripts.</p>
 <h2 id="implementation-note">Implementation Note<a class="headerlink" href="#implementation-note" title="Permanent link">&para;</a></h2>
-<p>The first command split exists under <code>src/cli_core/commands/</code>. Keep moving parser registration and remaining legacy command glue out of <code>src/cli.py</code> before adding another large command family.</p>
+<p>The active CLI implementation is the Rust binary in <code>src/crates/inferra-cli/src/main.rs</code>. Any <code>src/cli.py</code> / <code>src/cli_core/commands/</code> references in older notes should be read as archived migration context, not as the live command surface.</p>
               
             </div>
           </div><footer>

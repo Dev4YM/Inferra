@@ -228,20 +228,20 @@
 <h2 id="decision">Decision<a class="headerlink" href="#decision" title="Permanent link">&para;</a></h2>
 <p>Inferra uses a flat <code>src/</code> layout:</p>
 <pre><code class="language-text">src/
-  ai/
-  collectors/
+  Cargo.toml
+  crates/
   config/
-  storage/
   web/
-  app.py
-  cli.py
+deprecated/
+  inferra_legacy/
+    cli.py
+  python_packages/
 </code></pre>
-<p>No nested implementation package under <code>src/</code> or root <code>inferra/</code> implementation directory should be introduced.</p>
+<p>No nested implementation package under <code>src/</code> or root <code>inferra/</code> implementation directory should be introduced. The active runtime lives under the Rust workspace (<code>src/Cargo.toml</code>, <code>src/crates/</code>) plus frontend assets in <code>src/web/</code>; archived Python reference code remains under <code>deprecated/</code>.</p>
 <h2 id="consequences">Consequences<a class="headerlink" href="#consequences" title="Permanent link">&para;</a></h2>
 <ul>
-<li><code>pyproject.toml</code> sets <code>package-dir = {"" = "src"}</code>.</li>
-<li>Console entrypoint remains <code>inferra = "cli:main"</code>.</li>
-<li>Imports remain concise, for example <code>from config import load_config</code>.</li>
+<li>Active packaging, service management, and release artifacts target the Rust workspace under <code>src/</code>.</li>
+<li>Archived Python code may remain under <code>deprecated/</code> for reference, but it is not part of the normal runtime path.</li>
 </ul>
               
             </div>

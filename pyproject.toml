@@ -39,14 +39,15 @@ ui = ["playwright>=1.41"]
 docs = ["mkdocs>=1.6"]
 
 [project.scripts]
-inferra = "cli:main"
+inferra-python-legacy = "inferra_legacy.cli:main"
 
 [tool.setuptools]
-package-dir = {"" = "src"}
-py-modules = ["cli", "cli_display", "windows_service", "app"]
+package-dir = {"" = "deprecated"}
+py-modules = []
 
 [tool.setuptools.packages.find]
-where = ["src"]
+where = ["deprecated"]
+exclude = ["python_packages*", "windows-pyinstaller*", "python-runtime*"]
 
 [tool.setuptools.package-data]
 config = ["*.toml"]
@@ -69,18 +70,17 @@ filterwarnings = [
 
 [tool.coverage.run]
 branch = false
-source = ["src"]
+source = ["deprecated/inferra_legacy", "deploy/windows", "tests"]
 
 [tool.coverage.report]
 precision = 1
 fail_under = 80
 skip_empty = true
 include = [
-    "src/reasoning/**",
-    "src/analysis/**",
-    "src/storage/**",
-    "src/normalization/**",
-    "src/ai/**",
+    "deprecated/inferra_legacy/**",
+    "deploy/windows/*.py",
+    "tests/unit/**",
+    "tests/integration/**",
 ]
 
 [tool.ruff]

@@ -5,7 +5,7 @@ from pathlib import Path
 
 import pytest
 
-from windows_service import (
+from inferra_legacy.windows_service import (
     ServiceRuntimeOptions,
     _read_server_port,
     parse_install_argv,
@@ -17,7 +17,7 @@ from windows_service import (
 def test_build_serve_argv_puts_serve_before_subparser_flags(
     monkeypatch: pytest.MonkeyPatch, tmp_path: Path
 ) -> None:
-    import windows_service as ws
+    import inferra_legacy.windows_service as ws
 
     cfg = tmp_path / "inferra.toml"
     cfg.write_text("[server]\nport = 7433\n", encoding="utf-8")
@@ -33,7 +33,7 @@ def test_build_serve_argv_puts_serve_before_subparser_flags(
 
 
 def test_build_serve_argv_non_frozen_puts_serve_before_data_dir(monkeypatch: pytest.MonkeyPatch, tmp_path: Path) -> None:
-    import windows_service as ws
+    import inferra_legacy.windows_service as ws
 
     cfg = tmp_path / "inferra.toml"
     cfg.write_text("[server]\nport = 80\n", encoding="utf-8")
@@ -45,7 +45,7 @@ def test_build_serve_argv_non_frozen_puts_serve_before_data_dir(monkeypatch: pyt
     assert argv[:8] == [
         r"C:\Py\python.exe",
         "-m",
-        "cli",
+        "inferra_legacy.cli",
         "--config",
         str(cfg),
         "serve",
@@ -124,7 +124,7 @@ def test_read_server_port_missing_file(tmp_path: Path) -> None:
 
 
 def test_main_without_pywin32_returns_one() -> None:
-    import windows_service as ws
+    import inferra_legacy.windows_service as ws
 
     if ws.win32serviceutil is not None:
         pytest.skip("pywin32 is installed")

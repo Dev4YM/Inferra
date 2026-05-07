@@ -8,7 +8,7 @@ from typing import Any, get_args, get_origin, get_type_hints
 
 import pytest
 
-from cli import main
+from inferra_legacy.cli import main
 from config import StorageConfig, config_to_dict, get_config_value, load_config
 from config.loader import set_config_value, validate_config, write_config
 from config.model import InferraConfig

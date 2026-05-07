@@ -71,7 +71,9 @@
     </li>
     <li class="toctree-l2"><a class="reference internal" href="#determinism">Determinism</a>
     </li>
-    <li class="toctree-l2"><a class="reference internal" href="#ui-smoke">UI smoke</a>
+    <li class="toctree-l2"><a class="reference internal" href="#frontend-build">Frontend build</a>
+    </li>
+    <li class="toctree-l2"><a class="reference internal" href="#runtime-smoke">Runtime smoke</a>
     </li>
     <li class="toctree-l2"><a class="reference internal" href="#windows-tagged-releases-inferraexe">Windows tagged releases (inferra.exe)</a>
     </li>
@@ -227,14 +229,18 @@
             <div class="section" itemprop="articleBody">
               
                 <h1 id="continuous-integration">Continuous integration<a class="headerlink" href="#continuous-integration" title="Permanent link">&para;</a></h1>
-<p>Reference runner (documented 2026-05): GitHub Actions <code>ubuntu-latest</code> / <code>windows-latest</code>, Python 3.11 and 3.12.</p>
+<p>Reference runners (documented 2026-05): GitHub Actions <code>ubuntu-latest</code> / <code>windows-latest</code> / <code>macos-latest</code>, Python 3.11 and 3.12, Node 20, and the stable Rust toolchain.</p>
 <h2 id="default-gate">Default gate<a class="headerlink" href="#default-gate" title="Permanent link">&para;</a></h2>
 <ul>
-<li>Install: <code>python -m pip install -e ".[dev]"</code>.</li>
-<li>Compile: <code>python -m compileall src tests</code>.</li>
-<li>Lint: <code>python -m ruff check src tests</code>.</li>
+<li>Install Python support tooling: <code>python -m pip install -e ".[dev]"</code>.</li>
+<li>Frontend build: <code>npm ci &amp;&amp; npm run build</code> in <code>src/web/frontend</code>.</li>
+<li>Docs: <code>python -m pip install -e ".[docs,dev]"</code> then <code>mkdocs build --strict</code>.</li>
+<li>Rust checks: <code>cargo fmt --manifest-path src/Cargo.toml --all --check</code>, <code>cargo clippy --manifest-path src/Cargo.toml --workspace --all-targets -- -D warnings</code>, <code>cargo test --manifest-path src/Cargo.toml --workspace</code>.</li>
+<li>Native runtime smoke: build the release CLI binary and run <code>tests/scripts/rust_runtime_smoke.py</code> against the built executable plus <code>src/web/ui_dist</code>.</li>
+<li>Compile: <code>python -m compileall tests deploy deprecated</code>.</li>
+<li>Lint: <code>python -m ruff check tests deploy deprecated</code>.</li>
 <li>Tests: matrix-specific pytest invocation (see below).</li>
-<li>Coverage (optional local / CI): <code>python -m pytest --cov=src --cov-report=term</code> — scoped packages use <code>[tool.coverage.report]</code> in <code>pyproject.toml</code> with <code>fail_under = 80</code>.</li>
+<li>Coverage (optional local only): <code>python -m pytest --cov --cov-report=term</code> — coverage config in <code>pyproject.toml</code> now scopes the remaining Python support surfaces (<code>tests</code>, <code>deploy/windows</code>, <code>deprecated/inferra_legacy</code>) rather than the active Rust runtime.</li>
 </ul>
 <h2 id="platform-matrix">Platform matrix<a class="headerlink" href="#platform-matrix" title="Permanent link">&para;</a></h2>
 <ul>
@@ -281,10 +287,21 @@
 <p>Artifact: set <code>PERF_REPORT_PATH</code> to write JSON (defaults to <code>./perf_report.json</code> in the working directory). CI should upload that path as a workflow artifact.</p>
 <h2 id="determinism">Determinism<a class="headerlink" href="#determinism" title="Permanent link">&para;</a></h2>
 <p><code>tests/determinism/</code> is marked <code>@pytest.mark.determinism</code>. It runs in the default suite: ranking tuples (rank, cause type, rounded score) must stay identical across repeated runs with fixed timestamps.</p>
-<h2 id="ui-smoke">UI smoke<a class="headerlink" href="#ui-smoke" title="Permanent link">&para;</a></h2>
-<p>Playwright UI tests stay optional (<code>pip install -e ".[ui]"</code>). Not required for the standard CI gate unless enabled in workflow.</p>
+<h2 id="frontend-build">Frontend build<a class="headerlink" href="#frontend-build" title="Permanent link">&para;</a></h2>
+<p>The standard CI gate now requires a production frontend build:</p>
+<pre><code class="language-bash">cd src/web/frontend
+npm ci
+npm run build
+</code></pre>
+<p>Playwright UI tests still stay optional (<code>pip install -e ".[ui]"</code>). They are not part of the default gate unless added explicitly.</p>
+<h2 id="runtime-smoke">Runtime smoke<a class="headerlink" href="#runtime-smoke" title="Permanent link">&para;</a></h2>
+<p>The binary-level smoke gate builds the actual Rust CLI and boots it against a temp config/data directory:</p>
+<pre><code class="language-bash">cargo build --manifest-path src/Cargo.toml -p inferra-cli --release
+python tests/scripts/rust_runtime_smoke.py --binary ./target/release/inferra --repo-root .
+</code></pre>
+<p>The script verifies <code>setup</code>, <code>init-db</code>, <code>serve</code>, <code>/api/health</code>, <code>/api/overview</code>, <code>/api/collectors</code>, and the CLI-to-local-API collector status path.</p>
 <h2 id="windows-tagged-releases-inferraexe">Windows tagged releases (<code>inferra.exe</code>)<a class="headerlink" href="#windows-tagged-releases-inferraexe" title="Permanent link">&para;</a></h2>
-<p>Tag pushes (<code>v*</code>) build the Windows artifact on <strong><code>windows-latest</code></strong> using <strong><code>deploy/windows/build-exe.ps1</code></strong> after <code>pip install -e ".[windows,build-windows]"</code>. The script writes PyInstaller output to <strong><code>dist/_inferra_exe_stage/</code></strong>, promotes <strong><code>dist/inferra.exe</code></strong>, and smoke-tests <strong><code>inferra.exe --version</code></strong>. Details: <a href="../windows_exe_build/">Windows exe build</a>.</p>
+<p>Tag pushes (<code>v*</code>) now build the Windows artifact on <strong><code>windows-latest</code></strong> using the Rust-native path. The old PyInstaller flow has been archived under <code>deprecated/windows-pyinstaller/</code> and remains documented only as a fallback in <a href="../windows_exe_build/">Windows exe build</a>.</p>
               
             </div>
           </div><footer>

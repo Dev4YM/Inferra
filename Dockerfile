@@ -5,22 +5,25 @@ RUN npm ci
 COPY src/web/frontend/ .
 RUN npm run build
 
-FROM python:3.12-slim AS builder
+FROM rust:1.87-bookworm AS rust-builder
 
 WORKDIR /build
-RUN pip install --no-cache-dir build
-COPY . .
-COPY --from=ui /build/src/web/ui_dist /build/src/web/ui_dist
-RUN python -m build --wheel --outdir /dist
+COPY src/Cargo.toml src/Cargo.lock ./src/
+COPY src/crates ./src/crates/
+COPY src/config ./src/config/
+RUN cargo build --manifest-path src/Cargo.toml -p inferra-cli --release
 
-FROM python:3.12-slim
+FROM debian:bookworm-slim
 
 RUN useradd --system --uid 1000 --create-home inferra
 RUN mkdir -p /data && chown inferra:inferra /data
 
 WORKDIR /app
-COPY --from=builder /dist /dist
-RUN WHEEL="$(ls /dist/*.whl | head -n1)" && pip install --no-cache-dir "${WHEEL}[kubernetes]" && rm -rf /dist
+COPY --from=rust-builder /build/src/target/release/inferra /app/inferra
+COPY --from=ui /build/src/web/ui_dist /app/runtime-assets/ui_dist
+COPY src /app/runtime-assets/src
+COPY deploy/docker-entrypoint.sh /app/docker-entrypoint.sh
+RUN chmod +x /app/inferra /app/docker-entrypoint.sh && ln -sf /app/inferra /usr/local/bin/inferra
 
 USER inferra
 WORKDIR /home/inferra
@@ -29,4 +32,4 @@ EXPOSE 7433
 
 ENV INFERRA_CONFIG=/etc/inferra/inferra.toml
 
-CMD ["inferra", "--config", "/etc/inferra/inferra.toml", "serve", "--data-dir", "/data", "--host", "0.0.0.0", "--port", "7433"]
+CMD ["/app/docker-entrypoint.sh"]

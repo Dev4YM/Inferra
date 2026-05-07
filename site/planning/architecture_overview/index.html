@@ -249,9 +249,14 @@
             <div class="section" itemprop="articleBody">
               
                 <h1 id="architecture-overview">Architecture Overview<a class="headerlink" href="#architecture-overview" title="Permanent link">&para;</a></h1>
-<p>Implementation mapping: see <a href="../implementation_index/">implementation index</a> for planning documents linked to <code>src/</code> packages.</p>
+<p>Implementation mapping: see <a href="../implementation_index/">implementation index</a> for planning documents linked to the Rust crates and the remaining Python packages. Migration ownership is tracked in <a href="../rust_migration_matrix/">rust_migration_matrix.md</a>.</p>
 <h2 id="design-philosophy">Design Philosophy<a class="headerlink" href="#design-philosophy" title="Permanent link">&para;</a></h2>
-<p>Inferra is a local-first runtime debugging system that operates on a strict separation of concerns:</p>
+<p>Inferra is a local-first runtime debugging system that operates on a strict separation of concerns.</p>
+<p>The current target architecture is a Rust-primary control plane with Python
+retained only behind an internal AI/analysis worker boundary. Rust owns the
+operator-facing runtime shell, public API, Windows service shell, packaging, and
+hot-path systems logic. Python remains responsible only for the retained
+AI/explanation execution path while that logic is not yet ported.</p>
 <ul>
 <li><strong>Reproducible reasoning layer</strong>: Correlation, hypothesis generation, scoring, and ranking are performed by rule-based algorithms with explicitly defined heuristics. Given the same input <strong>and</strong> the same internal state (baselines, scoring weights), the system produces the same output. However, several components involve bounded uncertainty: anomaly detection baselines shift over time, log normalization uses heuristic parsers that may misclassify ambiguous input, and deduplication relies on template-based fingerprinting that is imperfect for novel log formats. The system tracks and surfaces this uncertainty through data quality scores (see below) rather than pretending inputs are always clean.</li>
 <li><strong>Probabilistic shell</strong>: An LLM layer exists solely to translate structured, already-decided results into human-readable explanations. It never influences decisions, rankings, or scores.</li>
@@ -440,26 +445,31 @@
 <p>Circular dependencies are forbidden. Data flows strictly downward through the pipeline.</p>
 <hr />
 <h2 id="concurrency-model">Concurrency Model<a class="headerlink" href="#concurrency-model" title="Permanent link">&para;</a></h2>
-<p>Inferra uses a single-process, multi-coroutine architecture (Python asyncio):</p>
+<p>Inferra uses a local-first, small-footprint runtime with a single Rust primary
+process:</p>
 <ul>
-<li><strong>Collectors</strong> run as independent async tasks, each polling or tailing its source.</li>
+<li><strong>Collectors and runtime services</strong> run as Rust async tasks under Tokio.</li>
 <li><strong>Normalization</strong> is a synchronous pipeline invoked per-event (low latency requirement: &lt;5ms per event).</li>
 <li><strong>Analysis</strong> runs on a periodic tick (configurable, default 5 seconds) or is triggered when event volume exceeds a threshold.</li>
 <li><strong>Reasoning</strong> is triggered per-incident (on incident creation or update).</li>
-<li><strong>Explanation</strong> is triggered on-demand (user requests explanation) or lazily on incident finalization.</li>
+<li><strong>Explanation / AI investigation</strong> is triggered on-demand through native Rust provider integration when enabled.</li>
 </ul>
-<p>There is no multi-threading. All CPU-bound work (scoring, graph traversal) is designed to complete within single-digit milliseconds for typical incident sizes (&lt;1000 events).</p>
+<p>The public control plane remains local and self-contained. Operator-facing
+runtime behavior stays inside the native Rust process so packaging, service
+hosting, and API delivery no longer depend on deprecated Python code.</p>
 <hr />
 <h2 id="deployment-topology">Deployment Topology<a class="headerlink" href="#deployment-topology" title="Permanent link">&para;</a></h2>
 <pre><code>Single machine:
 ┌─────────────────────────────────────────┐
-│  Inferra Process                        │
-│  ├── Collector tasks (async)            │
-│  ├── Normalization pipeline (sync)      │
-│  ├── Analysis engine (periodic async)   │
-│  ├── Reasoning engine (event-driven)    │
-│  ├── Explanation layer (on-demand)      │
-│  └── Web UI server (localhost:PORT)     │
+│  Inferra Rust Process                   │
+│  ├── Collector tasks                    │
+│  ├── Normalization / storage            │
+│  ├── Analysis / runtime context         │
+│  ├── Public API + Web UI host           │
+│  └── Service / CLI shell                │
+│                                         │
+│  Optional internal worker:              │
+│  └── Python AI / explanation service    │
 │                                         │
 │  Storage:                               │
 │  ├── ./data/events.db    (SQLite)       │
@@ -468,7 +478,9 @@
 │  └── ./data/baselines/   (JSON)         │
 └─────────────────────────────────────────┘
 </code></pre>
-<p>No sidecar processes. No message queues. No container orchestration. One process, one machine, full control.</p>
+<p>No message queues. No container orchestration. The intentional runtime boundary
+is one local Rust control-plane process plus an optional local Python worker for
+AI/analysis.</p>
 <hr />
 <h2 id="scaling-path-not-now-but-not-never">Scaling Path (Not Now, But Not Never)<a class="headerlink" href="#scaling-path-not-now-but-not-never" title="Permanent link">&para;</a></h2>
 <p>The single-machine design is the correct MVP architecture. But it must not become a cage. The following design decisions preserve future extensibility without adding current complexity:</p>

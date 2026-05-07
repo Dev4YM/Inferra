@@ -256,24 +256,20 @@
 <p>Make the control planes maintainable.</p>
 <p>Work:</p>
 <ul>
-<li>split <code>src/web/api.py</code> into routers</li>
-<li>split <code>src/cli.py</code> into command modules</li>
-<li>preserve endpoint paths</li>
-<li>preserve command behavior</li>
-<li>add tests per router/command group</li>
+<li>preserve endpoint paths while moving the active implementation into the Rust API/runtime crates</li>
+<li>preserve command behavior while shifting the operator surface to the native Rust CLI</li>
+<li>add tests per route/command group</li>
 </ul>
 <p>Exit criteria:</p>
 <ul>
-<li><code>create_app</code> still works</li>
 <li>existing API tests pass</li>
 <li>CLI tests pass</li>
-<li>files are smaller and domain-owned</li>
+<li>active runtime ownership is clear and domain-owned</li>
 </ul>
 <p>Remaining polish:</p>
 <ul>
-<li>move shared API schemas/contracts out of route functions</li>
-<li>keep reducing app/websocket/dashboard glue in <code>src/web/api.py</code></li>
-<li>move parser registration and remaining legacy command glue out of <code>src/cli.py</code></li>
+<li>move shared Rust API schemas/contracts out of route functions</li>
+<li>keep reducing cross-crate glue around the active Rust control plane</li>
 </ul>
 <h2 id="phase-3-experience-modes">Phase 3: Experience Modes<a class="headerlink" href="#phase-3-experience-modes" title="Permanent link">&para;</a></h2>
 <p>Status: first pass complete.</p>

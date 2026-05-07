@@ -227,14 +227,14 @@
 <p>Inferra ships an optional Ollama-compatible provider. Model tags change frequently upstream; defaults must point at tags that exist in the public Ollama library while allowing aliases and resolution against the live daemon (<code>/api/tags</code>).</p>
 <h2 id="decision">Decision<a class="headerlink" href="#decision" title="Permanent link">&para;</a></h2>
 <ul>
-<li>The supported provider family for defaults is Gemma on Ollama. Verified tag metadata is recorded in <code>src/ai/registry.py</code> from the official library pages (<code>https://ollama.com/library/gemma3/tags</code>, <code>https://ollama.com/library/gemma4/tags</code>).</li>
-<li><strong>Verification snapshot:</strong> Gemma 4 is published upstream (library lists sizes, context windows, and modalities per tag). The repository default model tag matches the shipped config (<code>[ai].model</code> in <code>src/config/defaults.toml</code>) and resolves through <code>resolve_gemma_model_alias</code> and runtime tag checks when needed.</li>
-<li>If a forward-looking alias (for example a shorthand like <code>gemma4:e4b</code>) does not exist on a given daemon, operators choose an installed tag via <code>inferra ai models</code> and <code>inferra ai pull</code>, or point <code>[ai].model</code> at an available digest-qualified name.</li>
+<li>The supported provider family for defaults is Gemma on Ollama. Verified tag expectations are documented against the shipped config (<code>[ai].model</code> in <code>src/config/defaults.toml</code>) and enforced by the native Rust provider status/doctor flow.</li>
+<li><strong>Verification snapshot:</strong> Gemma 4 is published upstream (library lists sizes, context windows, and modalities per tag). The repository default model tag must continue to match the shipped config and the native runtime's probe logic.</li>
+<li>If a forward-looking alias (for example a shorthand like <code>gemma4:e4b</code>) does not exist on a given daemon, operators use <code>ollama pull &lt;tag&gt;</code> and then point <code>[ai].model</code> at an installed tag or digest-qualified name.</li>
 </ul>
 <h2 id="consequences">Consequences<a class="headerlink" href="#consequences" title="Permanent link">&para;</a></h2>
 <ul>
-<li>Changing the global default requires updating defaults, registry entries, and documentation together.</li>
-<li>CLI <code>inferra ai models</code> merges the static registry with installed models without requiring outbound calls for offline installs once weights are cached.</li>
+<li>Changing the global default requires updating defaults, native provider checks, and documentation together.</li>
+<li>Operator guidance should stay aligned with the native <code>inferra ai status</code> / <code>inferra ai doctor</code> flow rather than archived Python-era model registry commands.</li>
 </ul>
               
             </div>

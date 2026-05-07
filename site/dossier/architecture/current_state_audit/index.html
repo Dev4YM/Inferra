@@ -89,7 +89,7 @@
     </li>
     <li class="toctree-l3"><a class="reference internal" href="#frontend-dependencies-are-no-longer-source">Frontend Dependencies Are No Longer Source</a>
     </li>
-    <li class="toctree-l3"><a class="reference internal" href="#backend-api-split-is-now-mostly-done">Backend API Split Is Now Mostly Done</a>
+    <li class="toctree-l3"><a class="reference internal" href="#native-http-surface-is-the-live-backend">Native HTTP Surface Is The Live Backend</a>
     </li>
     <li class="toctree-l3"><a class="reference internal" href="#cli-parser-still-needs-deeper-decomposition">CLI Parser Still Needs Deeper Decomposition</a>
     </li>
@@ -269,37 +269,10 @@
 <p>This resolves the previous confusion about which UI should be edited and packaged. Remaining work is product polish: the React UI now has the right control-plane shape, but it still needs more refined workflows, stronger visual hierarchy, and browser-level coverage for the richer screens.</p>
 <h3 id="frontend-dependencies-are-no-longer-source">Frontend Dependencies Are No Longer Source<a class="headerlink" href="#frontend-dependencies-are-no-longer-source" title="Permanent link">&para;</a></h3>
 <p><code>node_modules</code> and TypeScript build-info files are ignored and should not be committed.</p>
-<h3 id="backend-api-split-is-now-mostly-done">Backend API Split Is Now Mostly Done<a class="headerlink" href="#backend-api-split-is-now-mostly-done" title="Permanent link">&para;</a></h3>
-<p><code>src/web/api.py</code> is no longer the only owner of web behavior. Frontend asset serving lives in <code>src/web/frontend_assets.py</code>, system/control-plane endpoints live in <code>src/web/routes/system.py</code>, and domain APIs now live under <code>src/web/routers/</code>.</p>
-<p>The active split includes:</p>
-<ul>
-<li><code>src/web/routers/ai.py</code></li>
-<li><code>src/web/routers/collectors.py</code></li>
-<li><code>src/web/routers/config.py</code></li>
-<li><code>src/web/routers/events.py</code></li>
-<li><code>src/web/routers/health.py</code></li>
-<li><code>src/web/routers/incidents.py</code></li>
-<li><code>src/web/routers/investigate.py</code></li>
-<li><code>src/web/routers/metrics.py</code></li>
-<li><code>src/web/routers/services.py</code></li>
-<li><code>src/web/routers/topology.py</code></li>
-<li><code>src/web/routers/workspace.py</code></li>
-</ul>
-<p><code>src/web/api.py</code> still owns app creation, lifespan wiring, websocket behavior, and some shared dashboard composition. That is acceptable for the current pass, but the next polish wave should keep moving shared API contracts and schemas into clearer modules.</p>
+<h3 id="native-http-surface-is-the-live-backend">Native HTTP Surface Is The Live Backend<a class="headerlink" href="#native-http-surface-is-the-live-backend" title="Permanent link">&para;</a></h3>
+<p>The active HTTP/runtime surface now lives in the Rust workspace (<code>src/crates/inferra-api/</code>, <code>src/crates/inferra-core/</code>, <code>src/crates/inferra-collectors/</code>, <code>src/crates/inferra-storage/</code>). The React app in <code>src/web/frontend/</code> talks to that native API, and archived Python web-layer notes should not be treated as the live control plane.</p>
 <h3 id="cli-parser-still-needs-deeper-decomposition">CLI Parser Still Needs Deeper Decomposition<a class="headerlink" href="#cli-parser-still-needs-deeper-decomposition" title="Permanent link">&para;</a></h3>
-<p><code>src/cli.py</code> is the main control plane, but it is too large and owns too many domains in one file.</p>
-<p>The first command-module split now exists under <code>src/cli_core/commands/</code>, including AI, config, runtime, service, workspace, and related command handlers. However, <code>src/cli.py</code> still owns a lot of parser construction and legacy behavior.</p>
-<p>It still mixes:</p>
-<ul>
-<li>parser construction</li>
-<li>setup</li>
-<li>some config defaults</li>
-<li>some collector wiring</li>
-<li>storage/calibration command glue</li>
-<li>mode and status rendering glue</li>
-<li>HTTP client calls</li>
-</ul>
-<p>The CLI should remain the main control plane. The direction is right now; the next issue is making the parser and command registration as clean as the command handlers.</p>
+<p>The active CLI control plane now lives in <code>src/crates/inferra-cli/src/main.rs</code> and delegates runtime concerns into the Rust workspace crates. Archived <code>src/cli.py</code> notes are historical only and should not guide new implementation work.</p>
 <h3 id="product-identity-too-narrow">Product Identity Too Narrow<a class="headerlink" href="#product-identity-too-narrow" title="Permanent link">&para;</a></h3>
 <p>The README now describes Inferra as a local-first AI-integrated runtime intelligence control plane. This matches the intended product direction better than the older "runtime failure explanation system" framing.</p>
 <h3 id="dashboard-is-now-a-control-plane-but-needs-product-polish">Dashboard Is Now a Control Plane, but Needs Product Polish<a class="headerlink" href="#dashboard-is-now-a-control-plane-but-needs-product-polish" title="Permanent link">&para;</a></h3>
@@ -400,11 +373,11 @@ doctor
 demo seed/clear
 completion
 </code></pre>
-<p>This is now a credible CLI-first control plane. The next issue is implementation layout and UX finish: continue shrinking <code>src/cli.py</code>, make onboarding feel smoother, and ensure every important web action has an equally good CLI path.</p>
+<p>This is now a credible CLI-first control plane. The next issue is runtime UX finish: keep the Rust CLI ergonomics sharp, make onboarding feel smoother, and ensure every important web action has an equally good CLI path.</p>
 <h2 id="immediate-cleanup-findings">Immediate Cleanup Findings<a class="headerlink" href="#immediate-cleanup-findings" title="Permanent link">&para;</a></h2>
 <ul>
-<li>Continue moving shared API contracts and remaining websocket/dashboard glue into clearer modules.</li>
-<li>Continue decomposing <code>src/cli.py</code> so parser registration and command execution are easier to trust.</li>
+<li>Continue moving shared Rust API contracts and remaining dashboard glue into clearer modules.</li>
+<li>Keep simplifying the native Rust CLI command surface and operator ergonomics.</li>
 <li>Add browser coverage for the new Overview, AI Investigator, Workspace, Control, and Settings screens.</li>
 <li>Reconcile web mode persistence with persisted config mode so operator/developer behavior feels consistent everywhere.</li>
 <li>Deliberately decide what to do with generated docs/site artifacts in git instead of letting staged generated deletions linger.</li>

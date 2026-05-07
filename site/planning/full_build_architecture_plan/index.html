@@ -313,7 +313,12 @@
                 <h1 id="full-build-and-architecture-plan">Full Build and Architecture Plan<a class="headerlink" href="#full-build-and-architecture-plan" title="Permanent link">&para;</a></h1>
 <p>Living module map: <a href="../implementation_index/">implementation index</a>.</p>
 <h2 id="purpose">Purpose<a class="headerlink" href="#purpose" title="Permanent link">&para;</a></h2>
-<p>This plan consolidates the existing Inferra planning documents into an implementation architecture for a Python + SQLite product that runs first-class on Windows and Windows Server, while remaining portable to Linux, Kubernetes, and macOS.</p>
+<p>This plan consolidates the existing Inferra planning documents into an implementation architecture for Inferra's local-first control plane.</p>
+<p>Historically this document described a Python + SQLite monolith. The current
+migration direction is a Rust-primary runtime shell and public control plane
+with Python retained only for internal AI/analysis execution. The public runtime
+contract in <code>rust_runtime_contracts.md</code> takes precedence over older
+Python-first assumptions in this document.</p>
 <p>Inferra remains a local-first, read-only runtime debugging assistant. It observes logs, containers, services, process metrics, and runtime context, then builds deterministic, evidence-backed hypotheses about failures. The LLM layer is optional and presentation-only.</p>
 <h2 id="product-position">Product Position<a class="headerlink" href="#product-position" title="Permanent link">&para;</a></h2>
 <p>Inferra is not a cloud observability platform and not an auto-remediation system. It is a local diagnostic system for developers, operators, and small teams who need fast failure explanation without sending operational data to a cloud service.</p>
@@ -330,11 +335,12 @@
 <h2 id="required-stack">Required Stack<a class="headerlink" href="#required-stack" title="Permanent link">&para;</a></h2>
 <h3 id="core">Core<a class="headerlink" href="#core" title="Permanent link">&para;</a></h3>
 <ul>
-<li>Python 3.11+</li>
+<li>Rust workspace for the runtime shell, public HTTP API, Windows service shell,
+  storage access, collector supervision, and operator-facing CLI</li>
 <li>SQLite in WAL mode</li>
-<li>FastAPI for local REST and WebSocket server</li>
-<li>asyncio queues for in-process event flow</li>
-<li>dataclasses or Pydantic models for typed contracts</li>
+<li>Axum for the local public REST server and static UI host</li>
+<li>Tokio for async runtime and task orchestration on the Rust side</li>
+<li>Serde for typed contracts</li>
 <li>NetworkX for local graph operations</li>
 <li>psutil for cross-platform host/process metrics</li>
 <li>pytest for tests</li>
@@ -349,8 +355,9 @@
 </ul>
 <h3 id="packaging">Packaging<a class="headerlink" href="#packaging" title="Permanent link">&para;</a></h3>
 <ul>
-<li>PyInstaller or Nuitka for Windows/macOS/Linux binaries.</li>
-<li>Windows Service wrapper for Windows Server.</li>
+<li>Cargo-driven native binaries as the primary runtime artifact.</li>
+<li>Windows native service packaging and wrapper for Windows Server.</li>
+<li>Archived PyInstaller path retained only as historical reference.</li>
 <li>systemd unit for Linux.</li>
 <li>Docker image for Linux container runtime.</li>
 <li>Helm chart and Kubernetes manifests for cluster deployment.</li>
@@ -450,10 +457,10 @@ README.md
 Dockerfile
 compose.yaml
 src/
-  app.py
-  cli.py
-  windows_service.py
+  Cargo.toml
+  crates/
   ai/
+    worker/
   analysis/
   collectors/
   config/
@@ -475,11 +482,22 @@ docs/
   adr/
   operations/
   planning/
-  tests/
-    unit/
-    integration/
+deprecated/
+  inferra_legacy/
+  windows-pyinstaller/
+tests/
+  unit/
+  integration/
 </code></pre>
-<p>The implementation intentionally keeps packages directly under <code>src/</code>. Do not introduce a root <code>inferra/</code> package or any nested implementation package under <code>src/</code>.</p>
+<p>The active implementation now keeps the Rust workspace and frontend directly
+under <code>src/</code>. Do not reintroduce a parallel Python application tree there.</p>
+<p>Ownership rules:</p>
+<ul>
+<li><code>src/Cargo.toml</code> + <code>src/crates/</code> own the public runtime, operator CLI, HTTP API, Windows service
+  shell, hot-path storage/runtime logic, and packaging entrypoints.</li>
+<li><code>src/web/frontend/</code> and <code>src/web/ui_dist/</code> own the shipped UI source and bundle.</li>
+<li><code>deprecated/</code> holds superseded Python/runtime/build paths and should not be treated as the active implementation.</li>
+</ul>
 <h2 id="core-data-model">Core Data Model<a class="headerlink" href="#core-data-model" title="Permanent link">&para;</a></h2>
 <p>The existing <code>RawEvent</code>, <code>NormalizedEvent</code>, <code>EventCluster</code>, <code>Incident</code>, <code>ScoredHypothesisSet</code>, and <code>ExplanationResult</code> contracts should become actual Python models early in the build.</p>
 <p>Rules:</p>
@@ -733,7 +751,7 @@ docs/
 <h3 id="phase-6-local-web-ui">Phase 6: Local Web UI<a class="headerlink" href="#phase-6-local-web-ui" title="Permanent link">&para;</a></h3>
 <p>Deliverables:</p>
 <ul>
-<li>FastAPI REST API</li>
+<li>Rust-hosted REST API</li>
 <li>WebSocket live updates</li>
 <li>static dashboard</li>
 <li>incident detail view</li>

@@ -9,9 +9,9 @@ Type=simple
 DynamicUser=yes
 StateDirectory=inferra
 WorkingDirectory=/var/lib/inferra
-Environment=PYTHONUNBUFFERED=1
 Environment=INFERRA_CONFIG=/etc/inferra/inferra.toml
-ExecStart=/usr/bin/inferra --config /etc/inferra/inferra.toml serve --data-dir /var/lib/inferra --host 0.0.0.0 --port 7433
+ExecStartPre=/usr/bin/inferra --config /etc/inferra/inferra.toml init-db
+ExecStart=/usr/bin/inferra --config /etc/inferra/inferra.toml serve
 Restart=on-failure
 RestartSec=5
 NoNewPrivileges=yes

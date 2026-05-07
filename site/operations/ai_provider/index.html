@@ -59,8 +59,6 @@
     </li>
     <li class="toctree-l2"><a class="reference internal" href="#bearer-token-environment-variable">Bearer token environment variable</a>
     </li>
-    <li class="toctree-l2"><a class="reference internal" href="#streaming">Streaming</a>
-    </li>
     <li class="toctree-l2"><a class="reference internal" href="#troubleshooting">Troubleshooting</a>
     </li>
     </ul>
@@ -227,43 +225,41 @@
                 <h1 id="ai-provider-setup">AI Provider Setup<a class="headerlink" href="#ai-provider-setup" title="Permanent link">&para;</a></h1>
 <p>Inferra uses AI as a guided explanation layer only; it does not change deterministic scoring or ranking (see <a href="../../adr/0005-ai-presentation-only/">ADR 0005</a>).</p>
 <h2 id="gemma-model-choice">Gemma model choice<a class="headerlink" href="#gemma-model-choice" title="Permanent link">&para;</a></h2>
-<p>The shipped default in <code>src/config/defaults.toml</code> is a Gemma 4 tag suitable for local workstations. Verified sizes, context windows, and modalities for Gemma 3 and Gemma 4 are recorded in <code>src/ai/registry.py</code>, sourced from the public Ollama library (<code>https://ollama.com/library/gemma3/tags</code>, <code>https://ollama.com/library/gemma4/tags</code>). As of the last registry refresh, Gemma 4 offers multiple quantized variants (for example <code>gemma4:e2b</code>, <code>gemma4:e4b</code>, <code>gemma4:26b</code>, <code>gemma4:31b</code>) with 128K or 256K context where listed.</p>
-<p>Alias resolution maps shorthand tags to concrete pulls (<code>GEMMA4_DEFAULT_ALIASES</code> / <code>GEMMA3_DEFAULT_ALIASES</code>). At runtime, <code>choose_available_gemma_model</code> can pick an installed digest if your daemon lacks a given alias.</p>
+<p>The shipped default in <code>src/config/defaults.toml</code> is <code>gemma4:e4b</code>, suitable for local Ollama deployments on developer workstations and small servers.</p>
 <h2 id="local-ollama">Local Ollama<a class="headerlink" href="#local-ollama" title="Permanent link">&para;</a></h2>
 <p>Prepare config and probe the daemon:</p>
 <pre><code class="language-powershell">inferra --config inferra.toml config set ai.enabled false
 inferra --config inferra.toml config set ai.model gemma4:e4b
-inferra --config inferra.toml ai models
 inferra --config inferra.toml ai status
+inferra --config inferra.toml ai doctor
 </code></pre>
-<p>After <code>ai.enabled</code> is true and Ollama is reachable at <code>[ai].base_url</code>, pull and smoke-test:</p>
+<p>After <code>ai.enabled</code> is true and Ollama is reachable at <code>[ai].base_url</code>, pull the model with Ollama itself and re-check Inferra:</p>
 <pre><code class="language-powershell">inferra --config inferra.toml config set ai.enabled true
-inferra --config inferra.toml ai pull --help
-inferra --config inferra.toml ai test --help
+ollama pull gemma4:e4b
+inferra --config inferra.toml ai status
+inferra --config inferra.toml ai investigate latest
 </code></pre>
-<p>Run <code>inferra ai pull &lt;tag&gt;</code> once Ollama is running to download weights; streams progress to the terminal. Run <code>inferra ai test</code> for a short health prompt against the configured model.</p>
-<p><code>inferra setup --yes</code> enables AI and probes Ollama unless <code>--skip-connection-test</code> is set. No model downloads occur without an explicit <code>ai pull</code> or upstream <code>ollama pull</code>.</p>
+<p>Inferra does not implement model download commands itself. Use <code>ollama pull &lt;tag&gt;</code> against the configured daemon, then validate with <code>inferra ai status</code>, <code>inferra ai doctor</code>, <code>inferra ai ask</code>, or <code>inferra ai investigate latest</code>.</p>
 <h2 id="remote-ollama-compatible-servers">Remote Ollama-compatible servers<a class="headerlink" href="#remote-ollama-compatible-servers" title="Permanent link">&para;</a></h2>
 <pre><code class="language-powershell">inferra --config inferra.toml config set ai.enabled true
 inferra --config inferra.toml config set ai.base_url http://SERVER:11434
 inferra --config inferra.toml config set ai.allow_remote true
 inferra --config inferra.toml config set ai.model gemma4:e4b
-inferra --config inferra.toml ai status --help
+inferra --config inferra.toml ai status
+inferra --config inferra.toml ai doctor
 </code></pre>
-<p>When the remote endpoint is reachable, run <code>inferra ai status</code> without <code>--help</code> to probe availability.</p>
+<p>When the remote endpoint is reachable, <code>inferra ai status</code> and <code>inferra ai doctor</code> probe availability through the native Rust API.</p>
 <h2 id="bearer-token-environment-variable">Bearer token environment variable<a class="headerlink" href="#bearer-token-environment-variable" title="Permanent link">&para;</a></h2>
 <p>When the upstream expects <code>Authorization: Bearer …</code>, store the secret outside config files:</p>
 <pre><code class="language-powershell">$env:OLLAMA_TOKEN = &quot;...&quot;
 inferra --config inferra.toml config set ai.token_env OLLAMA_TOKEN
 </code></pre>
 <p>Inferra reads the variable name from <code>[ai].token_env</code> and resolves the value at request time.</p>
-<h2 id="streaming">Streaming<a class="headerlink" href="#streaming" title="Permanent link">&para;</a></h2>
-<p><code>[ai].stream = true</code> (default) streams chat and generate calls where supported (<code>src/ai/ollama.py</code>), including aggregated explanation paths in the web UI. Disable streaming for debugging unstable proxies by setting <code>stream = false</code> in <code>inferra.toml</code>.</p>
 <h2 id="troubleshooting">Troubleshooting<a class="headerlink" href="#troubleshooting" title="Permanent link">&para;</a></h2>
 <ul>
 <li><strong>Unreachable provider:</strong> check <code>[ai].base_url</code>, TLS mismatch, and firewall paths; set <code>allow_remote</code> when not using loopback.</li>
 <li><strong>Auth failures:</strong> confirm <code>token_env</code> names an exported variable in the service account environment (Windows Service / systemd / container).</li>
-<li><strong>Missing models:</strong> run <code>inferra ai models</code> and install a listed tag; aliases fall back when the daemon exposes resolved names via <code>/api/tags</code>.</li>
+<li><strong>Missing models:</strong> run <code>ollama pull &lt;tag&gt;</code> on the configured daemon, then retry <code>inferra ai status</code>.</li>
 <li><strong>Strict environments:</strong> keep <code>ai.enabled = false</code> and rely on template explanations; core pipelines stay offline.</li>
 </ul>
 <p>See <a href="../troubleshooting/">Troubleshooting</a> for Ollama-specific failure modes and collector issues.</p>

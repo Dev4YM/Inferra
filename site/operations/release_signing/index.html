@@ -228,9 +228,9 @@
 </ul>
 <p>If OIDC is unavailable in a fork, the sign step fails; remove or gate that step for fork builds.</p>
 <h2 id="windows-executable-signtool-authenticode">Windows executable (signtool, Authenticode)<a class="headerlink" href="#windows-executable-signtool-authenticode" title="Permanent link">&para;</a></h2>
-<p>When a code-signing certificate is installed in the Windows runner certificate store, set <code>WINDOWS_CERT_THUMBPRINT</code> to the SHA-1 thumbprint of the signing cert. The release job runs:</p>
-<p><code>signtool sign /sha1 %WINDOWS_CERT_THUMBPRINT% /fd SHA256 /tr http://timestamp.digicert.com /td SHA256 dist/inferra.exe</code></p>
-<p>When the secret is absent, the job skips signing and uploads the unsigned <code>inferra.exe</code> artifact. For production releases, sign on a trusted machine or use a managed signing service.</p>
+<p>When a code-signing certificate is installed in the Windows runner certificate store, set <code>WINDOWS_CERT_THUMBPRINT</code> to the SHA-1 thumbprint of the signing cert. The release job signs every Windows executable that exists in <code>dist/</code>, including the guaranteed native artifact:</p>
+<p><code>signtool sign /sha1 %WINDOWS_CERT_THUMBPRINT% /fd SHA256 /tr http://timestamp.digicert.com /td SHA256 dist/inferra-rust.exe</code></p>
+<p>When <code>dist/inferra.exe</code> is also present, it is signed in the same step as the compatibility filename. When the secret is absent, the job skips signing and uploads unsigned artifacts. For production releases, sign on a trusted machine or use a managed signing service.</p>
 <h2 id="sbom">SBOM<a class="headerlink" href="#sbom" title="Permanent link">&para;</a></h2>
 <p>Python packages are summarized with <code>cyclonedx-bom</code> (<code>cyclonedx-py environment</code>) and uploaded as <code>sbom-cyclonedx</code> artifact JSON.</p>
               

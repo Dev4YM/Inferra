@@ -14,19 +14,19 @@ Inferra uses a flat `src/` layout:
 
 ```text
 src/
-  ai/
-  collectors/
+  Cargo.toml
+  crates/
   config/
-  storage/
   web/
-  app.py
-  cli.py
+deprecated/
+  inferra_legacy/
+    cli.py
+  python_packages/
 ```
 
-No nested implementation package under `src/` or root `inferra/` implementation directory should be introduced.
+No nested implementation package under `src/` or root `inferra/` implementation directory should be introduced. The active runtime lives under the Rust workspace (`src/Cargo.toml`, `src/crates/`) plus frontend assets in `src/web/`; archived Python reference code remains under `deprecated/`.
 
 ## Consequences
 
-- `pyproject.toml` sets `package-dir = {"" = "src"}`.
-- Console entrypoint remains `inferra = "cli:main"`.
-- Imports remain concise, for example `from config import load_config`.
+- Active packaging, service management, and release artifacts target the Rust workspace under `src/`.
+- Archived Python code may remain under `deprecated/` for reference, but it is not part of the normal runtime path.

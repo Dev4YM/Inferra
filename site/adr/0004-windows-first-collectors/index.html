@@ -224,12 +224,12 @@
 <h2 id="status">Status<a class="headerlink" href="#status" title="Permanent link">&para;</a></h2>
 <p>Accepted</p>
 <h2 id="context">Context<a class="headerlink" href="#context" title="Permanent link">&para;</a></h2>
-<p>Inferra targets developers and operators on Windows desktops and Windows Server as often as Linux or Kubernetes. Collectors must behave correctly without mandatory POSIX-only APIs, and optional dependencies such as pywin32 must not break imports on non-Windows platforms.</p>
+<p>Inferra targets developers and operators on Windows desktops and Windows Server as often as Linux or Kubernetes. Collectors must behave correctly without mandatory POSIX-only APIs, and the active runtime must not depend on pywin32.</p>
 <h2 id="decision">Decision<a class="headerlink" href="#decision" title="Permanent link">&para;</a></h2>
 <ul>
 <li>First-class collectors exist for Windows Event Log and Windows service state, alongside shared collectors for host metrics and process snapshots.</li>
-<li>Windows-specific code paths live under <code>src/collectors/</code> with runtime guards; imports remain safe when pywin32 is absent.</li>
-<li>CLI one-shot commands (<code>collect-eventlog</code>, <code>collect-services</code>) are registered only where supported; attempting them on the wrong OS returns a clear error instead of importing Win32 modules at module load time.</li>
+<li>Windows-specific code paths live in the Rust collector/runtime crates (<code>src/crates/inferra-collectors/</code> and <code>src/crates/inferra-windows-service/</code>); no active Python collector import path is required.</li>
+<li>Operator workflows use the native Rust CLI and API rather than Python-only one-shot commands.</li>
 </ul>
 <h2 id="consequences">Consequences<a class="headerlink" href="#consequences" title="Permanent link">&para;</a></h2>
 <ul>

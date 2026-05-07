@@ -16,5 +16,5 @@ Large language models can summarize evidence fluently but are not auditable sour
 
 ## Consequences
 
-- API and CLI surfaces separate “reasoning” from “explanation” and keep prompts redacted for UI display.
-- Provider configuration (`src/ai/`) never imports reasoning engines for scoring updates.
+- API and CLI surfaces separate “reasoning” from “explanation”, keep prompts redacted for UI display, and persist explanation/trace artifacts without feeding them back into scoring.
+- Provider configuration and investigation prompting live in the native Rust runtime; explanation output never mutates deterministic scoring or ranking.

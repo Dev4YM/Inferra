@@ -2,10 +2,10 @@ from __future__ import annotations
 
 import json
 
-import cli
+import inferra_legacy.cli as cli
 import cli_core.commands.dashboard as dashboard_cmds
 from cli_core.commands.service import build_release_readiness
-from cli import CommandError, main
+from inferra_legacy.cli import CommandError, main
 
 
 def test_incidents_list_json_uses_live_api(monkeypatch, tmp_path, capsys) -> None:

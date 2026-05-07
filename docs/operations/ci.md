@@ -1,14 +1,18 @@
 # Continuous integration
 
-Reference runner (documented 2026-05): GitHub Actions `ubuntu-latest` / `windows-latest`, Python 3.11 and 3.12.
+Reference runners (documented 2026-05): GitHub Actions `ubuntu-latest` / `windows-latest` / `macos-latest`, Python 3.11 and 3.12, Node 20, and the stable Rust toolchain.
 
 ## Default gate
 
-- Install: `python -m pip install -e ".[dev]"`.
-- Compile: `python -m compileall src tests`.
-- Lint: `python -m ruff check src tests`.
+- Install Python support tooling: `python -m pip install -e ".[dev]"`.
+- Frontend build: `npm ci && npm run build` in `src/web/frontend`.
+- Docs: `python -m pip install -e ".[docs,dev]"` then `mkdocs build --strict`.
+- Rust checks: `cargo fmt --manifest-path src/Cargo.toml --all --check`, `cargo clippy --manifest-path src/Cargo.toml --workspace --all-targets -- -D warnings`, `cargo test --manifest-path src/Cargo.toml --workspace`.
+- Native runtime smoke: build the release CLI binary and run `tests/scripts/rust_runtime_smoke.py` against the built executable plus `src/web/ui_dist`.
+- Compile: `python -m compileall tests deploy deprecated`.
+- Lint: `python -m ruff check tests deploy deprecated`.
 - Tests: matrix-specific pytest invocation (see below).
-- Coverage (optional local / CI): `python -m pytest --cov=src --cov-report=term` — scoped packages use `[tool.coverage.report]` in `pyproject.toml` with `fail_under = 80`.
+- Coverage (optional local only): `python -m pytest --cov --cov-report=term` — coverage config in `pyproject.toml` now scopes the remaining Python support surfaces (`tests`, `deploy/windows`, `deprecated/inferra_legacy`) rather than the active Rust runtime.
 
 ## Platform matrix
 
@@ -49,10 +53,29 @@ Artifact: set `PERF_REPORT_PATH` to write JSON (defaults to `./perf_report.json`
 
 `tests/determinism/` is marked `@pytest.mark.determinism`. It runs in the default suite: ranking tuples (rank, cause type, rounded score) must stay identical across repeated runs with fixed timestamps.
 
-## UI smoke
+## Frontend build
 
-Playwright UI tests stay optional (`pip install -e ".[ui]"`). Not required for the standard CI gate unless enabled in workflow.
+The standard CI gate now requires a production frontend build:
+
+```bash
+cd src/web/frontend
+npm ci
+npm run build
+```
+
+Playwright UI tests still stay optional (`pip install -e ".[ui]"`). They are not part of the default gate unless added explicitly.
+
+## Runtime smoke
+
+The binary-level smoke gate builds the actual Rust CLI and boots it against a temp config/data directory:
+
+```bash
+cargo build --manifest-path src/Cargo.toml -p inferra-cli --release
+python tests/scripts/rust_runtime_smoke.py --binary ./target/release/inferra --repo-root .
+```
+
+The script verifies `setup`, `init-db`, `serve`, `/api/health`, `/api/overview`, `/api/collectors`, and the CLI-to-local-API collector status path.
 
 ## Windows tagged releases (`inferra.exe`)
 
-Tag pushes (`v*`) build the Windows artifact on **`windows-latest`** using **`deploy/windows/build-exe.ps1`** after `pip install -e ".[windows,build-windows]"`. The script writes PyInstaller output to **`dist/_inferra_exe_stage/`**, promotes **`dist/inferra.exe`**, and smoke-tests **`inferra.exe --version`**. Details: [Windows exe build](windows_exe_build.md).
+Tag pushes (`v*`) now build the Windows artifact on **`windows-latest`** using the Rust-native path. The old PyInstaller flow has been archived under `deprecated/windows-pyinstaller/` and remains documented only as a fallback in [Windows exe build](windows_exe_build.md).

@@ -1,23 +1,7 @@
 #requires -Version 5.1
 <#
 .SYNOPSIS
-    Production Windows one-file build for Inferra (PyInstaller staging + promote + smoke test).
-
-.DESCRIPTION
-    Loads deploy/windows/InferraWindows.psm1 and runs Invoke-InferraWindowsExeBuild.
-    PyInstaller writes to dist\_inferra_exe_stage\ only; dist\inferra.exe is updated via copy with retries.
-
-.PARAMETER SkipReleaseLocks
-    Skip stopping the Inferra service and inferra.exe processes. Use on clean CI agents.
-
-.EXAMPLE
-    .\deploy\windows\build-exe.ps1
-
-.EXAMPLE
-    .\deploy\windows\build-exe.ps1 -Python .\.venv-inferra-build\Scripts\python.exe
-
-.EXAMPLE
-    .\deploy\windows\build-exe.ps1 -SkipReleaseLocks -CleanPyInstallerWork
+    Compatibility shim for the deprecated PyInstaller build.
 #>
 param(
     [string]$Python = 'python',
@@ -30,23 +14,14 @@ param(
 
 $ErrorActionPreference = 'Stop'
 
-$modulePath = Join-Path $PSScriptRoot 'InferraWindows.psm1'
-Import-Module -Name $modulePath -Force
+$legacyScript = Join-Path $PSScriptRoot '..\..\deprecated\windows-pyinstaller\build-exe.ps1'
+Write-Warning "deploy/windows/build-exe.ps1 is deprecated. Use deploy/windows/build-rust-exe.ps1 for the native runtime, or run the archived script at $legacyScript."
 
-$invokeParams = @{
-    Python                = $Python
-    SkipReleaseLocks      = $SkipReleaseLocks
-    CleanPyInstallerWork  = $CleanPyInstallerWork
-    NoSmokeTest           = $NoSmokeTest
-    LockReleaseTimeoutSec = $LockReleaseTimeoutSec
-    PublishCopyAttempts   = $PublishCopyAttempts
-}
-
-try {
-    $exitCode = Invoke-InferraWindowsExeBuild @invokeParams
-    exit [int]$exitCode
-}
-catch {
-    Write-Error $_
-    exit 1
-}
+& $legacyScript `
+    -Python $Python `
+    -SkipReleaseLocks:$SkipReleaseLocks `
+    -CleanPyInstallerWork:$CleanPyInstallerWork `
+    -NoSmokeTest:$NoSmokeTest `
+    -LockReleaseTimeoutSec $LockReleaseTimeoutSec `
+    -PublishCopyAttempts $PublishCopyAttempts
+exit $LASTEXITCODE

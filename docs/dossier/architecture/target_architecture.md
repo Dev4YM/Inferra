@@ -114,33 +114,24 @@ src/web/
   ui_dist/
 ```
 
-`src/web/api.py` should become a compatibility shim during migration, then disappear or only expose `create_app`.
+Any historical `src/web/api.py` compatibility layer is now archival context only. The active web/API surface lives in the Rust runtime plus the React frontend bundle.
 
 ## CLI Structure
 
 Recommended CLI structure:
 
 ```text
-src/cli.py
-src/cli_core/
-  __init__.py
-  parser.py
-  result.py
-  http_client.py
-  output.py
-  commands/
-    ai.py
-    collectors.py
-    config.py
-    incidents.py
-    service.py
-    setup.py
-    status.py
-    storage.py
-    workspace.py
+src/crates/inferra-cli/src/main.rs
+src/crates/inferra-api/src/lib.rs
+src/crates/inferra-collectors/src/lib.rs
+src/crates/inferra-core/src/lib.rs
+src/crates/inferra-storage/src/lib.rs
+src/web/frontend/
+src/web/ui_dist/
 ```
 
-`src/cli.py` remains the entry point for packaging compatibility.
+Archived Python CLI structures remain under `deprecated/` for compatibility
+reference only.
 
 ## Data Flow
 

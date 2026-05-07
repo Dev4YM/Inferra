@@ -1,0 +1,42 @@
+[workspace]
+resolver = "2"
+members = [
+    "crates/inferra-contracts",
+    "crates/inferra-config",
+    "crates/inferra-storage",
+    "crates/inferra-collectors",
+    "crates/inferra-core",
+    "crates/inferra-api",
+    "crates/inferra-cli",
+    "crates/inferra-windows-service",
+]
+
+[workspace.package]
+version = "0.2.0"
+edition = "2021"
+license = "MIT OR Apache-2.0"
+repository = "https://github.com/inferra/inferra"
+
+[workspace.dependencies]
+anyhow = "1"
+axum = { version = "0.8", features = ["macros", "json"] }
+bytes = "1"
+clap = { version = "4", features = ["derive", "env"] }
+futures-util = "0.3"
+http-body-util = "0.1"
+hyper = { version = "1", features = ["full"] }
+hyper-util = { version = "0.1", features = ["full"] }
+reqwest = { version = "0.12", default-features = false, features = ["json", "rustls-tls"] }
+rusqlite = { version = "0.32", features = ["bundled"] }
+serde = { version = "1", features = ["derive"] }
+serde_json = "1"
+sysinfo = "0.32"
+time = { version = "0.3", features = ["formatting", "macros", "parsing"] }
+thiserror = "2"
+tokio = { version = "1", features = ["full"] }
+toml = "0.8"
+tower = "0.5"
+tower-http = { version = "0.6", features = ["fs", "trace", "set-header"] }
+tracing = "0.1"
+tracing-subscriber = { version = "0.3", features = ["env-filter"] }
+walkdir = "2"

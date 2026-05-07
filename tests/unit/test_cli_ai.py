@@ -1,8 +1,8 @@
 import json
 
 import ai
-import cli
-from cli import CommandError, main
+import inferra_legacy.cli as cli
+from inferra_legacy.cli import CommandError, main
 from config import load_config
 
 

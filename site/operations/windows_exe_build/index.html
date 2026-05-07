@@ -49,17 +49,11 @@
                   </li>
                   <li class="toctree-l1 current"><a class="reference internal current" href="#">Windows exe - start here</a>
     <ul class="current">
-    <li class="toctree-l2"><a class="reference internal" href="#start-here-windows-copypaste">Start here (Windows, copy/paste)</a>
-        <ul>
-    <li class="toctree-l3"><a class="reference internal" href="#1-one-time-isolated-build-virtualenv">1) One-time: isolated build virtualenv</a>
+    <li class="toctree-l2"><a class="reference internal" href="#native-rust-build">Native Rust build</a>
     </li>
-    <li class="toctree-l3"><a class="reference internal" href="#2-build-inferraexe-staged-output-promote-smoke-test">2) Build inferra.exe (staged output + promote + smoke test)</a>
+    <li class="toctree-l2"><a class="reference internal" href="#recommended-flow">Recommended flow</a>
     </li>
-    <li class="toctree-l3"><a class="reference internal" href="#3-install-windows-service-administrator-powershell">3) Install Windows service (Administrator PowerShell)</a>
-    </li>
-    <li class="toctree-l3"><a class="reference internal" href="#4-open-the-dashboard">4) Open the dashboard</a>
-    </li>
-        </ul>
+    <li class="toctree-l2"><a class="reference internal" href="#legacy-pyinstaller-path">Legacy PyInstaller path</a>
     </li>
     <li class="toctree-l2"><a class="reference internal" href="#why-a-dedicated-pipeline-exists">Why a dedicated pipeline exists</a>
     </li>
@@ -242,37 +236,51 @@
           <div role="main" class="document" itemscope="itemscope" itemtype="http://schema.org/Article">
             <div class="section" itemprop="articleBody">
               
-                <h1 id="windows-one-file-executable-pyinstaller">Windows one-file executable (PyInstaller)<a class="headerlink" href="#windows-one-file-executable-pyinstaller" title="Permanent link">&para;</a></h1>
-<p><strong>Use this page as your single checklist.</strong> Commands use <code>**python -m pip</code><strong> / <code>**python.exe -m pip</code></strong> on purpose: calling <code>**Scripts\pip.exe</code><em><em> to upgrade pip fails on pip 24+ with </em>“To modify pip, please run … python.exe -m pip …”</em>.</p>
-<h2 id="start-here-windows-copypaste">Start here (Windows, copy/paste)<a class="headerlink" href="#start-here-windows-copypaste" title="Permanent link">&para;</a></h2>
-<p>Run from the <strong>repository root</strong> in PowerShell. Paths shown use <code>D:\MYFiles\Projects\py\Inferra</code> — change to yours or run <code>cd</code> first.</p>
-<h3 id="1-one-time-isolated-build-virtualenv">1) One-time: isolated build virtualenv<a class="headerlink" href="#1-one-time-isolated-build-virtualenv" title="Permanent link">&para;</a></h3>
-<pre><code class="language-powershell">Set-Location D:\MYFiles\Projects\py\Inferra
-.\deploy\windows\prepare-build-venv.ps1
-</code></pre>
-<p>If pip upgrade is blocked by policy, try:</p>
-<pre><code class="language-powershell">.\deploy\windows\prepare-build-venv.ps1 -SkipPipUpgrade
-</code></pre>
-<h3 id="2-build-inferraexe-staged-output-promote-smoke-test">2) Build <code>inferra.exe</code> (staged output + promote + smoke test)<a class="headerlink" href="#2-build-inferraexe-staged-output-promote-smoke-test" title="Permanent link">&para;</a></h3>
-<pre><code class="language-powershell">.\deploy\windows\build-exe.ps1 -Python .\.venv-inferra-build\Scripts\python.exe
-</code></pre>
-<p>If the <strong>Inferra</strong> service is running (or another <code>inferra.exe</code> is open), this script stops them before overwriting <code>**dist\inferra.exe</code>**.</p>
-<p>When you see <code>**Primary artifact: ...\dist\inferra.exe</code><strong>, the build is done — continue to step 3. To sanity-check: <code>**.\dist\inferra.exe --version</code></strong> should match <code>**[project].version</code>** in <code>pyproject.toml</code>. If you only need the portable binary (no service), you can stop after this step.</p>
-<h3 id="3-install-windows-service-administrator-powershell">3) Install Windows service (Administrator PowerShell)<a class="headerlink" href="#3-install-windows-service-administrator-powershell" title="Permanent link">&para;</a></h3>
-<pre><code class="language-powershell">Set-Location D:\MYFiles\Projects\py\Inferra
-.\deploy\windows\install-service.ps1 -InferraExe (Resolve-Path .\dist\inferra.exe) -SkipPipInstall -AddCliToPath
-</code></pre>
-<h3 id="4-open-the-dashboard">4) Open the dashboard<a class="headerlink" href="#4-open-the-dashboard" title="Permanent link">&para;</a></h3>
-<p>After install completes, browse <code>**http://127.0.0.1:7433/**</code> (or the port in <code>%ProgramData%\Inferra\inferra.toml</code>). If it does not load, read <code>**%ProgramData%\Inferra\logs\serve.log**</code>.</p>
-<hr />
-<p>This document is the <strong>canonical</strong> procedure for producing <code>inferra.exe</code>. It replaces ad-hoc <code>python -m PyInstaller …</code> examples when you care about reliability on real workstations.</p>
-<h2 id="why-a-dedicated-pipeline-exists">Why a dedicated pipeline exists<a class="headerlink" href="#why-a-dedicated-pipeline-exists" title="Permanent link">&para;</a></h2>
-<p>On developer and server machines, <code>**dist\inferra.exe</code> is often locked**:</p>
+                <h1 id="windows-executable-builds">Windows executable builds<a class="headerlink" href="#windows-executable-builds" title="Permanent link">&para;</a></h1>
+<p>Inferra now has one preferred Windows build path and one archived compatibility path:</p>
 <ul>
-<li>The <strong>Inferra</strong> Windows service loads the binary.</li>
+<li><code>deploy/windows/build-rust-exe.ps1</code> builds the native Rust runtime shell and bundles the UI plus active <code>src/</code> runtime assets.</li>
+<li><code>deprecated/windows-pyinstaller/build-exe.ps1</code> is legacy only and exists for compatibility during migration.</li>
+</ul>
+<h2 id="native-rust-build">Native Rust build<a class="headerlink" href="#native-rust-build" title="Permanent link">&para;</a></h2>
+<p>Run from the repository root in PowerShell:</p>
+<pre><code class="language-powershell">Set-Location D:\MYFiles\Projects\py\Inferra
+.\deploy\windows\build-rust-exe.ps1 -CopyUiBundle
+</code></pre>
+<p>Outputs:</p>
+<ul>
+<li><code>dist\inferra-rust.exe</code> — preferred native Rust artifact when the stable filename is writable</li>
+<li><code>dist\inferra-rust-&lt;timestamp&gt;.exe</code> — fallback artifact name if <code>dist\inferra-rust.exe</code> is locked by an older/manual install</li>
+<li><code>dist\inferra.exe</code> — stable compatibility filename when it can be updated in place</li>
+<li><code>dist\runtime-assets\ui_dist\</code> — bundled web UI assets</li>
+<li><code>dist\runtime-assets\src\</code> — bundled active runtime assets used by the native executable</li>
+</ul>
+<h2 id="recommended-flow">Recommended flow<a class="headerlink" href="#recommended-flow" title="Permanent link">&para;</a></h2>
+<ol>
+<li>Build the native runtime:</li>
+</ol>
+<pre><code class="language-powershell">Set-Location D:\MYFiles\Projects\py\Inferra
+.\deploy\windows\build-rust-exe.ps1 -CopyUiBundle
+</code></pre>
+<ol>
+<li>Install the Windows service from an elevated PowerShell:</li>
+</ol>
+<pre><code class="language-powershell">.\deploy\windows\install-service.ps1 -InferraExe (Resolve-Path .\dist\inferra-rust.exe) -AddCliToPath
+</code></pre>
+<p>This stages the runtime under <code>%ProgramFiles%\Inferra\</code> and keeps mutable state under <code>%ProgramData%\Inferra\</code>.</p>
+<ol>
+<li>Open <code>http://127.0.0.1:7433/</code> (or the port in <code>%ProgramData%\Inferra\inferra.toml</code>). If the dashboard does not load, inspect <code>%ProgramData%\Inferra\logs\serve.log</code>.</li>
+</ol>
+<h2 id="legacy-pyinstaller-path">Legacy PyInstaller path<a class="headerlink" href="#legacy-pyinstaller-path" title="Permanent link">&para;</a></h2>
+<p>The remainder of this document describes the archived PyInstaller flow. Use it only when you intentionally need the deprecated Python-first packaging path.</p>
+<h2 id="why-a-dedicated-pipeline-exists">Why a dedicated pipeline exists<a class="headerlink" href="#why-a-dedicated-pipeline-exists" title="Permanent link">&para;</a></h2>
+<p>On developer and server machines, <code>**dist\inferra.exe</code> or <code>**dist\inferra-rust.exe</code> can still be locked** if an older/manual install points directly at the project tree:</p>
+<ul>
+<li>The <strong>Inferra</strong> Windows service loads the project-copy binary instead of the packaged install root.</li>
 <li>The service spawns a <strong>child <code>inferra.exe serve</code></strong> process.</li>
 <li>Antivirus or indexing may briefly hold handles during scans.</li>
 </ul>
+<p>The current <code>deploy/windows/install-service.ps1</code> flow avoids that by copying the runtime into <code>%ProgramFiles%\Inferra\</code> before service registration, so normal rebuilds of the repository no longer target the running service executable.</p>
 <p>PyInstaller’s default behaviour is to <strong>delete and recreate</strong> the output EXE in <code>**dist\</code><strong>. If the file is mapped for execution, Windows returns <code>**PermissionError: WinError 5 Access denied</code></strong>.</p>
 <p>The Inferra pipeline avoids that failure mode by design:</p>
 <ol>
@@ -282,14 +290,14 @@
 </ol>
 <p>Supporting implementation:</p>
 <ul>
-<li><code>**deploy/windows/InferraWindows.psm1</code>** — reusable cmdlets (<code>Invoke-InferraWindowsExeBuild</code>, <code>Stop-InferraWindowsExecutionLocks</code>, …).</li>
-<li><code>**deploy/windows/build-exe.ps1</code>** — thin entry script for humans and CI.</li>
+<li><code>**deploy/windows/InferraWindows.psm1</code>** — legacy reusable cmdlets (<code>Invoke-InferraWindowsExeBuild</code>, <code>Stop-InferraWindowsExecutionLocks</code>, …).</li>
+<li><code>**deprecated/windows-pyinstaller/build-exe.ps1</code>** — archived human-facing entry script.</li>
 </ul>
 <h2 id="isolated-build-virtualenv-details">Isolated build virtualenv (details)<a class="headerlink" href="#isolated-build-virtualenv-details" title="Permanent link">&para;</a></h2>
-<p>If you skipped <strong>Start here</strong> above: a clean <code>**.venv-inferra-build</code><strong> keeps unrelated packages (and bad <code>**PYTHONPATH</code></strong>) out of PyInstaller Analysis. <code>**prepare-build-venv.ps1</code>** only invokes <code>**python.exe -m pip**</code> for installs/upgrades.</p>
+<p>If you skipped <strong>Start here</strong> above: a clean <code>**.venv-inferra-build</code><strong> keeps unrelated packages (and bad <code>**PYTHONPATH</code></strong>) out of PyInstaller Analysis. <code>**deprecated/windows-pyinstaller/prepare-build-venv.ps1</code>** only invokes <code>**python.exe -m pip**</code> for installs/upgrades.</p>
 <h2 id="standard-workstation-build-same-interpreter-every-time">Standard workstation build (same interpreter every time)<a class="headerlink" href="#standard-workstation-build-same-interpreter-every-time" title="Permanent link">&para;</a></h2>
 <p>From an elevated <strong>or</strong> normal PowerShell session (elevation is <strong>not</strong> required for PyInstaller itself):</p>
-<pre><code class="language-powershell">.\deploy\windows\build-exe.ps1
+<pre><code class="language-powershell">.\deprecated\windows-pyinstaller\build-exe.ps1
 </code></pre>
 <p>Parameters (all optional):</p>
 <table>
@@ -327,12 +335,7 @@
 </tbody>
 </table>
 <h3 id="outputs">Outputs<a class="headerlink" href="#outputs" title="Permanent link">&para;</a></h3>
-<p>After success you should have:</p>
-<ul>
-<li><code>**dist\inferra.exe</code><strong> — stable name consumed by <code>**install-service.ps1</code></strong> and release signing.</li>
-<li><code>**dist\inferra-&lt;pyproject-version&gt;.exe</code>** — immutable, versioned artifact (matches <code>[project].version</code> in <code>pyproject.toml</code>).</li>
-<li><code>**dist\_inferra_exe_stage\inferra.exe</code>** — last staged build (still overwritten on the next build).</li>
-</ul>
+<p>After a successful <strong>legacy PyInstaller</strong> run you should have a staged or promoted <code>inferra.exe</code> from the archived Python-first path. It does <strong>not</strong> produce <code>dist\inferra-rust.exe</code>; that file comes from <code>deploy/windows/build-rust-exe.ps1</code>.</p>
 <p>Exit codes:</p>
 <ul>
 <li><code>**0**</code> — success.</li>
@@ -340,8 +343,8 @@
 <li><code>**2**</code> — promotion failed (staged exe is still valid; see message).</li>
 </ul>
 <h2 id="ci-automation">CI / automation<a class="headerlink" href="#ci-automation" title="Permanent link">&para;</a></h2>
-<p>Use <code>**-SkipReleaseLocks**</code> because agents do not run the Inferra service:</p>
-<pre><code class="language-text">pwsh -NoProfile -File ./deploy/windows/build-exe.ps1 -SkipReleaseLocks -Python python -CleanPyInstallerWork
+<p>Use the native Rust build in CI and release automation:</p>
+<pre><code class="language-text">pwsh -NoProfile -File ./deploy/windows/build-rust-exe.ps1 -CopyUiBundle
 </code></pre>
 <p>Release builds follow this pattern in <code>.github/workflows/release.yml</code>.</p>
 <h2 id="service-install-interactions">Service install interactions<a class="headerlink" href="#service-install-interactions" title="Permanent link">&para;</a></h2>
@@ -360,7 +363,7 @@
 <tr>
 <td><code>**ERROR: To modify pip, please run … python.exe -m pip</code><strong> during <code>**prepare-build-venv.ps1</code></strong></td>
 <td><code>**pip.exe</code> cannot self-upgrade** (pip 24+)</td>
-<td>Already fixed in repo: script uses <code>**python -m pip</code><strong>. Update your checkout or run: <code>**.\venv\Scripts\python.exe -m pip install --upgrade pip wheel</code></strong>. Or <code>**prepare-build-venv.ps1 -SkipPipUpgrade**</code>.</td>
+<td>Already fixed in repo: script uses <code>**python -m pip</code><strong>. Update your checkout or run: <code>**.\venv\Scripts\python.exe -m pip install --upgrade pip wheel</code></strong>. Or <code>**.\deprecated\windows-pyinstaller\prepare-build-venv.ps1 -SkipPipUpgrade**</code>.</td>
 </tr>
 <tr>
 <td>Promotion exits <code>**2**</code> or copy errors mention <strong>sharing violation</strong> / <strong>being used</strong></td>
@@ -385,7 +388,7 @@
 </tbody>
 </table>
 <h2 id="manual-commands-advanced">Manual commands (advanced)<a class="headerlink" href="#manual-commands-advanced" title="Permanent link">&para;</a></h2>
-<p>If you must invoke PyInstaller yourself, mirror what <code>**Invoke-InferraWindowsExeBuild</code>** does:</p>
+<p>If you must invoke PyInstaller yourself, use the archived flow under <code>**deprecated/windows-pyinstaller/**</code>:</p>
 <pre><code class="language-powershell">python -m PyInstaller --noconfirm `
   --distpath dist\_inferra_exe_stage `
   --workpath build\inferra_exe_work `

@@ -64,6 +64,20 @@ def test_ai_ask_with_overview_scope_returns_investigation(tmp_path):
         assert "headline" in payload["output"]
 
 
+def test_ai_ask_with_latest_scope_resolves_to_latest_incident(tmp_path):
+    app = create_app(InferraConfig(storage=StorageConfig(data_dir=tmp_path)))
+    with TestClient(app) as client:
+        incident_id = _ingest_two_errors(client)
+        response = client.post(
+            "/api/ai/ask",
+            json={"question": "what changed most recently?", "scope": "latest", "mode": "expert"},
+        )
+        assert response.status_code == 200
+        payload = response.json()
+        assert payload["focus"] == f"incident:{incident_id}"
+        assert payload["question"] == "what changed most recently?"
+
+
 def test_ai_doctor_reports_disabled_provider_and_warnings(tmp_path):
     app = create_app(InferraConfig(storage=StorageConfig(data_dir=tmp_path)))
     with TestClient(app) as client:

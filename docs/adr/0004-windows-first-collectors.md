@@ -6,13 +6,13 @@ Accepted
 
 ## Context
 
-Inferra targets developers and operators on Windows desktops and Windows Server as often as Linux or Kubernetes. Collectors must behave correctly without mandatory POSIX-only APIs, and optional dependencies such as pywin32 must not break imports on non-Windows platforms.
+Inferra targets developers and operators on Windows desktops and Windows Server as often as Linux or Kubernetes. Collectors must behave correctly without mandatory POSIX-only APIs, and the active runtime must not depend on pywin32.
 
 ## Decision
 
 - First-class collectors exist for Windows Event Log and Windows service state, alongside shared collectors for host metrics and process snapshots.
-- Windows-specific code paths live under `src/collectors/` with runtime guards; imports remain safe when pywin32 is absent.
-- CLI one-shot commands (`collect-eventlog`, `collect-services`) are registered only where supported; attempting them on the wrong OS returns a clear error instead of importing Win32 modules at module load time.
+- Windows-specific code paths live in the Rust collector/runtime crates (`src/crates/inferra-collectors/` and `src/crates/inferra-windows-service/`); no active Python collector import path is required.
+- Operator workflows use the native Rust CLI and API rather than Python-only one-shot commands.
 
 ## Consequences
 

@@ -8,53 +8,46 @@ Inferra is a local-first AI-integrated runtime intelligence control plane. It ob
 | --- | --- |
 | A read-only observer, researcher, and investigator for local runtime signals | An auto-remediation or remote-control tool |
 | Deterministic ranking and scoring (rules + auditable state) with optional language explanations | A black-box “root cause AI” that silently changes scores |
-| Python + SQLite + optional on-prem Ollama | A cloud observability suite or mandatory SaaS dependency |
+| Rust-first runtime shell + SQLite + React control plane | A cloud observability suite or mandatory SaaS dependency |
 
 Product positioning and AI boundaries are documented in [ADR 0001: Local-first guided AI](docs/adr/0001-local-first-guided-ai.md).
 
 ## Current Capabilities
 
-- Python + SQLite local storage.
-- CLI-first onboarding, mode selection, configuration, collection, and server control.
-- Two experience modes: operator (default) and developer (raw detail, diagnostics, and workspace-linked debugging), toggleable from CLI (`inferra mode set ...`) and from the web UI.
+- Rust-first CLI/API/service runtime with SQLite local storage.
+- Legacy Python code has been moved under `deprecated/`; the active product path is Rust-first.
+- Native CLI for setup, database initialization, service management, incidents, events, services, collectors, config, workspace inspection, and AI investigation flows.
+- Experience modes are reflected in configuration defaults and the web UI.
 - React control plane under `src/web/frontend` with an Overview, Incidents, Systems, Evidence, AI Investigator, Workspace, Control, and Settings layout (no raw-JSON-first pages).
-- Structured AI investigation contract (`/api/investigate/now|incident|service`, `inferra ai investigate|ask|report|trace|doctor`) with cited evidence, explicit uncertainty, and a deterministic fallback when AI is disabled.
-- Workspace intelligence: project discovery, service-to-project mapping with confidence and signals, and explicit user mappings persisted into `inferra.toml` (`/api/workspace/*`, `inferra workspace map|services|inspect`).
-- Optional FastAPI web dashboard/control plane.
-- Optional Ollama AI explanations, incident chat (persisted in SQLite), operator-visible sanitized prompts on the AI Trace tab, and natural-language event search (`GET /api/search/natural?q=...` when AI is enabled).
-- Gemma 3 and Gemma 4 model registry for Ollama tags.
-- Windows-first collectors:
+- Structured AI investigation contract (`/api/investigate/now|incident|service`, `/api/ai/ask`, `/api/ai/report/{incident_id}`, `/api/ai/status`, `/api/ai/doctor`) with cited evidence, explicit uncertainty, and a deterministic fallback when AI is disabled.
+- Native Ollama-backed investigation when `ai.enabled = true` and the configured local model is available.
+- Workspace intelligence: project discovery, service-to-project mapping with confidence and signals, and explicit user mappings persisted into `inferra.toml` (`/api/workspace/*`).
+- Native Rust-hosted local web dashboard/control plane.
+- Native collectors across Windows/Linux/container/Kubernetes surfaces:
   - Windows Event Log with bookmark persistence.
   - Windows service state-change snapshots.
-  - host and process threshold crossings with metric ringbuffers.
-- Linux collectors:
+  - host and process threshold crossings with runtime status.
   - syslog file ingestion with rotation tracking.
-  - journald ingestion through native bindings or `journalctl`.
+  - journald ingestion via `journalctl`.
+  - file tailing with glob-style expansion and multiline grouping.
 - Docker Engine event and container log collection.
-- Kubernetes event and pod-state collection with restart and OOM detection.
+- Kubernetes event and pod-state collection.
 - Application HTTP ingest as a mounted API route or standalone listener.
-- Deterministic reasoning:
-  - correlation clusters.
-  - anomaly scoring.
-  - topology-aware root-cause selection.
-  - six-component weighted scoring with bounded weight learning from operator feedback (`POST /api/incidents/{id}/feedback`).
-  - contradiction handling.
-  - confidence calibration (`inferra calibration show`, `inferra reset-weights`).
+- Native event-to-incident pipeline that writes incidents, clusters, hypotheses, and lifecycle state to SQLite as evidence arrives.
+- Overview/dashboard payloads include native event-rate, severity-count, dedup, and noise-filter summaries instead of placeholder nulls.
 - First-class install paths (Windows service, systemd, Docker/Compose, Helm, macOS); see **Install targets** below and [Install Guide](docs/operations/install.md).
 
 ## Quick Start
 
-Install the project in editable mode with `python -m pip install -e ".[dev]"`.
+Build the Rust CLI workspace (`src/Cargo.toml`):
 
 ```powershell
-inferra --config inferra.toml onboard --yes --mode operator --preset windows-server --model gemma4:e4b --skip-connection-test
-inferra --config inferra.toml guide
+cargo build --manifest-path src/Cargo.toml -p inferra-cli --release
+inferra --config inferra.toml setup --yes
 inferra --config inferra.toml init-db
-inferra --config inferra.toml mode show
-inferra --config inferra.toml serve --help
-inferra --config inferra.toml dashboard --no-open
-inferra --config inferra.toml investigate latest
-inferra --config inferra.toml collectors status
+inferra --config inferra.toml service repair
+inferra --config inferra.toml service status
+inferra --config inferra.toml serve
 ```
 
 Start the live server with `inferra --config inferra.toml serve`, then open `http://127.0.0.1:7433`.
@@ -63,67 +56,55 @@ The web console source lives in `src/web/frontend` and builds into the packaged 
 
 Service anomaly status (closed time buckets, spike/sustained/absence signals) is exposed at `GET /api/anomaly/{service}/status` with optional `window_hours` (default 24, max 168).
 
-If your shell cannot find the installed `inferra` script, use `python -m cli` from the repository checkout:
+Legacy Python compatibility code lives under `deprecated/` and is no longer part of the active `src/` implementation path.
 
-```powershell
-python -m cli --config inferra.toml serve --help
-```
+Packaged installs keep the same boundary: the Rust workspace lives under `src/` (`Cargo.toml` + `crates/`), while deprecated Python compatibility code lives under `deprecated/`.
 
 ## Ollama AI Setup
 
 AI is disabled by default. Prepare the config for local Gemma 4:
 
 ```powershell
-inferra --config inferra.toml ai setup --disable
-inferra --config inferra.toml ai setup --enable --model gemma4:e4b
-inferra --config inferra.toml ai models
+[ai]
+enabled = true
+provider = "ollama"
+base_url = "http://127.0.0.1:11434"
+model = "gemma4:e4b"
+allow_remote = false
 ```
 
-When Ollama is already running locally, enable and validate it with `inferra --config inferra.toml config set ai.enabled true`, `inferra --config inferra.toml ai status`, `inferra --config inferra.toml ai pull gemma4:e4b`, and `inferra --config inferra.toml ai test`.
+After `inferra --config inferra.toml serve` is running, validate native provider readiness from the Control page or with `curl http://127.0.0.1:7433/api/ai/status` and `curl http://127.0.0.1:7433/api/ai/doctor`.
 
 Remote Ollama-compatible servers are configured through `ai.base_url`, `ai.allow_remote`, and optional `ai.token_env`.
 
 ## Command Surface
 
-- Lifecycle: `onboard`, `setup`, `guide`, `dashboard`, `serve`, `run`, `run-collectors`, `init-db`, `check-config`, `reason-incident <id>`, `reset-weights`, `calibration show`, `completion bash|zsh|fish|powershell`
-- AI: `ai setup`, `ai status`, `ai models`, `ai test`, `ai pull`, `ai ask "<question>"`, `ai investigate latest|incident <id>|service <id>`, `ai report <incident_id>`, `ai trace <incident_id>`, `ai doctor`
+- Lifecycle: `setup`, `serve`, `init-db`
+- Incidents: `incidents list`, `incidents show <incident_id>`
+- Events: `events list`, `events show <event_id>`
+- Services: `services list`, `services show <service_id>`, `services events <service_id>`
+- Collectors: `collectors status`, `collectors start`, `collectors stop`
+- Config: `config show`, `config get <path>`, `config set <path> <value>`, `config preset <name>`
+- Workspace: `workspace map`, `workspace services`, `workspace inspect <path>`, `workspace projects`
+- AI: `ai status`, `ai doctor`, `ai ask "<question>"`, `ai report <incident_id>`, `ai investigate latest|incident <id>|service <id>`
 - Windows service: `service status`, `service install`, `service start`, `service stop`, `service restart`, `service remove`, `service repair`
-- Investigation: `investigate now`, `investigate latest`, `investigate incident <id>`, `investigate service <service>`, `doctor`, `doctor --release`
-- Runtime inspection: `incidents list|show`, `events list|show`, `services list|show|events`, `overview`, `status`, `workspace`
-- Workspace: `workspace`, `workspace scan`, `workspace map`, `workspace services`, `workspace inspect <path>`
-- Demo data: `demo seed [--service <id> --count <n>]`, `demo clear`
-- Collector control: `collectors status`, `collectors start`, `collectors stop`
-- One-shot collection: `collect-host`, `collect-processes`, `collect-services`, `collect-eventlog`, `collect-syslog`, `collect-journald`, `collect-kubernetes`
-- Config: `config show`, `config get`, `config set`, `config preset`
-- Experience: `mode show`, `mode set operator`, `mode set developer`
+- The local server exposes the same operator surfaces through `/api/*` for the web UI and loopback automation.
 
 ```powershell
-inferra --config inferra.toml check-config
-inferra --json --config inferra.toml check-config
-inferra --config inferra.toml guide --profile operator
-inferra --config inferra.toml guide --profile developer
-inferra --config inferra.toml guide --profile server
-inferra --config inferra.toml dashboard --section workspace
-inferra --config inferra.toml config show
-inferra --config inferra.toml config get ai.model
-inferra --config inferra.toml config set ai.enabled false
-inferra --config inferra.toml mode set developer
-inferra --config inferra.toml doctor
-inferra --config inferra.toml doctor --release
-inferra --config inferra.toml investigate latest
+inferra --config inferra.toml setup --yes
+inferra --config inferra.toml init-db
+inferra --config inferra.toml serve
 inferra --config inferra.toml incidents list
 inferra --config inferra.toml events list --limit 25
 inferra --config inferra.toml services list
-inferra --config inferra.toml ai setup --enable --model gemma4:e4b
+inferra --config inferra.toml collectors status
+inferra --config inferra.toml config preset windows-server
+inferra --config inferra.toml workspace map
 inferra --config inferra.toml ai status
-inferra --config inferra.toml ai models
+inferra --config inferra.toml ai investigate latest
 inferra --config inferra.toml service status
 inferra --config inferra.toml service install --startup auto
-inferra --config inferra.toml collect-host
-inferra --config inferra.toml collect-processes
-inferra --config inferra.toml reset-weights
-inferra --config inferra.toml calibration show
-inferra --config inferra.toml completion powershell
+inferra --config inferra.toml service repair
 ```
 
 ## Collector Presets
@@ -140,46 +121,35 @@ Presets update collector configuration and `collectors.auto_start`.
 
 ## Install targets
 
-- **Windows**: `deploy/windows/install-service.ps1` (Administrator) registers the `Inferra` service under `%ProgramData%\Inferra\`; optional `-AllowFirewall`, **`-AddCliToPath`**, and **`-KillInferraProcessesBeforeInstall`** (stops service + every `inferra.exe`; opt-in). PyInstaller: see **[Windows exe build](docs/operations/windows_exe_build.md)** — run **`deploy/windows/build-exe.ps1`** (staged `dist` + retries + smoke test). Optional **`deploy/windows/prepare-build-venv.ps1`** for an isolated build environment.
+- **Windows**: `deploy/windows/install-service.ps1` (Administrator) stages the runtime under `%ProgramFiles%\Inferra\`, keeps config/data/logs under `%ProgramData%\Inferra\`, and registers the `Inferra` service. Optional `-AllowFirewall`, **`-AddCliToPath`**, and **`-KillInferraProcessesBeforeInstall`** (stops service + every `inferra.exe`; opt-in) are supported. The preferred artifact is the Rust-native build via `deploy/windows/build-rust-exe.ps1`, and the native CLI now owns `inferra service install|remove|start|stop|status`. The old PyInstaller path is archived under `deprecated/windows-pyinstaller/`; see **[Windows exe build](docs/operations/windows_exe_build.md)**.
 - **Linux**: `deploy/systemd/inferra.service` (`DynamicUser`, `ProtectSystem=strict`) plus `deploy/linux/fpm-package.sh` for `.deb` / `.rpm`.
 - **Docker / Compose**: root `Dockerfile` and `compose.yaml` (`docker compose up --build`).
 - **Kubernetes**: `helm install inferra ./deploy/helm/inferra` with optional `serviceMonitor.enabled` for Prometheus Operator.
 - **macOS**: `sudo ./deploy/macos/install.sh` (LaunchDaemon) creates `/usr/local/bin/inferra` if needed and `sudo ./deploy/macos/uninstall.sh` to remove.
 
-Release builds (tags `v*`) publish wheels, sdist, Helm chart, Windows `inferra.exe`, SBOM JSON, and a multi-arch GHCR image; see `docs/operations/release_signing.md`.
+Release builds (tags `v*`) publish the Helm chart, Windows native executables, CycloneDX SBOM JSON, and a multi-arch GHCR image; see `docs/operations/release_signing.md`.
 
 ## Repository Layout
 
-The project intentionally uses a flat `src/` layout with top-level packages:
+The active `src/` tree now contains only the Rust workspace and frontend assets:
 
 ```text
 src/
-  ai/
-  analysis/
-  cli_core/         # CommandResult/Error and HTTP client helpers
-  collectors/
+  Cargo.toml       # Rust workspace root
+  crates/          # inferra-cli, inferra-api, inferra-config, ...
   config/
-  core/
-  events/
-  explanation/
-  normalization/
-  reasoning/
-  runtime/          # workspace_scan, workspace_map, runtime context
-  storage/
   web/
-    api.py          # FastAPI factory + /ws websocket
-    _shared.py      # serialization helpers shared by routers
-    frontend/       # React Vite source
-    routers/        # ai, collectors, events, incidents, services,
-                    # topology, investigate, workspace
-    routes/system.py
-    ui_dist/        # built React bundle (packaged)
-  app.py
-  cli.py
-  windows_service.py
+    frontend/      # React Vite source
+    ui_dist/       # built React bundle (packaged)
+deprecated/
+  inferra_legacy/  # archived Python CLI + windows_service reference
+    cli.py
+    windows_service.py
+    app.py
+  python_packages/ # archived Python backend/runtime modules
 ```
 
-There is no nested `inferra/` package directory.
+Archived Python reference code lives under `deprecated/` and is not part of the active runtime path.
 
 ## Documentation
 

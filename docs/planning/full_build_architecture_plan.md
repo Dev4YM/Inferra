@@ -4,7 +4,13 @@ Living module map: [implementation index](implementation_index.md).
 
 ## Purpose
 
-This plan consolidates the existing Inferra planning documents into an implementation architecture for a Python + SQLite product that runs first-class on Windows and Windows Server, while remaining portable to Linux, Kubernetes, and macOS.
+This plan consolidates the existing Inferra planning documents into an implementation architecture for Inferra's local-first control plane.
+
+Historically this document described a Python + SQLite monolith. The current
+migration direction is a Rust-primary runtime shell and public control plane
+with Python retained only for internal AI/analysis execution. The public runtime
+contract in `rust_runtime_contracts.md` takes precedence over older
+Python-first assumptions in this document.
 
 Inferra remains a local-first, read-only runtime debugging assistant. It observes logs, containers, services, process metrics, and runtime context, then builds deterministic, evidence-backed hypotheses about failures. The LLM layer is optional and presentation-only.
 
@@ -26,11 +32,12 @@ The core promise:
 
 ### Core
 
-- Python 3.11+
+- Rust workspace for the runtime shell, public HTTP API, Windows service shell,
+  storage access, collector supervision, and operator-facing CLI
 - SQLite in WAL mode
-- FastAPI for local REST and WebSocket server
-- asyncio queues for in-process event flow
-- dataclasses or Pydantic models for typed contracts
+- Axum for the local public REST server and static UI host
+- Tokio for async runtime and task orchestration on the Rust side
+- Serde for typed contracts
 - NetworkX for local graph operations
 - psutil for cross-platform host/process metrics
 - pytest for tests
@@ -45,8 +52,9 @@ The core promise:
 
 ### Packaging
 
-- PyInstaller or Nuitka for Windows/macOS/Linux binaries.
-- Windows Service wrapper for Windows Server.
+- Cargo-driven native binaries as the primary runtime artifact.
+- Windows native service packaging and wrapper for Windows Server.
+- Archived PyInstaller path retained only as historical reference.
 - systemd unit for Linux.
 - Docker image for Linux container runtime.
 - Helm chart and Kubernetes manifests for cluster deployment.
@@ -157,10 +165,10 @@ README.md
 Dockerfile
 compose.yaml
 src/
-  app.py
-  cli.py
-  windows_service.py
+  Cargo.toml
+  crates/
   ai/
+    worker/
   analysis/
   collectors/
   config/
@@ -182,12 +190,23 @@ docs/
   adr/
   operations/
   planning/
-  tests/
-    unit/
-    integration/
+deprecated/
+  inferra_legacy/
+  windows-pyinstaller/
+tests/
+  unit/
+  integration/
 ```
 
-The implementation intentionally keeps packages directly under `src/`. Do not introduce a root `inferra/` package or any nested implementation package under `src/`.
+The active implementation now keeps the Rust workspace and frontend directly
+under `src/`. Do not reintroduce a parallel Python application tree there.
+
+Ownership rules:
+
+- `src/Cargo.toml` + `src/crates/` own the public runtime, operator CLI, HTTP API, Windows service
+  shell, hot-path storage/runtime logic, and packaging entrypoints.
+- `src/web/frontend/` and `src/web/ui_dist/` own the shipped UI source and bundle.
+- `deprecated/` holds superseded Python/runtime/build paths and should not be treated as the active implementation.
 
 ## Core Data Model
 
@@ -457,7 +476,7 @@ Acceptance:
 
 Deliverables:
 
-- FastAPI REST API
+- Rust-hosted REST API
 - WebSocket live updates
 - static dashboard
 - incident detail view

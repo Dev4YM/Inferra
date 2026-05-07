@@ -1,16 +1,38 @@
 param(
-    [string]$Python = "python",
     [string]$InferraExe = "",
+    [string]$InstallRoot = "",
     [string]$ProgramDataRoot = "$env:ProgramData\Inferra",
     [string]$ConfigPath = "",
     [string]$DataDir = "",
-    [switch]$SkipPipInstall,
     [switch]$AllowFirewall,
     [switch]$AddCliToPath,
     [switch]$KillInferraProcessesBeforeInstall
 )
 
 $ErrorActionPreference = "Stop"
+
+$projectRoot = (Resolve-Path (Join-Path $PSScriptRoot "..\..")).Path
+if (-not $InstallRoot) {
+    $InstallRoot = Join-Path ([Environment]::GetFolderPath("ProgramFiles")) "Inferra"
+}
+if (-not $InferraExe) {
+    $preferredExe = Join-Path $projectRoot "dist\inferra-rust.exe"
+    $stableExe = Join-Path $projectRoot "dist\inferra.exe"
+    if (Test-Path $preferredExe) {
+        $InferraExe = $preferredExe
+    } elseif (Test-Path $stableExe) {
+        $InferraExe = $stableExe
+    } else {
+        $inferraCommand = Get-Command inferra -ErrorAction SilentlyContinue
+        if ($inferraCommand) {
+            $InferraExe = $inferraCommand.Source
+        }
+    }
+}
+if (-not $InferraExe) {
+    throw "Could not find a Rust Inferra executable. Build dist\inferra-rust.exe or install inferra on PATH before running install-service.ps1."
+}
+$InferraExe = (Resolve-Path $InferraExe).Path
 
 if ($KillInferraProcessesBeforeInstall) {
     $wm = Join-Path $PSScriptRoot "InferraWindows.psm1"
@@ -62,11 +84,52 @@ function Invoke-InferraCommand {
     }
 }
 
+function Resolve-InferraRuntimeAssetsSource {
+    param(
+        [Parameter(Mandatory = $true)][string]$SourceExe,
+        [Parameter(Mandatory = $true)][string]$ProjectRoot
+    )
+
+    $exeDir = Split-Path $SourceExe -Parent
+    $candidates = @(
+        (Join-Path $exeDir "runtime-assets"),
+        (Join-Path (Split-Path $exeDir -Parent) "runtime-assets"),
+        (Join-Path $ProjectRoot "dist\runtime-assets")
+    ) | Where-Object { $_ -and (Test-Path $_) }
+
+    foreach ($candidate in $candidates) {
+        if (Test-Path (Join-Path $candidate "ui_dist")) {
+            return (Resolve-Path $candidate).Path
+        }
+    }
+
+    throw "Could not find runtime-assets for $SourceExe. Build with .\deploy\windows\build-rust-exe.ps1 -CopyUiBundle or provide an installed inferra.exe that already has runtime-assets."
+}
+
+function Sync-InferraRuntimeAssets {
+    param(
+        [Parameter(Mandatory = $true)][string]$SourceRoot,
+        [Parameter(Mandatory = $true)][string]$DestinationRoot
+    )
+
+    New-Item -ItemType Directory -Force -Path $DestinationRoot | Out-Null
+    Remove-Item (Join-Path $DestinationRoot "*") -Recurse -Force -ErrorAction SilentlyContinue
+    Copy-Item (Join-Path $SourceRoot "*") $DestinationRoot -Recurse -Force
+}
+
 if (-not $ConfigPath) { $ConfigPath = Join-Path $ProgramDataRoot "inferra.toml" }
 if (-not $DataDir) { $DataDir = Join-Path $ProgramDataRoot "data" }
 
+$installBinDir = Join-Path $InstallRoot "bin"
+$installRuntimeAssets = Join-Path $InstallRoot "runtime-assets"
+$installedExe = Join-Path $installBinDir "inferra.exe"
+$installedUiDist = Join-Path $installRuntimeAssets "ui_dist"
+$sourceRuntimeAssets = Resolve-InferraRuntimeAssetsSource -SourceExe $InferraExe -ProjectRoot $projectRoot
+
 New-Item -ItemType Directory -Force -Path $ProgramDataRoot | Out-Null
 New-Item -ItemType Directory -Force -Path $DataDir | Out-Null
+New-Item -ItemType Directory -Force -Path $InstallRoot | Out-Null
+New-Item -ItemType Directory -Force -Path $installBinDir | Out-Null
 
 $inheritanceOff = "/inheritance:r"
 $grantSystem = 'SYSTEM:(OI)(CI)F'
@@ -74,24 +137,20 @@ $grantAdmins = 'Administrators:(OI)(CI)F'
 icacls $ProgramDataRoot $inheritanceOff /grant:r $grantSystem /grant:r $grantAdmins | Out-Null
 icacls $DataDir $inheritanceOff /grant:r $grantSystem /grant:r $grantAdmins | Out-Null
 
-$projectRoot = (Resolve-Path (Join-Path $PSScriptRoot "..\..")).Path
+$existing = Get-Service -Name "Inferra" -ErrorAction SilentlyContinue
+if ($existing) {
+    Stop-Service Inferra -ErrorAction SilentlyContinue
+    Invoke-InferraCommand $InferraExe @("service", "remove")
+    Start-Sleep -Seconds 2
+}
+
+Copy-Item -Path $InferraExe -Destination $installedExe -Force
+Sync-InferraRuntimeAssets -SourceRoot $sourceRuntimeAssets -DestinationRoot $installRuntimeAssets
 
 if (-not (Test-Path $ConfigPath)) {
     try {
         Push-Location $projectRoot
-        $setupArgs = @(
-            "-m", "cli",
-            "--config", $ConfigPath,
-            "setup",
-            "--yes",
-            "--skip-connection-test",
-            "--data-dir", $DataDir
-        )
-        if ($InferraExe) {
-            Invoke-InferraCommand $InferraExe @("--config", $ConfigPath, "setup", "--yes", "--skip-connection-test", "--data-dir", $DataDir)
-        } else {
-            Invoke-InferraCommand $Python $setupArgs
-        }
+        Invoke-InferraCommand $installedExe @("--config", $ConfigPath, "setup", "--yes", "--skip-connection-test", "--data-dir", $DataDir)
     } finally {
         Pop-Location
     }
@@ -99,49 +158,21 @@ if (-not (Test-Path $ConfigPath)) {
 
 try {
     Push-Location $projectRoot
-    if ($InferraExe) {
-        Invoke-InferraCommand $InferraExe @("--config", $ConfigPath, "init-db")
-    }
-    else {
-        Invoke-InferraCommand $Python @("-m", "cli", "--config", $ConfigPath, "init-db")
-    }
+    Invoke-InferraCommand $installedExe @("--config", $ConfigPath, "init-db")
 }
 finally {
     Pop-Location
 }
 
-$existing = Get-Service -Name "Inferra" -ErrorAction SilentlyContinue
-if ($existing) {
-    Stop-Service Inferra -ErrorAction SilentlyContinue
-    if ($InferraExe) {
-        Invoke-InferraCommand $InferraExe @("remove")
-    } else {
-        Invoke-InferraCommand $Python @("-m", "windows_service", "remove")
-    }
-    Start-Sleep -Seconds 2
-}
-
-if (-not $SkipPipInstall -and -not $InferraExe) {
-    try {
-        Push-Location $projectRoot
-        Invoke-InferraCommand $Python @("-m", "pip", "install", "-e", ".[windows]")
-    } finally {
-        Pop-Location
-    }
-}
-
 $installArgs = @(
-    "--startup", "auto",
-    "install",
     "--config", $ConfigPath,
-    "--data-dir", $DataDir
+    "--ui-dist", $installedUiDist,
+    "service",
+    "install",
+    "--startup", "auto"
 )
 
-if ($InferraExe) {
-    Invoke-InferraCommand $InferraExe $installArgs
-} else {
-    Invoke-InferraCommand $Python (@("-m", "windows_service") + $installArgs)
-}
+Invoke-InferraCommand $installedExe $installArgs
 
 $registered = Get-Service -Name "Inferra" -ErrorAction Stop
 Start-Service -Name $registered.Name -ErrorAction Stop
@@ -151,7 +182,7 @@ Start-Sleep -Seconds 2
 $reachable = $false
 for ($attempt = 0; $attempt -lt 12; $attempt++) {
     try {
-        $resp = Invoke-WebRequest -Uri "http://127.0.0.1:${dashPort}/" -UseBasicParsing -TimeoutSec 25
+        $resp = Invoke-WebRequest -Uri "http://127.0.0.1:${dashPort}/api/health" -UseBasicParsing -TimeoutSec 25
         if ($resp.StatusCode -eq 200) {
             $reachable = $true
             break
@@ -165,10 +196,11 @@ for ($attempt = 0; $attempt -lt 12; $attempt++) {
 }
 $serveLog = Join-Path $ProgramDataRoot "logs\serve.log"
 if ($reachable) {
+    Write-Host "Runtime health: http://127.0.0.1:${dashPort}/api/health"
     Write-Host "Dashboard: http://127.0.0.1:${dashPort}/"
 }
 else {
-    Write-Warning "Dashboard not reachable at http://127.0.0.1:${dashPort}/ (service may still be starting)."
+    Write-Warning "Runtime health not reachable at http://127.0.0.1:${dashPort}/api/health (service may still be starting)."
     Write-Host "Serve log (stderr/stdout from inferra serve): $serveLog"
     Write-Host "Try: Restart-Service Inferra"
 }
@@ -184,19 +216,10 @@ if ($AllowFirewall) {
 }
 
 if ($AddCliToPath) {
-    if ($InferraExe) {
-        $binDir = Join-Path $ProgramDataRoot "bin"
-        New-Item -ItemType Directory -Force -Path $binDir | Out-Null
-        Copy-Item -Path $InferraExe -Destination (Join-Path $binDir "inferra.exe") -Force
-        Add-InferraBinToMachinePath -BinDir $binDir
-    }
-    else {
-        $scriptsDir = (& $Python -c "import sysconfig; print(sysconfig.get_path('scripts'))").Trim()
-        if (-not $scriptsDir) {
-            throw "Could not resolve Python scripts directory for PATH."
-        }
-        Add-InferraBinToMachinePath -BinDir $scriptsDir
-    }
+    Add-InferraBinToMachinePath -BinDir $installBinDir
 }
 
+Write-Host "Installed runtime root: $InstallRoot"
+Write-Host "Installed executable: $installedExe"
+Write-Host "Installed UI bundle: $installedUiDist"
 Write-Host "Inferra service installed and started (config=$ConfigPath data=$DataDir)."

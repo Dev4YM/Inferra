@@ -59,7 +59,7 @@
                   </li>
                   <li class="toctree-l1 current"><a class="reference internal current" href="#">Troubleshooting</a>
     <ul class="current">
-    <li class="toctree-l2"><a class="reference internal" href="#storage-verify-integrity_check-failures">storage verify / integrity_check failures</a>
+    <li class="toctree-l2"><a class="reference internal" href="#database-bootstrap-or-integrity-failures">Database bootstrap or integrity failures</a>
     </li>
     <li class="toctree-l2"><a class="reference internal" href="#windows-event-log-permission-errors">Windows Event Log permission errors</a>
     </li>
@@ -225,23 +225,23 @@
             <div class="section" itemprop="articleBody">
               
                 <h1 id="troubleshooting">Troubleshooting<a class="headerlink" href="#troubleshooting" title="Permanent link">&para;</a></h1>
-<h2 id="storage-verify-integrity_check-failures"><code>storage verify</code> / <code>integrity_check</code> failures<a class="headerlink" href="#storage-verify-integrity_check-failures" title="Permanent link">&para;</a></h2>
-<p>If <code>inferra storage verify</code> reports corruption for <code>events.db</code> or <code>incidents.db</code>:</p>
+<h2 id="database-bootstrap-or-integrity-failures">Database bootstrap or integrity failures<a class="headerlink" href="#database-bootstrap-or-integrity-failures" title="Permanent link">&para;</a></h2>
+<p>If <code>inferra init-db</code> fails or the runtime reports corruption for <code>events.db</code> or <code>incidents.db</code>:</p>
 <ol>
 <li>Confirm no other process has the files open (stop duplicate Inferra instances).</li>
 <li>Run from the same account that owns the files; locked databases can surface as read failures on some platforms.</li>
 <li>Restore from backup (see <a href="../upgrade/">Upgrade</a>); avoid editing SQLite files directly unless you use proven repair tooling and accept data loss.</li>
 </ol>
-<p>Implementation: <code>src/storage/migrations.py</code> (<code>integrity_check</code>).</p>
+<p>The active runtime uses <code>src/crates/inferra-storage/</code> for schema bootstrap and write paths.</p>
 <h2 id="windows-event-log-permission-errors">Windows Event Log permission errors<a class="headerlink" href="#windows-event-log-permission-errors" title="Permanent link">&para;</a></h2>
-<p>Reading specific channels requires membership in <strong>Event Log Readers</strong> or equivalent, and pywin32 must be installed for native APIs (<code>pip install -e ".[windows]"</code>).</p>
-<p>Symptoms: collector health shows repeated errors, or one-shot <code>inferra collect-eventlog</code> raises access denied.</p>
+<p>Reading specific channels requires membership in <strong>Event Log Readers</strong> or equivalent.</p>
+<p>Symptoms: collector health shows repeated errors, <code>inferra collectors status</code> shows <code>error</code>, or the Windows service/runtime log records access denied.</p>
 <p>Mitigations:</p>
 <ul>
 <li>Grant Event Log Readers to the service account running Inferra.</li>
 <li>Narrow <code>[collectors.windows_eventlog].channels</code> to channels you are allowed to read.</li>
 </ul>
-<p>Implementation: <code>src/collectors/windows_eventlog.py</code> (optional pywin32 paths guarded).</p>
+<p>Implementation: <code>src/crates/inferra-collectors/</code>.</p>
 <h2 id="docker-socket-access">Docker socket access<a class="headerlink" href="#docker-socket-access" title="Permanent link">&para;</a></h2>
 <p>Docker collectors expect a reachable Engine socket (<code>[collectors.docker].socket</code>, default <code>/var/run/docker.sock</code> on Linux). On Windows, use the named pipe or TCP endpoint exposed by Docker Desktop or your engine configuration.</p>
 <p>Symptoms: connection refused or 403 from the Docker HTTP API.</p>
@@ -250,7 +250,7 @@
 <li>Run Inferra with permission to access the socket or named pipe.</li>
 <li>Align <code>socket</code> with <code>DOCKER_HOST</code> if you use a remote daemon.</li>
 </ul>
-<p>Implementation: <code>src/collectors/docker.py</code>.</p>
+<p>Implementation: <code>src/crates/inferra-collectors/</code>.</p>
 <h2 id="kubernetes-rbac">Kubernetes RBAC<a class="headerlink" href="#kubernetes-rbac" title="Permanent link">&para;</a></h2>
 <p>In-cluster collection needs permission to list/watch namespaces, pods, events, and logs as configured. Helm defaults enable RBAC objects under <code>deploy/helm/inferra/</code> when <code>rbac.create</code> is true.</p>
 <p>Symptoms: 403 from the Kubernetes API in collector health or logs.</p>
@@ -259,21 +259,21 @@
 <li>Bind the chart <code>ServiceAccount</code> to a <code>ClusterRole</code> aligned with your scope (<code>values.yaml</code> labels and namespaces).</li>
 <li>For single-namespace installs, reduce <code>all_namespaces</code> and tighten rules.</li>
 </ul>
-<p>Implementation: <code>src/collectors/kubernetes.py</code>, chart templates under <code>deploy/helm/inferra/templates/</code>.</p>
+<p>Implementation: <code>src/crates/inferra-collectors/</code>, chart templates under <code>deploy/helm/inferra/templates/</code>.</p>
 <h2 id="ollama-refuses-connections-or-models">Ollama refuses connections or models<a class="headerlink" href="#ollama-refuses-connections-or-models" title="Permanent link">&para;</a></h2>
-<p>Symptoms: <code>inferra ai status</code> shows unavailable; <code>ai models</code> lists registry rows but nothing installed; streaming endpoints time out.</p>
+<p>Symptoms: <code>inferra ai status</code> shows unavailable; <code>inferra ai doctor</code> reports provider or model issues; investigation endpoints fall back to deterministic output.</p>
 <p>Checks:</p>
 <ol>
 <li>Process reachable at <code>[ai].base_url</code> (default <code>http://127.0.0.1:11434</code>).</li>
 <li>Remote endpoints require <code>[ai].allow_remote = true</code> and correct network path.</li>
 <li>Optional bearer token: set an environment variable and point <code>[ai].token_env</code> at its name (see <a href="../ai_provider/">AI provider</a>).</li>
-<li>Model pull: run <code>ollama pull &lt;tag&gt;</code> or <code>inferra ai pull &lt;tag&gt;</code> only when Ollama is running; tags must exist on the daemon (<code>GET /api/tags</code>).</li>
+<li>Model pull: run <code>ollama pull &lt;tag&gt;</code> only when Ollama is running; tags must exist on the daemon.</li>
 </ol>
 <p>AI stays optional: disable with <code>inferra config set ai.enabled false</code> and rely on template explanations.</p>
-<p>Implementation: <code>src/ai/ollama.py</code>, <code>src/ai/service.py</code>.</p>
+<p>Implementation: <code>src/crates/inferra-api/</code> native Ollama probe/investigation flow.</p>
 <h2 id="collector-supervisor-not-reachable">Collector supervisor not reachable<a class="headerlink" href="#collector-supervisor-not-reachable" title="Permanent link">&para;</a></h2>
 <p><code>inferra collectors start</code> and <code>inferra collectors stop</code> call the local HTTP API. If nothing listens on <code>[server].host</code>:<code>[server].port</code>, commands fail with a connection error.</p>
-<p>Start the runtime with <code>inferra run</code> or <code>inferra serve</code> on that host, or use one-shot <code>inferra collect-*</code> commands that do not require a daemon.</p>
+<p>Start the runtime with <code>inferra serve</code> on that host, then retry <code>inferra collectors start|stop|status</code>. For packaged installs, <code>inferra service repair</code> is the fastest native readiness check on Windows and <code>curl http://127.0.0.1:7433/api/health</code> is the equivalent cross-platform probe.</p>
               
             </div>
           </div><footer>

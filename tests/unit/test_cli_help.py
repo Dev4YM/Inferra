@@ -2,7 +2,7 @@ from __future__ import annotations
 
 import pytest
 
-import cli
+import inferra_legacy.cli as cli
 
 
 def test_root_help_lists_top_level_and_readme_commands(capsys: pytest.CaptureFixture[str]) -> None:

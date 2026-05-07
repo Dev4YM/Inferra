@@ -1,56 +1,59 @@
-# Windows one-file executable (PyInstaller)
+# Windows executable builds
 
-**Use this page as your single checklist.** Commands use `**python -m pip`** / `**python.exe -m pip`** on purpose: calling `**Scripts\pip.exe`** to upgrade pip fails on pip 24+ with *“To modify pip, please run … python.exe -m pip …”*.
+Inferra now has one preferred Windows build path and one archived compatibility path:
 
-## Start here (Windows, copy/paste)
+- `deploy/windows/build-rust-exe.ps1` builds the native Rust runtime shell and bundles the UI plus active `src/` runtime assets.
+- `deprecated/windows-pyinstaller/build-exe.ps1` is legacy only and exists for compatibility during migration.
 
-Run from the **repository root** in PowerShell. Paths shown use `D:\MYFiles\Projects\py\Inferra` — change to yours or run `cd` first.
+## Native Rust build
 
-### 1) One-time: isolated build virtualenv
-
-```powershell
-Set-Location D:\MYFiles\Projects\py\Inferra
-.\deploy\windows\prepare-build-venv.ps1
-```
-
-If pip upgrade is blocked by policy, try:
-
-```powershell
-.\deploy\windows\prepare-build-venv.ps1 -SkipPipUpgrade
-```
-
-### 2) Build `inferra.exe` (staged output + promote + smoke test)
-
-```powershell
-.\deploy\windows\build-exe.ps1 -Python .\.venv-inferra-build\Scripts\python.exe
-```
-
-If the **Inferra** service is running (or another `inferra.exe` is open), this script stops them before overwriting `**dist\inferra.exe`**.
-
-When you see `**Primary artifact: ...\dist\inferra.exe`**, the build is done — continue to step 3. To sanity-check: `**.\dist\inferra.exe --version`** should match `**[project].version`** in `pyproject.toml`. If you only need the portable binary (no service), you can stop after this step.
-
-### 3) Install Windows service (Administrator PowerShell)
+Run from the repository root in PowerShell:
 
 ```powershell
 Set-Location D:\MYFiles\Projects\py\Inferra
-.\deploy\windows\install-service.ps1 -InferraExe (Resolve-Path .\dist\inferra.exe) -SkipPipInstall -AddCliToPath
+.\deploy\windows\build-rust-exe.ps1 -CopyUiBundle
 ```
 
-### 4) Open the dashboard
+Outputs:
 
-After install completes, browse `**http://127.0.0.1:7433/**` (or the port in `%ProgramData%\Inferra\inferra.toml`). If it does not load, read `**%ProgramData%\Inferra\logs\serve.log**`.
+- `dist\inferra-rust.exe` — preferred native Rust artifact when the stable filename is writable
+- `dist\inferra-rust-<timestamp>.exe` — fallback artifact name if `dist\inferra-rust.exe` is locked by an older/manual install
+- `dist\inferra.exe` — stable compatibility filename when it can be updated in place
+- `dist\runtime-assets\ui_dist\` — bundled web UI assets
+- `dist\runtime-assets\src\` — bundled active runtime assets used by the native executable
 
----
+## Recommended flow
 
-This document is the **canonical** procedure for producing `inferra.exe`. It replaces ad-hoc `python -m PyInstaller …` examples when you care about reliability on real workstations.
+1. Build the native runtime:
+
+```powershell
+Set-Location D:\MYFiles\Projects\py\Inferra
+.\deploy\windows\build-rust-exe.ps1 -CopyUiBundle
+```
+
+2. Install the Windows service from an elevated PowerShell:
+
+```powershell
+.\deploy\windows\install-service.ps1 -InferraExe (Resolve-Path .\dist\inferra-rust.exe) -AddCliToPath
+```
+
+This stages the runtime under `%ProgramFiles%\Inferra\` and keeps mutable state under `%ProgramData%\Inferra\`.
+
+3. Open `http://127.0.0.1:7433/` (or the port in `%ProgramData%\Inferra\inferra.toml`). If the dashboard does not load, inspect `%ProgramData%\Inferra\logs\serve.log`.
+
+## Legacy PyInstaller path
+
+The remainder of this document describes the archived PyInstaller flow. Use it only when you intentionally need the deprecated Python-first packaging path.
 
 ## Why a dedicated pipeline exists
 
-On developer and server machines, `**dist\inferra.exe` is often locked**:
+On developer and server machines, `**dist\inferra.exe` or `**dist\inferra-rust.exe` can still be locked** if an older/manual install points directly at the project tree:
 
-- The **Inferra** Windows service loads the binary.
+- The **Inferra** Windows service loads the project-copy binary instead of the packaged install root.
 - The service spawns a **child `inferra.exe serve`** process.
 - Antivirus or indexing may briefly hold handles during scans.
+
+The current `deploy/windows/install-service.ps1` flow avoids that by copying the runtime into `%ProgramFiles%\Inferra\` before service registration, so normal rebuilds of the repository no longer target the running service executable.
 
 PyInstaller’s default behaviour is to **delete and recreate** the output EXE in `**dist\`**. If the file is mapped for execution, Windows returns `**PermissionError: WinError 5 Access denied`**.
 
@@ -62,19 +65,19 @@ The Inferra pipeline avoids that failure mode by design:
 
 Supporting implementation:
 
-- `**deploy/windows/InferraWindows.psm1`** — reusable cmdlets (`Invoke-InferraWindowsExeBuild`, `Stop-InferraWindowsExecutionLocks`, …).
-- `**deploy/windows/build-exe.ps1`** — thin entry script for humans and CI.
+- `**deploy/windows/InferraWindows.psm1`** — legacy reusable cmdlets (`Invoke-InferraWindowsExeBuild`, `Stop-InferraWindowsExecutionLocks`, …).
+- `**deprecated/windows-pyinstaller/build-exe.ps1`** — archived human-facing entry script.
 
 ## Isolated build virtualenv (details)
 
-If you skipped **Start here** above: a clean `**.venv-inferra-build`** keeps unrelated packages (and bad `**PYTHONPATH`**) out of PyInstaller Analysis. `**prepare-build-venv.ps1`** only invokes `**python.exe -m pip**` for installs/upgrades.
+If you skipped **Start here** above: a clean `**.venv-inferra-build`** keeps unrelated packages (and bad `**PYTHONPATH`**) out of PyInstaller Analysis. `**deprecated/windows-pyinstaller/prepare-build-venv.ps1`** only invokes `**python.exe -m pip**` for installs/upgrades.
 
 ## Standard workstation build (same interpreter every time)
 
 From an elevated **or** normal PowerShell session (elevation is **not** required for PyInstaller itself):
 
 ```powershell
-.\deploy\windows\build-exe.ps1
+.\deprecated\windows-pyinstaller\build-exe.ps1
 ```
 
 Parameters (all optional):
@@ -92,11 +95,7 @@ Parameters (all optional):
 
 ### Outputs
 
-After success you should have:
-
-- `**dist\inferra.exe`** — stable name consumed by `**install-service.ps1`** and release signing.
-- `**dist\inferra-<pyproject-version>.exe`** — immutable, versioned artifact (matches `[project].version` in `pyproject.toml`).
-- `**dist\_inferra_exe_stage\inferra.exe`** — last staged build (still overwritten on the next build).
+After a successful **legacy PyInstaller** run you should have a staged or promoted `inferra.exe` from the archived Python-first path. It does **not** produce `dist\inferra-rust.exe`; that file comes from `deploy/windows/build-rust-exe.ps1`.
 
 Exit codes:
 
@@ -106,10 +105,10 @@ Exit codes:
 
 ## CI / automation
 
-Use `**-SkipReleaseLocks**` because agents do not run the Inferra service:
+Use the native Rust build in CI and release automation:
 
 ```text
-pwsh -NoProfile -File ./deploy/windows/build-exe.ps1 -SkipReleaseLocks -Python python -CleanPyInstallerWork
+pwsh -NoProfile -File ./deploy/windows/build-rust-exe.ps1 -CopyUiBundle
 ```
 
 Release builds follow this pattern in `.github/workflows/release.yml`.
@@ -125,7 +124,7 @@ Use this **only** when you intentionally want every `inferra.exe` stopped (for e
 
 | Symptom                                                                                        | Likely cause                                | Mitigation                                                                                                                                                                                                |
 | ---------------------------------------------------------------------------------------------- | ------------------------------------------- | --------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
-| `**ERROR: To modify pip, please run … python.exe -m pip`** during `**prepare-build-venv.ps1`** | `**pip.exe` cannot self-upgrade** (pip 24+) | Already fixed in repo: script uses `**python -m pip`**. Update your checkout or run: `**.\venv\Scripts\python.exe -m pip install --upgrade pip wheel`**. Or `**prepare-build-venv.ps1 -SkipPipUpgrade**`. |
+| `**ERROR: To modify pip, please run … python.exe -m pip`** during `**prepare-build-venv.ps1`** | `**pip.exe` cannot self-upgrade** (pip 24+) | Already fixed in repo: script uses `**python -m pip`**. Update your checkout or run: `**.\venv\Scripts\python.exe -m pip install --upgrade pip wheel`**. Or `**.\deprecated\windows-pyinstaller\prepare-build-venv.ps1 -SkipPipUpgrade**`. |
 | Promotion exits `**2**` or copy errors mention **sharing violation** / **being used**          | Lock on `**dist\inferra.exe`**              | Run `**Stop-Service Inferra`**, confirm `**Get-Process inferra`** is empty, retry. Import `**InferraWindows.psm1**` and run `**Stop-InferraWindowsExecutionLocks**`.                                      |
 | PyInstaller Analysis pulls **torch**, huge `**pkg`**, multi-minute builds                      | Polluted global Python or `**PYTHONPATH`**  | Use `**prepare-build-venv.ps1`**; ensure no foreign paths are injected into the build shell.                                                                                                              |
 | `**inferra.exe --version` smoke failure**                                                      | Frozen metadata / broken build              | Inspect PyInstaller warnings; run staged exe manually from `**dist\_inferra_exe_stage\`**.                                                                                                                |
@@ -134,7 +133,7 @@ Use this **only** when you intentionally want every `inferra.exe` stopped (for e
 
 ## Manual commands (advanced)
 
-If you must invoke PyInstaller yourself, mirror what `**Invoke-InferraWindowsExeBuild`** does:
+If you must invoke PyInstaller yourself, use the archived flow under `**deprecated/windows-pyinstaller/**`:
 
 ```powershell
 python -m PyInstaller --noconfirm `

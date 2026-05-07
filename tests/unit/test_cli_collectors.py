@@ -4,8 +4,8 @@ import json
 
 import pytest
 
-import cli
-from cli import CommandError, main
+import inferra_legacy.cli as cli
+from inferra_legacy.cli import CommandError, main
 from collectors.host_metrics import HostMetricsCollector
 
 

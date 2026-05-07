@@ -6,10 +6,10 @@ The repo should be cleaned in phases to avoid breaking working tests and packagi
 
 ```text
 src/
-  app.py
-  cli.py
-  windows_service.py
+  Cargo.toml
+  crates/
   ai/
+    worker/
   analysis/
   collectors/
   config/
@@ -25,9 +25,13 @@ tests/
 docs/
 deploy/
 scripts/
+deprecated/
 ```
 
 Top-level `webui/` should not remain as a separate product root after migration.
+In the Rust-primary cutover, `src/Cargo.toml` + `src/crates/` became the runtime/control-plane home,
+`src/web/frontend/` became the canonical UI source, and `deprecated/` now holds replaced
+legacy paths after verification.
 
 ## Web Migration
 
@@ -58,26 +62,25 @@ Migration steps:
 
 ## Backend API Migration
 
-Current:
+Historical Python target during migration:
 
 ```text
 src/web/api.py
-```
-
-Target:
-
-```text
 src/web/app.py
 src/web/routers/*.py
 src/web/schemas/*.py
 ```
 
-Migration steps:
+Live outcome after cutover:
 
-1. Keep `create_app` compatibility import.
-2. Extract health/config/dashboard routes first.
-3. Extract collectors routes.
-4. Extract AI routes.
+```text
+src/crates/inferra-api/
+src/crates/inferra-core/
+src/crates/inferra-storage/
+src/web/frontend/
+```
+
+Migration steps below are archival notes from the Python-to-Rust transition and should not be treated as the current implementation plan.
 5. Extract events/incidents/services routes.
 6. Keep frontend serving isolated outside route handlers.
 7. Preserve endpoint paths during first migration.
@@ -88,13 +91,14 @@ Migration steps:
 Current:
 
 ```text
-src/cli.py
+deprecated/inferra_legacy/cli.py
+src/cli_core/
 ```
 
 Target:
 
 ```text
-src/cli.py
+deprecated/inferra_legacy/cli.py  # compatibility only; Rust CLI is primary
 src/cli_core/
 ```
 

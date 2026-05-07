@@ -269,10 +269,9 @@
 </code></pre>
 <p>Implemented first pass:</p>
 <ul>
-<li><code>src/ai/investigation.py</code> builds structured investigation outputs with deterministic fallback behavior.</li>
-<li><code>src/web/routers/investigate.py</code> exposes investigation endpoints for current state, incidents, and services.</li>
-<li><code>src/web/routers/ai.py</code> exposes ask, doctor, report, and trace paths.</li>
-<li><code>src/cli_core/commands/ai.py</code> exposes AI investigation, ask, report, doctor, and trace commands.</li>
+<li>The native Rust API/runtime builds structured investigation outputs with deterministic fallback behavior and persistence hooks.</li>
+<li>The shipped HTTP surface exposes investigation, ask, doctor, report, and trace paths through the active Rust product contract.</li>
+<li>The native Rust CLI exposes AI investigation, ask, report, doctor, and trace commands.</li>
 <li>The React control plane includes an AI Investigator workspace that consumes these APIs.</li>
 </ul>
 <h2 id="evidence-bundle">Evidence Bundle<a class="headerlink" href="#evidence-bundle" title="Permanent link">&para;</a></h2>

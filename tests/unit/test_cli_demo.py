@@ -4,7 +4,7 @@ from __future__ import annotations
 
 import json
 
-from cli import main
+from inferra_legacy.cli import main
 
 
 def _config_path(tmp_path):

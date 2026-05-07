@@ -1,24 +1,81 @@
-export async function fetchJson<T>(path: string, init?: RequestInit): Promise<T> {
-  const res = await fetch(path, init);
-  if (!res.ok) {
-    const text = await res.text();
-    throw new Error(`${res.status} ${path}: ${text}`);
+export class ApiError extends Error {
+  status: number;
+  path: string;
+  body: string;
+
+  constructor(message: string, path: string, status = 0, body = "") {
+    super(message);
+    this.name = "ApiError";
+    this.status = status;
+    this.path = path;
+    this.body = body;
   }
-  return res.json() as Promise<T>;
 }
 
-export async function postJson<T>(path: string, body: unknown): Promise<T> {
+async function parseResponseBody(response: Response, path: string): Promise<unknown> {
+  const text = await response.text();
+  if (!text.trim()) {
+    throw new ApiError(`Empty response from ${path}`, path, response.status);
+  }
+  try {
+    return JSON.parse(text) as unknown;
+  } catch (error) {
+    throw new ApiError(
+      `Invalid JSON from ${path}: ${error instanceof Error ? error.message : String(error)}`,
+      path,
+      response.status,
+      text,
+    );
+  }
+}
+
+export function errorMessage(error: unknown): string {
+  if (error instanceof ApiError) return error.message;
+  if (error instanceof Error) return error.message;
+  return String(error);
+}
+
+export async function fetchJson<T>(path: string, init?: RequestInit): Promise<T> {
+  const response = await fetch(path, {
+    ...init,
+    headers: {
+      Accept: "application/json",
+      ...(init?.headers ?? {}),
+    },
+  });
+  if (!response.ok) {
+    const text = await response.text();
+    throw new ApiError(
+      `${response.status} ${path}: ${text.trim() || response.statusText || "Request failed"}`,
+      path,
+      response.status,
+      text,
+    );
+  }
+  const parsed = await parseResponseBody(response, path);
+  return parsed as T;
+}
+
+export async function postJson<T>(path: string, body: unknown, init?: RequestInit): Promise<T> {
   return fetchJson<T>(path, {
+    ...init,
     method: "POST",
-    headers: { "content-type": "application/json" },
+    headers: {
+      "content-type": "application/json",
+      ...(init?.headers ?? {}),
+    },
     body: JSON.stringify(body ?? {}),
   });
 }
 
-export async function putJson<T>(path: string, body: unknown): Promise<T> {
+export async function putJson<T>(path: string, body: unknown, init?: RequestInit): Promise<T> {
   return fetchJson<T>(path, {
+    ...init,
     method: "PUT",
-    headers: { "content-type": "application/json" },
+    headers: {
+      "content-type": "application/json",
+      ...(init?.headers ?? {}),
+    },
     body: JSON.stringify(body ?? {}),
   });
 }
@@ -125,6 +182,56 @@ export type CollectorRow = {
   lag_seconds?: number;
 };
 
+export type InvestigationTrace = {
+  trace_id?: string;
+  trace_kind: string;
+  sanitized_system_prompt: string;
+  sanitized_user_prompt: string;
+  allowed_fields: string[];
+  blocked_fields: string[];
+  raw_logs_sent: boolean;
+  trace_schema_version?: number;
+  created_at?: string;
+};
+
+export type PersistedExplanation = {
+  explanation_id: string;
+  summary: string;
+  primary_text: string;
+  evidence_text?: string | null;
+  timeline_text?: string | null;
+  alternatives: string[];
+  actions: string[];
+  uncertainty: string[];
+  model_used: string;
+  guardrail_flags: string[];
+  created_at: string;
+  explanation_schema_version: number;
+  hypotheses_hash: string;
+  events_hash_head: string;
+  quality: string;
+};
+
+export type InvestigationAudit = {
+  incident_id: string;
+  explanation?: PersistedExplanation | null;
+  latest_trace?: InvestigationTrace | null;
+  feedback?: Array<{
+    feedback_id: string;
+    correct_hypothesis_id?: string | null;
+    feedback_type: string;
+    operator_notes: string;
+    resolved_at: string;
+    created_at: string;
+  }>;
+  state_log?: Array<{
+    old_state?: string;
+    new_state?: string;
+    changed_at?: string;
+    reason?: string;
+  }>;
+};
+
 export type AiStatus = {
   enabled: boolean;
   provider?: string;
@@ -168,6 +275,8 @@ export type InvestigationResponse = {
   output: InvestigationOutput;
   used_ai: boolean;
   fallback_reason: string;
+  warnings?: string[];
+  attempts?: number;
   provider: {
     enabled: boolean;
     available: boolean;
@@ -183,10 +292,13 @@ export type InvestigationResponse = {
     allowed_fields: string[];
     blocked_fields: string[];
     raw_logs_sent: boolean;
+    schema_version?: number;
   } | null;
+  audit?: InvestigationAudit;
   bundle?: Record<string, unknown>;
   focus?: string;
   question?: string;
+  report?: boolean;
 };
 
 export type WorkspaceMappingSignal = { name: string; confidence: number; detail: string };
@@ -220,4 +332,76 @@ export type AiDoctorResponse = {
   available: boolean;
   warnings: string[];
   guidance?: string[];
+};
+
+export type HypothesisRow = {
+  hypothesis_id: string;
+  cause_type: string;
+  description?: string;
+  total_score?: number;
+  confidence_label?: string;
+  suggested_checks?: string[];
+};
+
+export type EventRow = {
+  event_id?: string;
+  timestamp?: string;
+  severity?: number | string;
+  service_id?: string;
+  message?: string;
+  summary?: string;
+  source_ref?: { source_type?: string };
+  tags?: string[];
+};
+
+export type IncidentDetailResponse = {
+  incident: IncidentRow;
+  events: EventRow[];
+  hypotheses: HypothesisRow[];
+  clusters: unknown[];
+  explanation?: PersistedExplanation | null;
+  latest_trace?: InvestigationTrace | null;
+  state_log?: Array<{
+    old_state?: string;
+    new_state?: string;
+    changed_at?: string;
+    reason?: string;
+  }>;
+  feedback?: Array<{
+    feedback_id: string;
+    correct_hypothesis_id?: string | null;
+    feedback_type: string;
+    operator_notes: string;
+    resolved_at: string;
+    created_at: string;
+  }>;
+};
+
+export type AnomalyStatus = {
+  enabled: boolean;
+  service_id: string;
+  status: string;
+  window_hours: number;
+  event_count: number;
+  error_count: number;
+  last_event_at?: string | null;
+  buckets: Record<string, number>;
+};
+
+export type EventDetailResponse = {
+  event: EventRow;
+};
+
+export type TopologyEdge = {
+  source: string;
+  target: string;
+  relation_type?: string;
+  type?: string;
+  notes?: string;
+};
+
+export type ServiceDetailResponse = {
+  service: ServiceRow;
+  events: EventRow[];
+  incidents: IncidentRow[];
 };

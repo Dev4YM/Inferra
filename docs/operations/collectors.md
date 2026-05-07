@@ -1,26 +1,25 @@
 # Collector Commands
 
-Inferra collectors are read-only toward observed systems. Implementation lives under `src/collectors/` with factories in `src/collectors/factory.py`.
+Inferra collectors are read-only toward observed systems. The active collector runtime is implemented in Rust under `src/crates/inferra-collectors/`.
 
 ## Supervised collection
 
-Supervisors run inside `inferra run` / `inferra serve` or standalone `inferra run-collectors`. Example sequences:
+Collectors run inside the local runtime started by `inferra serve`. The active CLI surface for operators is `collectors status`, `collectors start`, and `collectors stop`.
 
 Windows:
 
 ```powershell
 inferra --config inferra.toml config preset windows-server
-inferra --config inferra.toml run-collectors --help
 inferra --config inferra.toml collectors status
-inferra --config inferra.toml collectors start --help
-inferra --config inferra.toml collectors stop --help
+inferra --config inferra.toml serve
+inferra --config inferra.toml collectors start
 ```
 
 Linux:
 
 ```bash
 inferra --config inferra.toml config preset linux-node
-inferra --config inferra.toml run-collectors --help
+inferra --config inferra.toml serve
 inferra --config inferra.toml collectors status
 ```
 
@@ -28,50 +27,23 @@ Docker host:
 
 ```bash
 inferra --config inferra.toml config preset docker-host
-inferra --config inferra.toml run-collectors --help
+inferra --config inferra.toml serve
 inferra --config inferra.toml collectors status
 ```
 
 Kubernetes:
 
 ```bash
-python -m pip install ".[kubernetes]"
 inferra --config inferra.toml config preset kubernetes
-inferra --config inferra.toml run-collectors --help
+inferra --config inferra.toml serve
 inferra --config inferra.toml collectors status
 ```
 
-`inferra collectors status` prefers live daemon status. If no daemon is running, it reports configured collectors as `not_running` and hints to start `inferra run`. `collectors start` and `collectors stop` require a running API (see [Troubleshooting](troubleshooting.md)).
+`inferra collectors status` prefers live runtime status. If no daemon is running, it falls back to configured collector rows from `inferra.toml`. `collectors start` and `collectors stop` call the local Rust API, so `inferra serve` must already be running (see [Troubleshooting](troubleshooting.md)).
 
-## One-shot collection
+## App ingest
 
-Single pass plus normalization drain:
-
-Windows:
-
-```powershell
-inferra --config inferra.toml collect-host
-inferra --config inferra.toml collect-processes
-inferra --config inferra.toml collect-services
-inferra --config inferra.toml collect-eventlog
-```
-
-Linux:
-
-```bash
-inferra --config inferra.toml collect-host
-inferra --config inferra.toml collect-processes
-inferra --config inferra.toml collect-syslog
-inferra --config inferra.toml collect-journald
-```
-
-Kubernetes:
-
-```bash
-inferra --config inferra.toml collect-kubernetes
-```
-
-Use `--json` for machine-readable summaries.
+Application ingest is part of the collector surface. It can run on the main API mount (`[collectors.app].enable_main_api = true`) and optionally on a standalone listener (`enable_standalone = true`).
 
 ---
 
@@ -118,7 +90,7 @@ names = []
 
 ## Windows Event Log
 
-Bookmarked channel polling (pywin32 when available).
+Bookmarked channel polling through the native Rust runtime.
 
 ```toml
 [collectors.windows_eventlog]
@@ -189,7 +161,7 @@ include_all = true
 
 ## Kubernetes
 
-Namespace-scoped events and workloads; requires Python kubernetes client when enabled.
+Namespace-scoped events and workloads through the native Rust runtime and in-cluster `kubectl`/API access configured by the deployment target.
 
 ```toml
 [collectors.kubernetes]
@@ -241,3 +213,4 @@ inferra config preset docker-host
 ```
 
 Defaults are defined in `src/config/presets.py`.
+Defaults are defined in `src/config/defaults.toml`, and the native CLI writes preset overlays with `inferra config preset <name>`.

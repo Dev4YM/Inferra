@@ -5,7 +5,7 @@ import json
 
 from fastapi.testclient import TestClient
 
-from app import InferraRuntime
+from inferra_legacy.app import InferraRuntime
 from config.model import DeduplicationConfig, InferraConfig, StorageConfig
 from core.enums import Severity
 

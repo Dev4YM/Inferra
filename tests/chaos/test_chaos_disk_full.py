@@ -7,7 +7,7 @@ from datetime import UTC, datetime
 
 import pytest
 
-from app import InferraRuntime
+from inferra_legacy.app import InferraRuntime
 from config.models import InferraConfig
 from core.enums import EventType, Severity
 from events.models import DataQuality, NormalizedEvent, SourceRef

@@ -1,6 +1,6 @@
 import asyncio
 
-from app import InferraRuntime
+from inferra_legacy.app import InferraRuntime
 from config.model import InferraConfig, StorageConfig
 from core.enums import IncidentState
 from explanation.template import TemplateExplanationEngine

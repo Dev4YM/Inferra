@@ -1,23 +1,23 @@
-"""Print [project].version from pyproject.toml; argv[1] = repository root.
-
-Called from InferraWindows.psm1 (avoid fragile python -c quoting on Windows).
-"""
+"""Compatibility shim for the deprecated PyInstaller version helper."""
 
 from __future__ import annotations
 
-import pathlib
-import sys
-import tomllib
+import importlib.util
+from pathlib import Path
 
+_IMPL_PATH = (
+    Path(__file__).resolve().parents[2]
+    / "deprecated"
+    / "windows-pyinstaller"
+    / "read_pyproject_version.py"
+)
+_SPEC = importlib.util.spec_from_file_location("inferra_deprecated_read_version", _IMPL_PATH)
+if _SPEC is None or _SPEC.loader is None:
+    raise RuntimeError(f"Could not load deprecated version helper: {_IMPL_PATH}")
+_MODULE = importlib.util.module_from_spec(_SPEC)
+_SPEC.loader.exec_module(_MODULE)
 
-def main() -> None:
-    if len(sys.argv) < 2:
-        print("usage: read_pyproject_version.py <repo-root>", file=sys.stderr)
-        raise SystemExit(2)
-    root = pathlib.Path(sys.argv[1])
-    path = root / "pyproject.toml"
-    data = tomllib.loads(path.read_text(encoding="utf-8"))
-    print(str(data["project"]["version"]), end="")
+main = _MODULE.main
 
 
 if __name__ == "__main__":

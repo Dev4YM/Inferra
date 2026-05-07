@@ -1,0 +1,15 @@
+[package]
+name = "inferra-windows-service"
+version.workspace = true
+edition.workspace = true
+license.workspace = true
+
+[dependencies]
+anyhow = { workspace = true }
+inferra-api = { path = "../inferra-api" }
+inferra-config = { path = "../inferra-config" }
+tokio = { workspace = true }
+tracing = { workspace = true }
+
+[target."cfg(windows)".dependencies]
+windows-service = "0.8.0"

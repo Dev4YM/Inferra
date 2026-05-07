@@ -38,24 +38,20 @@ Make the control planes maintainable.
 
 Work:
 
-- split `src/web/api.py` into routers
-- split `src/cli.py` into command modules
-- preserve endpoint paths
-- preserve command behavior
-- add tests per router/command group
+- preserve endpoint paths while moving the active implementation into the Rust API/runtime crates
+- preserve command behavior while shifting the operator surface to the native Rust CLI
+- add tests per route/command group
 
 Exit criteria:
 
-- `create_app` still works
 - existing API tests pass
 - CLI tests pass
-- files are smaller and domain-owned
+- active runtime ownership is clear and domain-owned
 
 Remaining polish:
 
-- move shared API schemas/contracts out of route functions
-- keep reducing app/websocket/dashboard glue in `src/web/api.py`
-- move parser registration and remaining legacy command glue out of `src/cli.py`
+- move shared Rust API schemas/contracts out of route functions
+- keep reducing cross-crate glue around the active Rust control plane
 
 ## Phase 3: Experience Modes
 

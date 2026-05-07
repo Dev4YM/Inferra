@@ -1,55 +1,43 @@
-"""PyInstaller entry: Windows SCM verbs dispatch to windows_service; otherwise CLI."""
+"""Compatibility shim for the deprecated PyInstaller entry."""
 
 from __future__ import annotations
 
+import importlib.util
+from pathlib import Path
 import os
 import sys
 
-_WINDOWS_SCM_VERBS = frozenset(
-    {
-        "install",
-        "remove",
-        "update",
-        "start",
-        "stop",
-        "restart",
-        "debug",
-        "pause",
-        "continue",
-    }
+_IMPL_PATH = (
+    Path(__file__).resolve().parents[2] / "deprecated" / "windows-pyinstaller" / "pyi_entry.py"
 )
+_SPEC = importlib.util.spec_from_file_location("inferra_deprecated_pyi_entry", _IMPL_PATH)
+if _SPEC is None or _SPEC.loader is None:
+    raise RuntimeError(f"Could not load deprecated PyInstaller entry: {_IMPL_PATH}")
+_MODULE = importlib.util.module_from_spec(_SPEC)
+_SPEC.loader.exec_module(_MODULE)
 
-
-def _argv_dispatches_to_windows_service(argv: list[str]) -> bool:
-    if len(argv) < 2:
-        return False
-    if argv[1] in _WINDOWS_SCM_VERBS:
-        return True
-    if argv[1].startswith("-"):
-        return any(token in _WINDOWS_SCM_VERBS for token in argv[2:])
-    return False
+_frozen_windows_has_console_window = _MODULE._frozen_windows_has_console_window
+_argv_dispatches_to_windows_service = _MODULE._argv_dispatches_to_windows_service
 
 
 def main() -> int:
     if _argv_dispatches_to_windows_service(sys.argv):
-        import windows_service
+        import inferra_legacy.windows_service as windows_service
 
         return windows_service.main()
-    # SCM starts the frozen exe with argv == [exe] only; pywin32 must host via
-    # servicemanager (see win32serviceutil.HandleCommandLine vs frozen dispatch).
     if (
         os.name == "nt"
         and getattr(sys, "frozen", False)
         and len(sys.argv) == 1
+        and not _frozen_windows_has_console_window()
     ):
-        import windows_service
+        import inferra_legacy.windows_service as windows_service
 
         if windows_service.try_run_frozen_windows_service():
             return 0
-    import cli
+    import inferra_legacy.cli as cli
 
     return cli.main()
-
 
 if __name__ == "__main__":
     raise SystemExit(main())

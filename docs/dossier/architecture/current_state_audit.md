@@ -47,43 +47,13 @@ This resolves the previous confusion about which UI should be edited and package
 
 `node_modules` and TypeScript build-info files are ignored and should not be committed.
 
-### Backend API Split Is Now Mostly Done
+### Native HTTP Surface Is The Live Backend
 
-`src/web/api.py` is no longer the only owner of web behavior. Frontend asset serving lives in `src/web/frontend_assets.py`, system/control-plane endpoints live in `src/web/routes/system.py`, and domain APIs now live under `src/web/routers/`.
-
-The active split includes:
-
-- `src/web/routers/ai.py`
-- `src/web/routers/collectors.py`
-- `src/web/routers/config.py`
-- `src/web/routers/events.py`
-- `src/web/routers/health.py`
-- `src/web/routers/incidents.py`
-- `src/web/routers/investigate.py`
-- `src/web/routers/metrics.py`
-- `src/web/routers/services.py`
-- `src/web/routers/topology.py`
-- `src/web/routers/workspace.py`
-
-`src/web/api.py` still owns app creation, lifespan wiring, websocket behavior, and some shared dashboard composition. That is acceptable for the current pass, but the next polish wave should keep moving shared API contracts and schemas into clearer modules.
+The active HTTP/runtime surface now lives in the Rust workspace (`src/crates/inferra-api/`, `src/crates/inferra-core/`, `src/crates/inferra-collectors/`, `src/crates/inferra-storage/`). The React app in `src/web/frontend/` talks to that native API, and archived Python web-layer notes should not be treated as the live control plane.
 
 ### CLI Parser Still Needs Deeper Decomposition
 
-`src/cli.py` is the main control plane, but it is too large and owns too many domains in one file.
-
-The first command-module split now exists under `src/cli_core/commands/`, including AI, config, runtime, service, workspace, and related command handlers. However, `src/cli.py` still owns a lot of parser construction and legacy behavior.
-
-It still mixes:
-
-- parser construction
-- setup
-- some config defaults
-- some collector wiring
-- storage/calibration command glue
-- mode and status rendering glue
-- HTTP client calls
-
-The CLI should remain the main control plane. The direction is right now; the next issue is making the parser and command registration as clean as the command handlers.
+The active CLI control plane now lives in `src/crates/inferra-cli/src/main.rs` and delegates runtime concerns into the Rust workspace crates. Archived `src/cli.py` notes are historical only and should not guide new implementation work.
 
 ### Product Identity Too Narrow
 
@@ -198,12 +168,12 @@ demo seed/clear
 completion
 ```
 
-This is now a credible CLI-first control plane. The next issue is implementation layout and UX finish: continue shrinking `src/cli.py`, make onboarding feel smoother, and ensure every important web action has an equally good CLI path.
+This is now a credible CLI-first control plane. The next issue is runtime UX finish: keep the Rust CLI ergonomics sharp, make onboarding feel smoother, and ensure every important web action has an equally good CLI path.
 
 ## Immediate Cleanup Findings
 
-- Continue moving shared API contracts and remaining websocket/dashboard glue into clearer modules.
-- Continue decomposing `src/cli.py` so parser registration and command execution are easier to trust.
+- Continue moving shared Rust API contracts and remaining dashboard glue into clearer modules.
+- Keep simplifying the native Rust CLI command surface and operator ergonomics.
 - Add browser coverage for the new Overview, AI Investigator, Workspace, Control, and Settings screens.
 - Reconcile web mode persistence with persisted config mode so operator/developer behavior feels consistent everywhere.
 - Deliberately decide what to do with generated docs/site artifacts in git instead of letting staged generated deletions linger.

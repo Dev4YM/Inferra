@@ -44,10 +44,9 @@ User opens dashboard or runs CLI
 
 Implemented first pass:
 
-- `src/ai/investigation.py` builds structured investigation outputs with deterministic fallback behavior.
-- `src/web/routers/investigate.py` exposes investigation endpoints for current state, incidents, and services.
-- `src/web/routers/ai.py` exposes ask, doctor, report, and trace paths.
-- `src/cli_core/commands/ai.py` exposes AI investigation, ask, report, doctor, and trace commands.
+- The native Rust API/runtime builds structured investigation outputs with deterministic fallback behavior and persistence hooks.
+- The shipped HTTP surface exposes investigation, ask, doctor, report, and trace paths through the active Rust product contract.
+- The native Rust CLI exposes AI investigation, ask, report, doctor, and trace commands.
 - The React control plane includes an AI Investigator workspace that consumes these APIs.
 
 ## Evidence Bundle

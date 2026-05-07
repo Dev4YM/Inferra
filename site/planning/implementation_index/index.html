@@ -213,7 +213,9 @@
             <div class="section" itemprop="articleBody">
               
                 <h1 id="implementation-index">Implementation index<a class="headerlink" href="#implementation-index" title="Permanent link">&para;</a></h1>
-<p>Each planning document describes intent and contracts; this index maps those documents to the primary Python packages under <code>src/</code> (flat layout; no nested <code>inferra/</code> package).</p>
+<p>Each planning document describes intent and contracts; this index maps those
+documents to the active Rust workspace. Deprecated Python code under
+<code>deprecated/</code> is archival reference only and is not part of the shipped runtime.</p>
 <table>
 <thead>
 <tr>
@@ -223,8 +225,12 @@
 </thead>
 <tbody>
 <tr>
+<td><a href="../rust_runtime_contracts/">rust_runtime_contracts.md</a></td>
+<td><code>src/crates/inferra-api</code>, <code>src/crates/inferra-cli</code>, <code>src/crates/inferra-config</code>, <code>src/crates/inferra-core</code></td>
+</tr>
+<tr>
 <td><a href="../architecture_overview/">architecture_overview.md</a></td>
-<td>Cross-cutting: <code>app.py</code>, <code>runtime/</code>, <code>web/</code>, <code>reasoning/</code>, <code>storage/</code></td>
+<td>Cross-cutting: <code>src/crates/inferra-core</code>, <code>src/crates/inferra-api</code>, <code>src/crates/inferra-storage</code>, <code>src/crates/inferra-collectors</code>, <code>src/web/frontend/</code></td>
 </tr>
 <tr>
 <td><a href="../full_build_architecture_plan/">full_build_architecture_plan.md</a></td>
@@ -232,87 +238,87 @@
 </tr>
 <tr>
 <td><a href="../data_flow_contracts/">data_flow_contracts.md</a></td>
-<td><code>events/</code>, <code>normalization/pipeline.py</code>, <code>storage/event_store.py</code>, <code>storage/incident_store.py</code></td>
+<td><code>src/crates/inferra-contracts</code>, <code>src/crates/inferra-storage</code>, <code>src/crates/inferra-core</code>, <code>src/crates/inferra-api</code></td>
 </tr>
 <tr>
 <td><a href="../collector_architecture/">collector_architecture.md</a></td>
-<td><code>collectors/</code></td>
+<td><code>src/crates/inferra-collectors</code>, collector config in <code>src/config/defaults.toml</code></td>
 </tr>
 <tr>
 <td><a href="../log_normalization_pipeline/">log_normalization_pipeline.md</a></td>
-<td><code>normalization/</code></td>
+<td>Native ingest and incident reconciliation in <code>src/crates/inferra-core</code> plus collector-specific shaping in <code>src/crates/inferra-collectors</code></td>
 </tr>
 <tr>
 <td><a href="../event_model/">event_model.md</a></td>
-<td><code>events/models.py</code>, <code>events/serialization.py</code></td>
+<td><code>src/crates/inferra-contracts</code>, <code>src/crates/inferra-storage</code></td>
 </tr>
 <tr>
 <td><a href="../event_deduplication/">event_deduplication.md</a></td>
-<td><code>normalization/dedup.py</code></td>
+<td>Config surface in <code>src/config/defaults.toml</code>; overview/runtime summaries in <code>src/crates/inferra-core</code></td>
 </tr>
 <tr>
 <td><a href="../noise_filtering/">noise_filtering.md</a></td>
-<td><code>normalization/noise.py</code></td>
+<td>Config surface in <code>src/config/defaults.toml</code>; overview/runtime summaries in <code>src/crates/inferra-core</code></td>
 </tr>
 <tr>
 <td><a href="../anomaly_detection/">anomaly_detection.md</a></td>
-<td><code>analysis/anomaly.py</code>, <code>reasoning/signals/</code></td>
+<td><code>src/crates/inferra-api</code> (<code>/api/anomaly/...</code>) plus incident heuristics in <code>src/crates/inferra-core</code></td>
 </tr>
 <tr>
 <td><a href="../correlation_engine/">correlation_engine.md</a></td>
-<td><code>analysis/correlation.py</code></td>
+<td>Native incident clustering and service/topology grouping in <code>src/crates/inferra-core</code></td>
 </tr>
 <tr>
 <td><a href="../incident_lifecycle/">incident_lifecycle.md</a></td>
-<td><code>analysis/lifecycle.py</code></td>
+<td><code>src/crates/inferra-core</code>, <code>src/crates/inferra-storage</code></td>
 </tr>
 <tr>
 <td><a href="../causal_graph_engine/">causal_graph_engine.md</a></td>
-<td><code>reasoning/inference_graph.py</code></td>
+<td>Native heuristic hypothesis generation in <code>src/crates/inferra-core</code>; archived exploratory reference under <code>deprecated/python_packages/</code></td>
 </tr>
 <tr>
 <td><a href="../hypothesis_engine/">hypothesis_engine.md</a></td>
-<td><code>reasoning/engine.py</code>, <code>reasoning/composer.py</code></td>
+<td><code>src/crates/inferra-core</code>, <code>src/crates/inferra-storage</code></td>
 </tr>
 <tr>
 <td><a href="../hypothesis_validation/">hypothesis_validation.md</a></td>
-<td><code>reasoning/validation.py</code></td>
+<td>Native stored hypothesis validation/state in <code>src/crates/inferra-core</code>, <code>src/crates/inferra-storage</code></td>
 </tr>
 <tr>
 <td><a href="../scoring_engine/">scoring_engine.md</a></td>
-<td><code>reasoning/scoring.py</code>, <code>storage/weight_store.py</code></td>
+<td>Native severity/event-rate/anomaly summaries in <code>src/crates/inferra-core</code></td>
 </tr>
 <tr>
 <td><a href="../contradiction_handling/">contradiction_handling.md</a></td>
-<td><code>reasoning/contradiction.py</code></td>
+<td>Investigation output normalization and deterministic fallbacks in <code>src/crates/inferra-api</code></td>
 </tr>
 <tr>
 <td><a href="../confidence_calibration/">confidence_calibration.md</a></td>
-<td><code>storage/calibration_store.py</code>, <code>reasoning/scoring.py</code></td>
+<td>Historical planning reference; active runtime currently exposes deterministic score labels without a separate calibration CLI</td>
 </tr>
 <tr>
 <td><a href="../failure_model/">failure_model.md</a></td>
-<td><code>analysis/models.py</code></td>
+<td>Native incident severity and hypothesis cause typing in <code>src/crates/inferra-core</code>, <code>src/crates/inferra-storage</code></td>
 </tr>
 <tr>
 <td><a href="../failure_taxonomy/">failure_taxonomy.md</a></td>
-<td><code>core/enums.py</code>, <code>reasoning/</code></td>
+<td>Native cause/severity taxonomy in <code>src/crates/inferra-core</code>, <code>src/crates/inferra-contracts</code></td>
 </tr>
 <tr>
 <td><a href="../explanation_layer/">explanation_layer.md</a></td>
-<td><code>explanation/</code>, <code>ai/</code> (presentation only)</td>
+<td><code>src/crates/inferra-api</code> native Ollama + deterministic fallback investigation flow</td>
 </tr>
 <tr>
 <td><a href="../runtime_context_builder/">runtime_context_builder.md</a></td>
-<td><code>runtime/context.py</code></td>
+<td><code>src/crates/inferra-core</code></td>
 </tr>
 <tr>
 <td><a href="../storage_architecture/">storage_architecture.md</a></td>
-<td><code>storage/</code></td>
+<td><code>src/crates/inferra-storage</code></td>
 </tr>
 <tr>
 <td><a href="../ui_spec/">ui_spec.md</a></td>
-<td><code>web/frontend/</code>, <code>web/ui_dist/</code>, <code>web/api.py</code>, <code>web/live_hub.py</code></td>
+<td><code>src/web/frontend/</code>, <code>src/web/ui_dist/</code>, <code>src/crates/inferra-api</code></td>
 </tr>
 <tr>
 <td><a href="../system_limitations/">system_limitations.md</a></td>
@@ -320,7 +326,7 @@
 </tr>
 <tr>
 <td><a href="../constraints/">constraints.md</a></td>
-<td><code>config/</code>, <code>core/</code></td>
+<td><code>src/crates/inferra-config</code>, <code>src/crates/inferra-core</code></td>
 </tr>
 <tr>
 <td><a href="../testing_strategy/">testing_strategy.md</a></td>

@@ -49,7 +49,7 @@
     <ul class="current">
     <li class="toctree-l2"><a class="reference internal" href="#command-line-on-path-all-platforms">Command-line on PATH (all platforms)</a>
     </li>
-    <li class="toctree-l2"><a class="reference internal" href="#local-python-any-os">Local Python (any OS)</a>
+    <li class="toctree-l2"><a class="reference internal" href="#local-repository-workflow">Local repository workflow</a>
     </li>
     <li class="toctree-l2"><a class="reference internal" href="#windows-desktop">Windows desktop</a>
     </li>
@@ -231,54 +231,59 @@
             <div class="section" itemprop="articleBody">
               
                 <h1 id="install-inferra">Install Inferra<a class="headerlink" href="#install-inferra" title="Permanent link">&para;</a></h1>
-<p>This guide covers pip installs, Windows service, systemd, Docker, Helm, and macOS LaunchDaemon. <strong>Browse all operator docs</strong> from the documentation sidebar (<strong>Operator guides</strong>) or from the <code>docs/operations/</code> directory in the repo. To view them as a site, run <code>mkdocs serve</code> from the repo root (see <a href="../../">Documentation home</a>).</p>
+<p>This guide covers local Rust builds, Windows service, systemd, Docker, Helm, and macOS LaunchDaemon. <strong>Browse all operator docs</strong> from the documentation sidebar (<strong>Operator guides</strong>) or from the <code>docs/operations/</code> directory in the repo. To view them as a site, run <code>mkdocs serve</code> from the repo root (see <a href="../../">Documentation home</a>).</p>
 <h2 id="command-line-on-path-all-platforms">Command-line on PATH (all platforms)<a class="headerlink" href="#command-line-on-path-all-platforms" title="Permanent link">&para;</a></h2>
 <ul>
-<li><strong>Windows (pip):</strong> the <code>inferra</code> launcher is in Python’s <code>Scripts</code> folder. If <code>inferra</code> is not found, use <code>py -m cli …</code> or add <code>Scripts</code> to your user PATH. When installing the <strong>PyInstaller</strong> service with <code>deploy/windows/install-service.ps1</code>, pass <strong><code>-AddCliToPath</code></strong> to copy <code>inferra.exe</code> under <code>%ProgramData%\Inferra\bin</code> and append that directory to the <strong>machine</strong> PATH (requires Administrator, same as the service).</li>
-<li><strong>Linux (.deb / .rpm from <code>deploy/linux/fpm-package.sh</code>):</strong> installs <code>/usr/bin/inferra</code> automatically.</li>
-<li><strong>Linux / macOS (pip only):</strong> <code>python3 -m pip install --user .</code> puts <code>inferra</code> in <code>~/.local/bin</code>; ensure that directory is on your PATH (add <code>export PATH="$HOME/.local/bin:$PATH"</code> to <code>~/.profile</code> or <code>~/.zshrc</code>). Alternatively use <a href="https://pipx.pypa.io/"><code>pipx</code></a> for an isolated CLI on PATH.</li>
-<li><strong>macOS (<code>deploy/macos/install.sh</code>):</strong> ensures <code>/usr/local/bin/inferra</code> points at your installed <code>inferra</code> when it is not already there.</li>
+<li><strong>Windows (native Rust build):</strong> <code>deploy/windows/install-service.ps1</code> auto-detects <code>dist/inferra-rust.exe</code>, <code>dist/inferra.exe</code>, or <code>inferra</code> on <code>PATH</code>, stages the packaged runtime under <code>%ProgramFiles%\Inferra\</code>, and keeps config/data/logs under <code>%ProgramData%\Inferra\</code>. <code>-AddCliToPath</code> appends <code>%ProgramFiles%\Inferra\bin</code> to the machine PATH.</li>
+<li><strong>Linux (.deb / .rpm from <code>deploy/linux/fpm-package.sh</code>):</strong> installs <code>/usr/bin/inferra</code> as a wrapper around the native Rust runtime under <code>/opt/inferra/</code>.</li>
+<li><strong>Docker / Compose / Helm:</strong> use the native Rust runtime as PID 1.</li>
+<li><strong>macOS (<code>deploy/macos/install.sh</code>):</strong> installs the Rust CLI plus runtime assets under <code>/usr/local/lib/inferra</code> and symlinks <code>/usr/local/bin/inferra</code>.</li>
+<li><strong>Archived Python reference:</strong> deprecated Python code lives under <code>deprecated/</code> for historical reference only and is not part of the active runtime.</li>
 </ul>
 <p>See also <a href="../troubleshooting/">Troubleshooting</a> if the dashboard or CLI commands fail after install.</p>
-<h2 id="local-python-any-os">Local Python (any OS)<a class="headerlink" href="#local-python-any-os" title="Permanent link">&para;</a></h2>
-<p>From a Git checkout or sdist:</p>
-<pre><code class="language-powershell">python -m pip install -e &quot;.[dev]&quot;
-inferra --config inferra.toml onboard --yes --mode operator --skip-connection-test
-inferra --config inferra.toml guide
+<h2 id="local-repository-workflow">Local repository workflow<a class="headerlink" href="#local-repository-workflow" title="Permanent link">&para;</a></h2>
+<p>From a Git checkout:</p>
+<pre><code class="language-powershell">cargo build --manifest-path src/Cargo.toml -p inferra-cli --release
+inferra --config inferra.toml setup --yes
 inferra --config inferra.toml init-db
-inferra --config inferra.toml dashboard --no-open
-inferra --config inferra.toml serve --help
+inferra --config inferra.toml collectors status
+inferra --config inferra.toml ai status
+inferra --config inferra.toml serve
 </code></pre>
-<p><code>onboard</code> writes <code>inferra.toml</code>, creates <code>storage.data_dir</code>, and runs migrations. <code>guide</code> is read-only and prints the next best path for the current profile (<code>operator</code>, <code>developer</code>, <code>server</code>, or <code>contributor</code>). <code>dashboard --no-open</code> prints the configured control-plane URL and API reachability without opening a browser. <code>init-db</code> is idempotent and safe after upgrades. Use <code>inferra serve</code> (same as <code>inferra run</code>) without <code>--help</code> to bind <code>[server].host</code>:<code>[server].port</code> and open the dashboard at <code>http://127.0.0.1:7433</code> by default.</p>
+<p><code>setup</code> writes <code>inferra.toml</code> and sets <code>storage.data_dir</code> when requested. <code>init-db</code> is idempotent and runs entirely inside the Rust runtime. <code>collectors status</code> shows configured collector/runtime state, and <code>ai status</code> probes the configured provider. Use <code>inferra serve</code> to bind <code>[server].host</code>:<code>[server].port</code> and open the dashboard at <code>http://127.0.0.1:7433</code> by default.</p>
 <h2 id="windows-desktop">Windows desktop<a class="headerlink" href="#windows-desktop" title="Permanent link">&para;</a></h2>
 <p>Typical developer workstation:</p>
 <ol>
-<li>Install Python 3.11+ and Git.</li>
-<li><code>python -m pip install -e ".[dev]"</code> (add <code>.[windows]</code> if you need Event Log and service collectors with pywin32).</li>
-<li>Run the <strong>Local Python</strong> commands above.</li>
+<li>Install Rust and Git.</li>
+<li><code>cargo build --manifest-path src/Cargo.toml -p inferra-cli --release</code></li>
+<li>Run the <strong>Local repository workflow</strong> commands above.</li>
 <li>Optional: enable collectors with <code>inferra config preset windows-server</code> or edit <code>[collectors.*]</code> in <code>inferra.toml</code>.</li>
 </ol>
-<p>For optional TLS or LAN binding, set <code>[server].host</code> / <code>[server].port</code> and keep <code>require_loopback</code> consistent with your threat model (see <code>src/web/http_security.py</code>).</p>
+<p>For optional LAN binding, set <code>[server].host</code> / <code>[server].port</code> and keep <code>[server].require_loopback</code> consistent with your threat model.</p>
 <h2 id="windows-server">Windows Server<a class="headerlink" href="#windows-server" title="Permanent link">&para;</a></h2>
 <p>For unattended operation, install as a service:</p>
-<pre><code class="language-powershell">python -m pip install -e &quot;.[windows]&quot;
+<pre><code class="language-powershell">.\deploy\windows\build-rust-exe.ps1 -CopyUiBundle
 .\deploy\windows\install-service.ps1
 </code></pre>
-<p>Run PowerShell <strong>as Administrator</strong> from the repository or deployment root. The script creates <code>%ProgramData%\Inferra\</code>, applies ACLs for <code>SYSTEM</code> and <code>Administrators</code>, runs first-time <code>setup</code> when <code>inferra.toml</code> is missing, runs <strong><code>init-db</code></strong>, registers the <code>Inferra</code> service with automatic start, and starts it. After install it probes <code>http://127.0.0.1:&lt;port&gt;/</code> and prints the <strong>serve log</strong> path (<code>%ProgramData%\Inferra\logs\serve.log</code>) if the dashboard is not reachable yet.</p>
-<p>Optional <strong><code>-AllowFirewall</code></strong> opens the inbound TCP port from <code>[server].port</code> in <code>inferra.toml</code> (default 7433). Optional <strong><code>-AddCliToPath</code></strong> adds the CLI to the machine PATH (PyInstaller: copies to <code>%ProgramData%\Inferra\bin</code>; pip mode: adds Python <code>Scripts</code>). Optional <strong><code>-KillInferraProcessesBeforeInstall</code></strong> aggressively stops the Inferra service and all <code>inferra.exe</code> before install (use only when no interactive <code>inferra serve</code> must remain — see <a href="../windows_exe_build/">Windows exe build</a>).</p>
-<p><strong>PyInstaller one-file <code>inferra.exe</code></strong> — use the full pipeline (staged output, promotion with retries, smoke test, isolated venv helper). See <strong><a href="../windows_exe_build/">Windows exe (PyInstaller)</a></strong>.</p>
+<p>Run PowerShell <strong>as Administrator</strong> from the repository or deployment root. The script stages the runtime binary plus <code>runtime-assets</code> under <code>%ProgramFiles%\Inferra\</code>, creates <code>%ProgramData%\Inferra\</code>, applies ACLs for <code>SYSTEM</code> and <code>Administrators</code>, runs first-time <code>setup</code> when <code>inferra.toml</code> is missing, runs <strong><code>init-db</code></strong>, registers the <code>Inferra</code> service with automatic start, and starts it. Service registration uses the native <code>inferra service install|remove|start|stop|status</code> command surface only. After install it probes <code>http://127.0.0.1:&lt;port&gt;/api/health</code> and prints the <strong>serve log</strong> path (<code>%ProgramData%\Inferra\logs\serve.log</code>) if the runtime is not reachable yet.</p>
+<p>Optional <strong><code>-AllowFirewall</code></strong> opens the inbound TCP port from <code>[server].port</code> in <code>inferra.toml</code> (default 7433). Optional <strong><code>-AddCliToPath</code></strong> adds <code>%ProgramFiles%\Inferra\bin</code> to the machine PATH. Optional <strong><code>-KillInferraProcessesBeforeInstall</code></strong> aggressively stops the Inferra service and all <code>inferra.exe</code> before install (use only when no interactive <code>inferra serve</code> must remain — see <a href="../windows_exe_build/">Windows exe build</a>).</p>
+<p><strong>PyInstaller one-file <code>inferra.exe</code></strong> is now legacy and archived under <code>deprecated/windows-pyinstaller/</code>. Use the Rust-native build when possible. The legacy pipeline is still documented in <strong><a href="../windows_exe_build/">Windows exe (PyInstaller)</a></strong>.</p>
 <p>Quick path:</p>
-<pre><code class="language-powershell">.\deploy\windows\prepare-build-venv.ps1
-.\deploy\windows\build-exe.ps1 -Python .\.venv-inferra-build\Scripts\python.exe
-.\deploy\windows\install-service.ps1 -InferraExe (Resolve-Path .\dist\inferra.exe) -SkipPipInstall
+<pre><code class="language-powershell">.\deploy\windows\build-rust-exe.ps1 -CopyUiBundle
+.\deploy\windows\install-service.ps1 -InferraExe (Resolve-Path .\dist\inferra-rust.exe) -AddCliToPath
 </code></pre>
 <p>If something still holds <code>inferra.exe</code> open during service upgrade, re-run install with <strong><code>-KillInferraProcessesBeforeInstall</code></strong> (stops all <code>inferra.exe</code> — only when no interactive <code>inferra serve</code> must stay up).</p>
-<p>Service control uses <code>python -m windows_service</code> (or <code>inferra.exe</code> from the PyInstaller build) with pywin32 verbs (<code>install</code>, <code>remove</code>, <code>start</code>, …). Put standard options <strong>before</strong> the verb, for example <code>inferra.exe --startup auto install --config … --data-dir …</code> (pywin32 uses <code>getopt</code>, so <code>install --startup auto</code> is rejected). Inferra strips <code>--config</code> / <code>--data-dir</code> before calling pywin32.</p>
+<p>Service control on the Rust-native path uses the built-in service command surface, for example:</p>
+<pre><code class="language-powershell">inferra --config &quot;C:\ProgramData\Inferra\inferra.toml&quot; service status
+inferra --config &quot;C:\ProgramData\Inferra\inferra.toml&quot; service install --startup auto
+inferra service restart
+</code></pre>
+<p>The archived Python / pywin32 path remains available only as reference under <code>deprecated/</code>; it is not part of service install or runtime execution.</p>
 <p>Remove the service:</p>
 <pre><code class="language-powershell">.\deploy\windows\uninstall-service.ps1
 </code></pre>
 <h2 id="linux-systemd">Linux (systemd)<a class="headerlink" href="#linux-systemd" title="Permanent link">&para;</a></h2>
-<p>The unit file <code>deploy/systemd/inferra.service</code> uses <code>DynamicUser=yes</code>, <code>StateDirectory=inferra</code>, and <code>ProtectSystem=strict</code> with state under <code>/var/lib/inferra</code>. Install the <code>inferra</code> binary on <code>PATH</code> (for example via <code>deploy/linux/fpm-package.sh</code>, which stages <code>/opt/inferra/venv</code> and <code>/usr/bin/inferra</code>), place config at <code>/etc/inferra/inferra.toml</code>, then:</p>
+<p>The unit file <code>deploy/systemd/inferra.service</code> uses <code>DynamicUser=yes</code>, <code>StateDirectory=inferra</code>, and <code>ProtectSystem=strict</code> with state under <code>/var/lib/inferra</code>. Install the packaged Rust runtime on <code>PATH</code> (for example via <code>deploy/linux/fpm-package.sh</code>, which stages <code>/opt/inferra/inferra</code>, <code>/opt/inferra/runtime-assets</code>, and <code>/usr/bin/inferra</code>), place config at <code>/etc/inferra/inferra.toml</code>, then:</p>
 <pre><code class="language-bash">sudo cp deploy/systemd/inferra.service /lib/systemd/system/inferra.service
 sudo systemctl daemon-reload
 sudo systemctl enable --now inferra
@@ -287,14 +292,15 @@ sudo systemctl enable --now inferra
 <p>From the repository root:</p>
 <pre><code class="language-bash">docker compose up --build
 </code></pre>
-<p>Adjust published ports and volume mounts for <code>inferra.toml</code> and persistent <code>data/</code> per <code>compose.yaml</code>.</p>
+<p>The image now follows the same packaged layout as the other Rust-first targets: <code>/app/inferra</code> plus <code>/app/runtime-assets</code>. Adjust published ports and volume mounts for <code>inferra.toml</code> and persistent <code>data/</code> per <code>compose.yaml</code>.</p>
 <h2 id="kubernetes">Kubernetes<a class="headerlink" href="#kubernetes" title="Permanent link">&para;</a></h2>
 <pre><code class="language-bash">helm install inferra ./deploy/helm/inferra
 </code></pre>
-<p>For in-cluster Kubernetes collection, align <code>rbac.create</code>, ServiceAccount bindings, and <code>[collectors.kubernetes]</code> in <code>values.yaml</code> with your namespace scope. See <a href="../troubleshooting/">Troubleshooting</a> for RBAC symptoms.</p>
+<p>The chart runs the native <code>inferra init-db</code> init container followed by the native <code>inferra serve</code> container. For in-cluster Kubernetes collection, align <code>rbac.create</code>, ServiceAccount bindings, and <code>[collectors.kubernetes]</code> in <code>values.yaml</code> with your namespace scope. See <a href="../troubleshooting/">Troubleshooting</a> for RBAC symptoms.</p>
 <h2 id="macos-launchdaemon">macOS (LaunchDaemon)<a class="headerlink" href="#macos-launchdaemon" title="Permanent link">&para;</a></h2>
-<p>Requires <code>inferra</code> on <code>PATH</code> (for example <code>python3 -m pip install .</code>):</p>
-<pre><code class="language-bash">sudo ./deploy/macos/install.sh
+<p>Build the Rust CLI first, then install the LaunchDaemon bundle. The workspace root is <code>src/Cargo.toml</code> (Rust crates live under <code>src/crates/</code>), and the installer copies the native binary plus frontend/runtime assets under <code>/usr/local/lib/inferra</code>:</p>
+<pre><code class="language-bash">cargo build --manifest-path src/Cargo.toml -p inferra-cli --release
+sudo ./deploy/macos/install.sh
 </code></pre>
 <p>Remove:</p>
 <pre><code class="language-bash">sudo ./deploy/macos/uninstall.sh

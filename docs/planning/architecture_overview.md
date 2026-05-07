@@ -1,10 +1,16 @@
 # Architecture Overview
 
-Implementation mapping: see [implementation index](implementation_index.md) for planning documents linked to `src/` packages.
+Implementation mapping: see [implementation index](implementation_index.md) for planning documents linked to the Rust crates and the remaining Python packages. Migration ownership is tracked in [rust_migration_matrix.md](rust_migration_matrix.md).
 
 ## Design Philosophy
 
-Inferra is a local-first runtime debugging system that operates on a strict separation of concerns:
+Inferra is a local-first runtime debugging system that operates on a strict separation of concerns.
+
+The current target architecture is a Rust-primary control plane with Python
+retained only behind an internal AI/analysis worker boundary. Rust owns the
+operator-facing runtime shell, public API, Windows service shell, packaging, and
+hot-path systems logic. Python remains responsible only for the retained
+AI/explanation execution path while that logic is not yet ported.
 
 - **Reproducible reasoning layer**: Correlation, hypothesis generation, scoring, and ranking are performed by rule-based algorithms with explicitly defined heuristics. Given the same input **and** the same internal state (baselines, scoring weights), the system produces the same output. However, several components involve bounded uncertainty: anomaly detection baselines shift over time, log normalization uses heuristic parsers that may misclassify ambiguous input, and deduplication relies on template-based fingerprinting that is imperfect for novel log formats. The system tracks and surfaces this uncertainty through data quality scores (see below) rather than pretending inputs are always clean.
 - **Probabilistic shell**: An LLM layer exists solely to translate structured, already-decided results into human-readable explanations. It never influences decisions, rankings, or scores.
@@ -164,15 +170,18 @@ Circular dependencies are forbidden. Data flows strictly downward through the pi
 
 ## Concurrency Model
 
-Inferra uses a single-process, multi-coroutine architecture (Python asyncio):
+Inferra uses a local-first, small-footprint runtime with a single Rust primary
+process:
 
-- **Collectors** run as independent async tasks, each polling or tailing its source.
+- **Collectors and runtime services** run as Rust async tasks under Tokio.
 - **Normalization** is a synchronous pipeline invoked per-event (low latency requirement: <5ms per event).
 - **Analysis** runs on a periodic tick (configurable, default 5 seconds) or is triggered when event volume exceeds a threshold.
 - **Reasoning** is triggered per-incident (on incident creation or update).
-- **Explanation** is triggered on-demand (user requests explanation) or lazily on incident finalization.
+- **Explanation / AI investigation** is triggered on-demand through native Rust provider integration when enabled.
 
-There is no multi-threading. All CPU-bound work (scoring, graph traversal) is designed to complete within single-digit milliseconds for typical incident sizes (<1000 events).
+The public control plane remains local and self-contained. Operator-facing
+runtime behavior stays inside the native Rust process so packaging, service
+hosting, and API delivery no longer depend on deprecated Python code.
 
 ---
 
@@ -181,13 +190,15 @@ There is no multi-threading. All CPU-bound work (scoring, graph traversal) is de
 ```
 Single machine:
 ┌─────────────────────────────────────────┐
-│  Inferra Process                        │
-│  ├── Collector tasks (async)            │
-│  ├── Normalization pipeline (sync)      │
-│  ├── Analysis engine (periodic async)   │
-│  ├── Reasoning engine (event-driven)    │
-│  ├── Explanation layer (on-demand)      │
-│  └── Web UI server (localhost:PORT)     │
+│  Inferra Rust Process                   │
+│  ├── Collector tasks                    │
+│  ├── Normalization / storage            │
+│  ├── Analysis / runtime context         │
+│  ├── Public API + Web UI host           │
+│  └── Service / CLI shell                │
+│                                         │
+│  Optional internal worker:              │
+│  └── Python AI / explanation service    │
 │                                         │
 │  Storage:                               │
 │  ├── ./data/events.db    (SQLite)       │
@@ -197,7 +208,9 @@ Single machine:
 └─────────────────────────────────────────┘
 ```
 
-No sidecar processes. No message queues. No container orchestration. One process, one machine, full control.
+No message queues. No container orchestration. The intentional runtime boundary
+is one local Rust control-plane process plus an optional local Python worker for
+AI/analysis.
 
 ---
 

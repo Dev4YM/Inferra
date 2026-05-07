@@ -19,7 +19,7 @@ env:
   REGISTRY: ghcr.io
 
 jobs:
-  verify:
+  verify-python-support:
     runs-on: ubuntu-latest
     steps:
       - uses: actions/checkout@v4
@@ -28,43 +28,91 @@ jobs:
           python-version: "3.12"
       - name: Install
         run: python -m pip install -e ".[dev]"
+      - name: Compile
+        run: python -m compileall tests deploy deprecated
+      - name: Ruff
+        run: python -m ruff check tests deploy deprecated
       - name: Test
         run: python -m pytest -q
 
-  wheel-sdist:
-    needs: verify
+  docs:
+    needs: verify-python-support
     runs-on: ubuntu-latest
     steps:
       - uses: actions/checkout@v4
       - uses: actions/setup-python@v5
         with:
           python-version: "3.12"
-      - name: Build wheel and sdist
-        run: python -m pip install build && python -m build
-      - uses: actions/upload-artifact@v4
+      - name: Install docs tooling
+        run: python -m pip install -e ".[docs,dev]"
+      - name: Build docs
+        run: mkdocs build --strict
+
+  verify-rust:
+    needs: verify-python-support
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: dtolnay/rust-toolchain@stable
+      - name: Rust checks
+        run: |
+          cargo fmt --manifest-path src/Cargo.toml --all --check
+          cargo clippy --manifest-path src/Cargo.toml --workspace --all-targets -- -D warnings
+          cargo test --manifest-path src/Cargo.toml --workspace
+          cargo build --manifest-path src/Cargo.toml -p inferra-cli --release
+
+  frontend:
+    needs: verify-python-support
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-node@v4
         with:
-          name: python-dist
-          path: dist/*
+          node-version: "20"
+          cache: npm
+          cache-dependency-path: src/web/frontend/package-lock.json
+      - name: Install frontend dependencies
+        working-directory: src/web/frontend
+        run: npm ci
+      - name: Build frontend
+        working-directory: src/web/frontend
+        run: npm run build
+
+  runtime-smoke:
+    needs: [verify-rust, frontend]
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: dtolnay/rust-toolchain@stable
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.12"
+      - name: Build release CLI
+        run: cargo build --manifest-path src/Cargo.toml -p inferra-cli --release
+      - name: Smoke built runtime
+        run: >
+          python tests/scripts/rust_runtime_smoke.py
+          --binary "${{ github.workspace }}/target/release/inferra"
+          --repo-root "${{ github.workspace }}"
+          --ui-dist "${{ github.workspace }}/src/web/ui_dist"
 
   sbom:
-    needs: verify
+    needs: verify-rust
     runs-on: ubuntu-latest
     steps:
       - uses: actions/checkout@v4
-      - uses: actions/setup-python@v5
-        with:
-          python-version: "3.12"
-      - name: Install project and SBOM tool
-        run: python -m pip install -e . cyclonedx-bom
-      - name: Generate SBOM
-        run: cyclonedx-py environment --pyproject pyproject.toml --of JSON -o cyclonedx-sbom.json
+      - uses: dtolnay/rust-toolchain@stable
+      - name: Install cargo-cyclonedx
+        run: cargo install cargo-cyclonedx --locked
+      - name: Generate Rust SBOM
+        run: cargo cyclonedx --manifest-path src/Cargo.toml --format json --output-file rust-sbom.json
       - uses: actions/upload-artifact@v4
         with:
-          name: sbom-cyclonedx
-          path: cyclonedx-sbom.json
+          name: sbom-cyclonedx-rust
+          path: rust-sbom.json
 
   helm-chart:
-    needs: verify
+    needs: [verify-python-support, docs]
     runs-on: ubuntu-latest
     steps:
       - uses: actions/checkout@v4
@@ -80,39 +128,48 @@ jobs:
 
   windows-exe:
     if: startsWith(github.ref, 'refs/tags/v')
-    needs: verify
+    needs: [verify-rust, frontend]
     runs-on: windows-latest
     steps:
       - uses: actions/checkout@v4
       - uses: actions/setup-python@v5
         with:
           python-version: "3.12"
-      - name: Install
-        run: python -m pip install -e ".[windows,build-windows]"
-      - name: Build onefile exe (staged dist + promote + smoke test)
+      - uses: dtolnay/rust-toolchain@stable
+      - name: Build native Rust exe
         shell: pwsh
-        run: ./deploy/windows/build-exe.ps1 -SkipReleaseLocks -Python python -CleanPyInstallerWork
+        run: ./deploy/windows/build-rust-exe.ps1 -CopyUiBundle
+      - name: Smoke built Windows runtime
+        shell: pwsh
+        run: >
+          python tests/scripts/rust_runtime_smoke.py
+          --binary "${{ github.workspace }}/dist/inferra.exe"
+          --repo-root "${{ github.workspace }}"
+          --ui-dist "${{ github.workspace }}/dist/runtime-assets/ui_dist"
       - name: Sign with signtool when certificate secret is set
         shell: pwsh
         env:
           WINDOWS_CERT_THUMBPRINT: ${{ secrets.WINDOWS_CERT_THUMBPRINT }}
         run: |
-          $exe = "dist/inferra.exe"
           if (-not $env:WINDOWS_CERT_THUMBPRINT) {
             Write-Host "WINDOWS_CERT_THUMBPRINT not set; skipping Authenticode (see docs/operations/release_signing.md)."
             exit 0
           }
-          signtool sign /sha1 $env:WINDOWS_CERT_THUMBPRINT /fd SHA256 /tr http://timestamp.digicert.com /td SHA256 $exe
+          $targets = @("dist/inferra-rust.exe", "dist/inferra.exe") | Where-Object { Test-Path $_ }
+          foreach ($exe in $targets) {
+            signtool sign /sha1 $env:WINDOWS_CERT_THUMBPRINT /fd SHA256 /tr http://timestamp.digicert.com /td SHA256 $exe
+          }
       - uses: actions/upload-artifact@v4
         with:
-          name: inferra-windows-exe
+          name: inferra-windows-rust-exe
           path: |
+            dist/inferra-rust.exe
             dist/inferra.exe
-            dist/inferra-*.exe
+            dist/runtime-assets/**
 
   docker-image:
     if: startsWith(github.ref, 'refs/tags/v')
-    needs: verify
+    needs: [verify-rust, frontend, runtime-smoke, docs]
     runs-on: ubuntu-latest
     steps:
       - uses: actions/checkout@v4

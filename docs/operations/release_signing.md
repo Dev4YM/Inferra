@@ -13,11 +13,11 @@ If OIDC is unavailable in a fork, the sign step fails; remove or gate that step 
 
 ## Windows executable (signtool, Authenticode)
 
-When a code-signing certificate is installed in the Windows runner certificate store, set `WINDOWS_CERT_THUMBPRINT` to the SHA-1 thumbprint of the signing cert. The release job runs:
+When a code-signing certificate is installed in the Windows runner certificate store, set `WINDOWS_CERT_THUMBPRINT` to the SHA-1 thumbprint of the signing cert. The release job signs every Windows executable that exists in `dist/`, including the guaranteed native artifact:
 
-`signtool sign /sha1 %WINDOWS_CERT_THUMBPRINT% /fd SHA256 /tr http://timestamp.digicert.com /td SHA256 dist/inferra.exe`
+`signtool sign /sha1 %WINDOWS_CERT_THUMBPRINT% /fd SHA256 /tr http://timestamp.digicert.com /td SHA256 dist/inferra-rust.exe`
 
-When the secret is absent, the job skips signing and uploads the unsigned `inferra.exe` artifact. For production releases, sign on a trusted machine or use a managed signing service.
+When `dist/inferra.exe` is also present, it is signed in the same step as the compatibility filename. When the secret is absent, the job skips signing and uploads unsigned artifacts. For production releases, sign on a trusted machine or use a managed signing service.
 
 ## SBOM
 

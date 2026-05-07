@@ -6,7 +6,7 @@ from pathlib import Path
 
 import pytest
 
-from cli import main
+from inferra_legacy.cli import main
 
 
 def test_readme_and_operations_cli_smoke(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
@@ -75,7 +75,7 @@ def _command_lines_from_fence(markdown: str, fence: str) -> list[str]:
 def _argv_from_command_line(command: str) -> list[str] | None:
     if command.startswith("inferra "):
         return shlex.split(command, posix=False)[1:]
-    if command.startswith("python -m cli "):
+    if command.startswith("python -m inferra_legacy.cli "):
         return shlex.split(command, posix=False)[3:]
     return None
 
@@ -135,6 +135,8 @@ def _argv_requires_live_api(argv: list[str]) -> bool:
         return False
     if parts[0] in {"overview", "investigate", "incidents", "events", "services"}:
         return True
+    if parts[0] == "ai" and "investigate" in parts:
+        return True
     if "collectors" in parts and ("start" in parts or "stop" in parts):
         return True
     return False
@@ -145,7 +147,7 @@ def _argv_requires_ollama_network(argv: list[str]) -> bool:
         return False
     if "ai" not in argv:
         return False
-    if "pull" in argv or "test" in argv:
+    if argv and _strip_global_cli_flags(argv)[:1] == ["ai"]:
         return True
     return False
 

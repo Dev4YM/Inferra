@@ -45,9 +45,8 @@ The primary product promise:
 The reset implementation has completed the first meaningful pass. The next implementation phase should harden and polish the control plane:
 
 1. Continue hardening the official React source now under `src/web/frontend`.
-2. Continue shrinking `src/web/api.py` by moving shared contracts, schemas, and websocket/dashboard glue into clear modules.
-3. Continue shrinking `src/cli.py` by moving parser registration and remaining command glue into `src/cli_core`.
-4. Expand browser coverage for the Overview, AI Investigator, Workspace, Control, and Settings screens.
-5. Reconcile web mode persistence with persisted config mode.
-6. Deepen incident, service, evidence, and workspace drilldowns so the UI feels less like a shell and more like an investigator.
-7. Keep frontend dependencies and build caches ignored while intentionally packaging `src/web/ui_dist`.
+2. Keep refining the native Rust control plane across `src/crates/inferra-api/`, `src/crates/inferra-cli/`, `src/crates/inferra-core/`, and `src/crates/inferra-storage/`.
+3. Expand browser coverage for the Overview, AI Investigator, Workspace, Control, and Settings screens.
+4. Reconcile web mode persistence with persisted config mode.
+5. Deepen incident, service, evidence, and workspace drilldowns so the UI feels less like a shell and more like an investigator.
+6. Keep frontend dependencies and build caches ignored while intentionally packaging `src/web/ui_dist`.

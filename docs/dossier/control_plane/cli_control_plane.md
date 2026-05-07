@@ -276,4 +276,4 @@ JSON output should be stable enough for scripts.
 
 ## Implementation Note
 
-The first command split exists under `src/cli_core/commands/`. Keep moving parser registration and remaining legacy command glue out of `src/cli.py` before adding another large command family.
+The active CLI implementation is the Rust binary in `src/crates/inferra-cli/src/main.rs`. Any `src/cli.py` / `src/cli_core/commands/` references in older notes should be read as archived migration context, not as the live command surface.

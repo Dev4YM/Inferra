@@ -18,6 +18,7 @@ perf_report.json
 venv/
 node_modules/
 *.tsbuildinfo
+target/
 .idea/
 .vscode/
 .env

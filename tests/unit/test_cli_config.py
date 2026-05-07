@@ -2,7 +2,7 @@ from __future__ import annotations
 
 import json
 
-from cli import main
+from inferra_legacy.cli import main
 
 
 def test_config_show_json_returns_typed_config(tmp_path, capsys) -> None:

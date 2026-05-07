@@ -3,9 +3,9 @@ from __future__ import annotations
 import json
 from dataclasses import dataclass
 
-import cli
-import windows_service
-from cli import main
+import inferra_legacy.cli as cli
+import inferra_legacy.windows_service as windows_service
+from inferra_legacy.cli import main
 
 
 @dataclass
@@ -82,7 +82,12 @@ def test_service_install_json_invokes_windows_service_helper(monkeypatch, tmp_pa
 
     assert result == 0
     assert payload["startup"] == "manual"
-    assert calls["command"][:4] == [cli.sys.executable, "-m", "windows_service", "install"]
+    assert calls["command"][:4] == [
+        cli.sys.executable,
+        "-m",
+        "inferra_legacy.windows_service",
+        "install",
+    ]
     assert "--config" in calls["command"]
     assert str(config_path) in calls["command"]
     assert "--data-dir" in calls["command"]

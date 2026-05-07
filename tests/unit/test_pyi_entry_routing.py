@@ -52,7 +52,7 @@ def test_dispatch_cli_for_config_then_serve() -> None:
 
 @pytest.mark.skipif(os.name != "nt", reason="frozen SCM dispatch is Windows-only")
 def test_main_frozen_single_argv_tries_service_host(monkeypatch: pytest.MonkeyPatch) -> None:
-    import windows_service as ws
+    import inferra_legacy.windows_service as ws
 
     pe = _load_pyi_entry()
     called: list[bool] = []
@@ -62,8 +62,34 @@ def test_main_frozen_single_argv_tries_service_host(monkeypatch: pytest.MonkeyPa
         return True
 
     monkeypatch.setattr(ws, "try_run_frozen_windows_service", fake_try)
+    monkeypatch.setattr(pe, "_frozen_windows_has_console_window", lambda: False)
     monkeypatch.setattr(sys, "argv", [r"C:\dist\inferra.exe"])
     monkeypatch.setattr(sys, "frozen", True, raising=False)
 
     assert pe.main() == 0
     assert called == [True]
+
+
+@pytest.mark.skipif(os.name != "nt", reason="frozen SCM dispatch is Windows-only")
+def test_main_frozen_single_argv_skips_service_dispatcher_when_console(monkeypatch: pytest.MonkeyPatch) -> None:
+    """Interactive ``inferra`` with no args must not call StartServiceCtrlDispatcher."""
+    import inferra_legacy.windows_service as ws
+
+    pe = _load_pyi_entry()
+    called: list[bool] = []
+
+    def fake_try() -> bool:
+        called.append(True)
+        return False
+
+    monkeypatch.setattr(ws, "try_run_frozen_windows_service", fake_try)
+    monkeypatch.setattr(pe, "_frozen_windows_has_console_window", lambda: True)
+    monkeypatch.setattr(sys, "argv", [r"C:\dist\inferra.exe"])
+    monkeypatch.setattr(sys, "frozen", True, raising=False)
+
+    import inferra_legacy.cli as cli
+
+    monkeypatch.setattr(cli, "main", lambda: 7)
+
+    assert pe.main() == 7
+    assert called == []

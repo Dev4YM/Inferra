@@ -1,0 +1,29 @@
+[package]
+name = "inferra-api"
+version.workspace = true
+edition.workspace = true
+license.workspace = true
+
+[dependencies]
+anyhow = { workspace = true }
+axum = { workspace = true }
+bytes = { workspace = true }
+http = "1"
+inferra-config = { path = "../inferra-config" }
+inferra-collectors = { path = "../inferra-collectors" }
+inferra-contracts = { path = "../inferra-contracts" }
+inferra-core = { path = "../inferra-core" }
+inferra-storage = { path = "../inferra-storage" }
+reqwest = { workspace = true }
+serde = { workspace = true }
+serde_json = { workspace = true }
+time = { workspace = true }
+tokio = { workspace = true }
+toml = { workspace = true }
+tower = { workspace = true }
+tower-http = { workspace = true }
+tracing = { workspace = true }
+walkdir = { workspace = true }
+
+[dev-dependencies]
+rusqlite = { workspace = true }

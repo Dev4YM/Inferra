@@ -225,24 +225,25 @@
 <h2 id="quality-gates">Quality gates<a class="headerlink" href="#quality-gates" title="Permanent link">&para;</a></h2>
 <ol>
 <li><strong>Tests</strong>: <code>python -m pytest -q</code> (full matrix locally or via CI) and <code>python -m pytest -q -m chaos</code> on Linux (SIGKILL SQLite scenario).</li>
-<li><strong>Static checks</strong>: <code>python -m compileall src tests</code> and <code>python -m ruff check src tests</code>.</li>
-<li><strong>Contributor path</strong>: <code>inferra --config inferra.toml guide --profile contributor</code>; confirm the recommended path matches the release workflow.</li>
-<li><strong>Repository readiness</strong>: <code>inferra --config inferra.toml doctor --release</code>; confirm release checks pass and any ignored-artifact notes are intentional.</li>
+<li><strong>Rust checks</strong>: <code>cargo fmt --manifest-path src/Cargo.toml --all --check</code>, <code>cargo clippy --manifest-path src/Cargo.toml --workspace --all-targets -- -D warnings</code>, <code>cargo test --manifest-path src/Cargo.toml --workspace</code>, and <code>cargo build --manifest-path src/Cargo.toml -p inferra-cli --release</code>.</li>
+<li><strong>Frontend + docs</strong>: <code>npm ci &amp;&amp; npm run build</code> in <code>src/web/frontend</code>, plus <code>mkdocs build --strict</code>.</li>
+<li><strong>Python support checks</strong>: <code>python -m compileall tests deploy deprecated</code> and <code>python -m ruff check tests deploy deprecated</code>.</li>
+<li><strong>Native runtime smoke</strong>: run <code>python tests/scripts/rust_runtime_smoke.py --binary ./target/release/inferra --repo-root .</code> after the frontend build so the built Rust CLI serves the real UI bundle and responds on <code>/api/health</code>, <code>/api/overview</code>, and <code>/api/collectors</code>.</li>
+<li><strong>Repository readiness</strong>: confirm ignored-artifact notes are intentional and that release docs match the current Rust-first command surface.</li>
 <li><strong>Performance</strong>: <code>python -m pytest -q -m perf</code> with <code>PERF_REPORT_PATH</code> set; confirm budgets in <code>tests/perf/test_budgets.py</code> still pass.</li>
 </ol>
 <h2 id="documentation">Documentation<a class="headerlink" href="#documentation" title="Permanent link">&para;</a></h2>
 <ol>
-<li><strong>MkDocs</strong>: <code>python -m pip install -e ".[docs]"</code> then <code>mkdocs build --strict</code> (or project-standard doc build).</li>
 <li><strong>Threat model</strong>: confirm <code>docs/security/threat_model.md</code> reflects current binding, auth, CSP, and redaction behavior.</li>
 <li><strong>CHANGELOG</strong>: update <code>CHANGELOG.md</code> for v0.2.0 user-visible changes.</li>
 <li><strong>Roadmap</strong>: tick the resilience slice in <code>docs/implementation_roadmap.md</code>.</li>
 </ol>
 <h2 id="versioning-and-artifacts">Versioning and artifacts<a class="headerlink" href="#versioning-and-artifacts" title="Permanent link">&para;</a></h2>
 <ol>
-<li><strong>Version</strong>: <code>pyproject.toml</code> project <code>version</code> matches the tag (0.2.0).</li>
+<li><strong>Version</strong>: both <code>pyproject.toml</code> and <code>src/Cargo.toml</code> workspace version match the tag (0.2.0).</li>
 <li><strong>Git tag</strong>: <code>git tag -a v0.2.0 -m "Inferra 0.2.0"</code> after a green main branch.</li>
-<li><strong>Artifacts</strong>: build wheel/sdist (and platform packages per <code>docs/operations/release_signing.md</code>); sign where policy requires (cosign for images, signtool for Windows binaries).</li>
-<li><strong>GitHub Release</strong>: upload artifacts, attach SBOM if produced by CI, publish release notes from <code>CHANGELOG.md</code>.</li>
+<li><strong>Artifacts</strong>: build the native Rust Windows bundle, Helm chart, Rust CycloneDX SBOM, and the container image; sign where policy requires (cosign for images, signtool for Windows binaries).</li>
+<li><strong>GitHub Release</strong>: upload artifacts, attach the Rust SBOM produced by CI, publish release notes from <code>CHANGELOG.md</code>.</li>
 </ol>
 <h2 id="post-release">Post-release<a class="headerlink" href="#post-release" title="Permanent link">&para;</a></h2>
 <ol>

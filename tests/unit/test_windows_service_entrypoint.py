@@ -1,6 +1,6 @@
 import pytest
 
-import windows_service
+import inferra_legacy.windows_service as windows_service
 
 
 def test_windows_service_entrypoint_uses_importable_service_class(monkeypatch):
@@ -18,4 +18,4 @@ def test_windows_service_entrypoint_uses_importable_service_class(monkeypatch):
 
     assert windows_service.main() == 0
     assert call["cls"] is windows_service.InferraWindowsService
-    assert call["service_class_string"] == "windows_service.InferraWindowsService"
+    assert call["service_class_string"] == "inferra_legacy.windows_service.InferraWindowsService"

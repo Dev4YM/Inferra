@@ -230,10 +230,10 @@
 <p>The repo should be cleaned in phases to avoid breaking working tests and packaging.</p>
 <h2 id="target-top-level-shape">Target Top-Level Shape<a class="headerlink" href="#target-top-level-shape" title="Permanent link">&para;</a></h2>
 <pre><code class="language-text">src/
-  app.py
-  cli.py
-  windows_service.py
+  Cargo.toml
+  crates/
   ai/
+    worker/
   analysis/
   collectors/
   config/
@@ -249,8 +249,12 @@ tests/
 docs/
 deploy/
 scripts/
+deprecated/
 </code></pre>
-<p>Top-level <code>webui/</code> should not remain as a separate product root after migration.</p>
+<p>Top-level <code>webui/</code> should not remain as a separate product root after migration.
+In the Rust-primary cutover, <code>src/Cargo.toml</code> + <code>src/crates/</code> became the runtime/control-plane home,
+<code>src/web/frontend/</code> became the canonical UI source, and <code>deprecated/</code> now holds replaced
+legacy paths after verification.</p>
 <h2 id="web-migration">Web Migration<a class="headerlink" href="#web-migration" title="Permanent link">&para;</a></h2>
 <p>Original:</p>
 <pre><code class="language-text">webui/
@@ -272,31 +276,30 @@ src/web/ui_dist/
 <li>Remove <code>src/web/static</code> after the React UI has route parity and tests pass (done for active source).</li>
 </ol>
 <h2 id="backend-api-migration">Backend API Migration<a class="headerlink" href="#backend-api-migration" title="Permanent link">&para;</a></h2>
-<p>Current:</p>
+<p>Historical Python target during migration:</p>
 <pre><code class="language-text">src/web/api.py
-</code></pre>
-<p>Target:</p>
-<pre><code class="language-text">src/web/app.py
+src/web/app.py
 src/web/routers/*.py
 src/web/schemas/*.py
 </code></pre>
-<p>Migration steps:</p>
-<ol>
-<li>Keep <code>create_app</code> compatibility import.</li>
-<li>Extract health/config/dashboard routes first.</li>
-<li>Extract collectors routes.</li>
-<li>Extract AI routes.</li>
-<li>Extract events/incidents/services routes.</li>
-<li>Keep frontend serving isolated outside route handlers.</li>
-<li>Preserve endpoint paths during first migration.</li>
-<li>Add tests per router group.</li>
-</ol>
+<p>Live outcome after cutover:</p>
+<pre><code class="language-text">src/crates/inferra-api/
+src/crates/inferra-core/
+src/crates/inferra-storage/
+src/web/frontend/
+</code></pre>
+<p>Migration steps below are archival notes from the Python-to-Rust transition and should not be treated as the current implementation plan.
+5. Extract events/incidents/services routes.
+6. Keep frontend serving isolated outside route handlers.
+7. Preserve endpoint paths during first migration.
+8. Add tests per router group.</p>
 <h2 id="cli-migration">CLI Migration<a class="headerlink" href="#cli-migration" title="Permanent link">&para;</a></h2>
 <p>Current:</p>
-<pre><code class="language-text">src/cli.py
+<pre><code class="language-text">deprecated/inferra_legacy/cli.py
+src/cli_core/
 </code></pre>
 <p>Target:</p>
-<pre><code class="language-text">src/cli.py
+<pre><code class="language-text">deprecated/inferra_legacy/cli.py  # compatibility only; Rust CLI is primary
 src/cli_core/
 </code></pre>
 <p>Migration steps:</p>

@@ -233,8 +233,8 @@
 </ul>
 <h2 id="consequences">Consequences<a class="headerlink" href="#consequences" title="Permanent link">&para;</a></h2>
 <ul>
-<li>API and CLI surfaces separate “reasoning” from “explanation” and keep prompts redacted for UI display.</li>
-<li>Provider configuration (<code>src/ai/</code>) never imports reasoning engines for scoring updates.</li>
+<li>API and CLI surfaces separate “reasoning” from “explanation”, keep prompts redacted for UI display, and persist explanation/trace artifacts without feeding them back into scoring.</li>
+<li>Provider configuration and investigation prompting live in the native Rust runtime; explanation output never mutates deterministic scoring or ranking.</li>
 </ul>
               
             </div>

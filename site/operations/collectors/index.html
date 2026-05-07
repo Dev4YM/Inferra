@@ -55,7 +55,7 @@
     <ul class="current">
     <li class="toctree-l2"><a class="reference internal" href="#supervised-collection">Supervised collection</a>
     </li>
-    <li class="toctree-l2"><a class="reference internal" href="#one-shot-collection">One-shot collection</a>
+    <li class="toctree-l2"><a class="reference internal" href="#app-ingest">App ingest</a>
     </li>
     <li class="toctree-l2"><a class="reference internal" href="#host-metrics">Host metrics</a>
     </li>
@@ -239,51 +239,33 @@
             <div class="section" itemprop="articleBody">
               
                 <h1 id="collector-commands">Collector Commands<a class="headerlink" href="#collector-commands" title="Permanent link">&para;</a></h1>
-<p>Inferra collectors are read-only toward observed systems. Implementation lives under <code>src/collectors/</code> with factories in <code>src/collectors/factory.py</code>.</p>
+<p>Inferra collectors are read-only toward observed systems. The active collector runtime is implemented in Rust under <code>src/crates/inferra-collectors/</code>.</p>
 <h2 id="supervised-collection">Supervised collection<a class="headerlink" href="#supervised-collection" title="Permanent link">&para;</a></h2>
-<p>Supervisors run inside <code>inferra run</code> / <code>inferra serve</code> or standalone <code>inferra run-collectors</code>. Example sequences:</p>
+<p>Collectors run inside the local runtime started by <code>inferra serve</code>. The active CLI surface for operators is <code>collectors status</code>, <code>collectors start</code>, and <code>collectors stop</code>.</p>
 <p>Windows:</p>
 <pre><code class="language-powershell">inferra --config inferra.toml config preset windows-server
-inferra --config inferra.toml run-collectors --help
 inferra --config inferra.toml collectors status
-inferra --config inferra.toml collectors start --help
-inferra --config inferra.toml collectors stop --help
+inferra --config inferra.toml serve
+inferra --config inferra.toml collectors start
 </code></pre>
 <p>Linux:</p>
 <pre><code class="language-bash">inferra --config inferra.toml config preset linux-node
-inferra --config inferra.toml run-collectors --help
+inferra --config inferra.toml serve
 inferra --config inferra.toml collectors status
 </code></pre>
 <p>Docker host:</p>
 <pre><code class="language-bash">inferra --config inferra.toml config preset docker-host
-inferra --config inferra.toml run-collectors --help
+inferra --config inferra.toml serve
 inferra --config inferra.toml collectors status
 </code></pre>
 <p>Kubernetes:</p>
-<pre><code class="language-bash">python -m pip install &quot;.[kubernetes]&quot;
-inferra --config inferra.toml config preset kubernetes
-inferra --config inferra.toml run-collectors --help
+<pre><code class="language-bash">inferra --config inferra.toml config preset kubernetes
+inferra --config inferra.toml serve
 inferra --config inferra.toml collectors status
 </code></pre>
-<p><code>inferra collectors status</code> prefers live daemon status. If no daemon is running, it reports configured collectors as <code>not_running</code> and hints to start <code>inferra run</code>. <code>collectors start</code> and <code>collectors stop</code> require a running API (see <a href="../troubleshooting/">Troubleshooting</a>).</p>
-<h2 id="one-shot-collection">One-shot collection<a class="headerlink" href="#one-shot-collection" title="Permanent link">&para;</a></h2>
-<p>Single pass plus normalization drain:</p>
-<p>Windows:</p>
-<pre><code class="language-powershell">inferra --config inferra.toml collect-host
-inferra --config inferra.toml collect-processes
-inferra --config inferra.toml collect-services
-inferra --config inferra.toml collect-eventlog
-</code></pre>
-<p>Linux:</p>
-<pre><code class="language-bash">inferra --config inferra.toml collect-host
-inferra --config inferra.toml collect-processes
-inferra --config inferra.toml collect-syslog
-inferra --config inferra.toml collect-journald
-</code></pre>
-<p>Kubernetes:</p>
-<pre><code class="language-bash">inferra --config inferra.toml collect-kubernetes
-</code></pre>
-<p>Use <code>--json</code> for machine-readable summaries.</p>
+<p><code>inferra collectors status</code> prefers live runtime status. If no daemon is running, it falls back to configured collector rows from <code>inferra.toml</code>. <code>collectors start</code> and <code>collectors stop</code> call the local Rust API, so <code>inferra serve</code> must already be running (see <a href="../troubleshooting/">Troubleshooting</a>).</p>
+<h2 id="app-ingest">App ingest<a class="headerlink" href="#app-ingest" title="Permanent link">&para;</a></h2>
+<p>Application ingest is part of the collector surface. It can run on the main API mount (<code>[collectors.app].enable_main_api = true</code>) and optionally on a standalone listener (<code>enable_standalone = true</code>).</p>
 <hr />
 <h2 id="host-metrics">Host metrics<a class="headerlink" href="#host-metrics" title="Permanent link">&para;</a></h2>
 <p>Polls CPU/memory/disk thresholds and emits metric-style events and ringbuffer snapshots.</p>
@@ -315,7 +297,7 @@ include_stopped = false
 names = []
 </code></pre>
 <h2 id="windows-event-log">Windows Event Log<a class="headerlink" href="#windows-event-log" title="Permanent link">&para;</a></h2>
-<p>Bookmarked channel polling (pywin32 when available).</p>
+<p>Bookmarked channel polling through the native Rust runtime.</p>
 <pre><code class="language-toml">[collectors.windows_eventlog]
 enabled = true
 channels = [&quot;Application&quot;, &quot;System&quot;]
@@ -366,7 +348,7 @@ exclude_names = [&quot;inferra-*&quot;]
 include_all = true
 </code></pre>
 <h2 id="kubernetes">Kubernetes<a class="headerlink" href="#kubernetes" title="Permanent link">&para;</a></h2>
-<p>Namespace-scoped events and workloads; requires Python kubernetes client when enabled.</p>
+<p>Namespace-scoped events and workloads through the native Rust runtime and in-cluster <code>kubectl</code>/API access configured by the deployment target.</p>
 <pre><code class="language-toml">[collectors.kubernetes]
 enabled = false
 poll_interval_seconds = 15.0
@@ -402,7 +384,8 @@ inferra config preset linux-node
 inferra config preset kubernetes
 inferra config preset docker-host
 </code></pre>
-<p>Defaults are defined in <code>src/config/presets.py</code>.</p>
+<p>Defaults are defined in <code>src/config/presets.py</code>.
+Defaults are defined in <code>src/config/defaults.toml</code>, and the native CLI writes preset overlays with <code>inferra config preset &lt;name&gt;</code>.</p>
               
             </div>
           </div><footer>
