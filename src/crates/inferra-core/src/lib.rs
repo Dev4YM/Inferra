@@ -1,10 +1,16 @@
 //! Native overview assembly for the Rust runtime.
 
+mod resource_snapshot;
+
+pub use resource_snapshot::{
+    collect_host_resources_snapshot, collect_runtime_monitor_window, try_collect_gpu_summary,
+};
+
 use anyhow::Result;
 use inferra_config::{experience_from_config, Paths};
 use inferra_contracts::{
     AiStatusResponse, DashboardHealth, DashboardPayload, EventRow, IncidentRow, OverviewResponse,
-    QuickAnalysis, RuntimeContext, RuntimeProcess, ServiceRow, WorkspaceMapResponse,
+    QuickAnalysis, RuntimeContext, RuntimeProcess, ServiceRow, SeverityValue, WorkspaceMapResponse,
     WorkspaceMapping, WorkspaceMappingSignal, WorkspaceProject,
 };
 use inferra_storage::{
@@ -28,8 +34,8 @@ pub fn build_overview(config: &TomlValue, paths: &Paths) -> Result<OverviewRespo
         .and_then(|v| v.as_bool())
         .unwrap_or(false);
 
-    let incidents_db = IncidentsStore::open(&paths.incidents_db).unwrap_or(None);
-    let events_db = EventsStore::open(&paths.events_db).unwrap_or(None);
+    let incidents_db = IncidentsStore::open(&paths.incidents_db)?;
+    let events_db = EventsStore::open(&paths.events_db)?;
 
     let incidents: Vec<IncidentRow> = if let Some(ref db) = incidents_db {
         db.active_incidents(10)?
@@ -54,7 +60,7 @@ pub fn build_overview(config: &TomlValue, paths: &Paths) -> Result<OverviewRespo
         vec![]
     };
     let governance = if let Some(ref db) = events_db {
-        db.governance_summary().unwrap_or_default()
+        db.governance_summary()?
     } else {
         GovernanceSummary::default()
     };
@@ -76,10 +82,9 @@ pub fn build_overview(config: &TomlValue, paths: &Paths) -> Result<OverviewRespo
     let mut sys = System::new_all();
     sys.refresh_all();
     let hostname = System::host_name();
-    let processes: Vec<RuntimeProcess> = sys
+    let mut processes: Vec<RuntimeProcess> = sys
         .processes()
         .values()
-        .take(60)
         .map(|p| {
             let mem = p.memory() as f64 / (1024.0 * 1024.0);
             RuntimeProcess {
@@ -90,15 +95,28 @@ pub fn build_overview(config: &TomlValue, paths: &Paths) -> Result<OverviewRespo
             }
         })
         .collect();
+    processes.sort_by(|left, right| {
+        right
+            .cpu_percent
+            .partial_cmp(&left.cpu_percent)
+            .unwrap_or(std::cmp::Ordering::Equal)
+            .then_with(|| {
+                right
+                    .memory_mb
+                    .partial_cmp(&left.memory_mb)
+                    .unwrap_or(std::cmp::Ordering::Equal)
+            })
+    });
+    processes.truncate(60);
 
     let runtime = RuntimeContext {
         hostname,
-        containers: Some(vec![]),
+        containers: None,
         processes: Some(processes),
     };
 
     let scan_root = paths.config_path.parent().unwrap_or(Path::new("."));
-    let projects = discover_projects(scan_root);
+    let projects = discover_projects(config, scan_root);
 
     let incidents_n = active_n;
     let degraded = !storage_ok || !degraded_reasons.is_empty();
@@ -141,8 +159,8 @@ pub fn build_overview(config: &TomlValue, paths: &Paths) -> Result<OverviewRespo
     let health = DashboardHealth {
         status: Some((if degraded { "degraded" } else { "ok" }).into()),
         active_incidents: Some(incidents_n),
-        queue_depth: Some(0),
-        collector_errors: Some(0),
+        queue_depth: None,
+        collector_errors: None,
         degraded: Some(degraded),
         degraded_reasons: Some(if degraded_reasons.is_empty() && !storage_ok {
             vec!["storage path missing".into()]
@@ -176,8 +194,13 @@ pub fn build_overview(config: &TomlValue, paths: &Paths) -> Result<OverviewRespo
 }
 
 pub fn build_workspace_map(config: &TomlValue, paths: &Paths) -> Result<WorkspaceMapResponse> {
+    let enabled = workspace_enabled(config);
     let scan_root = paths.config_path.parent().unwrap_or(Path::new("."));
-    let projects = discover_projects(scan_root);
+    let projects = if enabled {
+        discover_projects(config, scan_root)
+    } else {
+        Vec::new()
+    };
     let service_stats = if let Some(db) = EventsStore::open(&paths.events_db)? {
         db.service_aggregates(200)?
     } else {
@@ -191,10 +214,10 @@ pub fn build_workspace_map(config: &TomlValue, paths: &Paths) -> Result<Workspac
         .collect();
     let unmapped_services = service_ids
         .into_iter()
-        .filter(|s| !mapped_services.contains(s))
+        .filter(|s| enabled && !mapped_services.contains(s))
         .collect();
     Ok(WorkspaceMapResponse {
-        enabled: true,
+        enabled,
         projects,
         service_mappings: config_mappings.clone(),
         unmapped_services,
@@ -244,6 +267,18 @@ pub fn ai_status_from_config(config: &TomlValue) -> AiStatusResponse {
         error: None,
         allow_remote,
         registry_model: None,
+        status_model: config
+            .get("ai")
+            .and_then(|a| a.get("model_status"))
+            .and_then(|v| v.as_str())
+            .map(str::to_string)
+            .filter(|value| !value.is_empty()),
+        investigate_model: config
+            .get("ai")
+            .and_then(|a| a.get("model_investigate"))
+            .and_then(|v| v.as_str())
+            .map(str::to_string)
+            .filter(|value| !value.is_empty()),
     }
 }
 
@@ -367,7 +402,11 @@ pub fn reconcile_new_events(
                 .iter()
                 .filter_map(|event| event.event_id.clone())
                 .collect::<Vec<_>>();
-            let cluster_payloads = build_clusters(&primary_service, &recent);
+            let cluster_payloads = build_clusters(
+                config,
+                &primary_service,
+                &recent,
+            );
             let cluster_ids = cluster_payloads
                 .iter()
                 .filter_map(|cluster| {
@@ -422,7 +461,7 @@ pub fn reconcile_new_events(
             }
             incidents.replace_hypotheses(
                 &incident_id,
-                &build_hypotheses(&incident_id, &recent, &updated_at),
+                &build_hypotheses(config, &incident_id, &recent, &updated_at),
             )?;
             touched.push(incident_id);
         } else if let Some(existing) = existing {
@@ -444,6 +483,7 @@ pub fn reconcile_new_events(
 }
 
 fn build_hypotheses(
+    config: &TomlValue,
     incident_id: &str,
     events: &[EventRow],
     updated_at: &str,
@@ -676,9 +716,15 @@ fn build_hypotheses(
             .partial_cmp(&left.score)
             .unwrap_or(std::cmp::Ordering::Equal)
     });
+    let max_hypotheses = config
+        .get("hypothesis_engine")
+        .and_then(|value| value.get("max_hypotheses_per_incident"))
+        .and_then(TomlValue::as_integer)
+        .unwrap_or(4)
+        .max(1) as usize;
     candidates
         .into_iter()
-        .take(4)
+        .take(max_hypotheses)
         .enumerate()
         .map(|(index, candidate)| StoredHypothesis {
             hypothesis_id: format!("{incident_id}-hyp-{}", index + 1),
@@ -781,7 +827,11 @@ fn dominant_service(anchor_service: &str, events: &[EventRow]) -> String {
         .unwrap_or_else(|| anchor_service.to_string())
 }
 
-fn build_clusters(primary_service: &str, events: &[EventRow]) -> Vec<serde_json::Value> {
+fn build_clusters(
+    config: &TomlValue,
+    primary_service: &str,
+    events: &[EventRow],
+) -> Vec<serde_json::Value> {
     let mut grouped = std::collections::BTreeMap::<String, Vec<EventRow>>::new();
     for event in events {
         let key = event
@@ -795,9 +845,16 @@ fn build_clusters(primary_service: &str, events: &[EventRow]) -> Vec<serde_json:
     if grouped.is_empty() {
         grouped.insert("runtime".into(), events.to_vec());
     }
+    let max_clusters = config
+        .get("incident_lifecycle")
+        .and_then(|value| value.get("limits"))
+        .and_then(|value| value.get("max_clusters_per_incident"))
+        .and_then(TomlValue::as_integer)
+        .unwrap_or(4)
+        .max(1) as usize;
     grouped
         .into_iter()
-        .take(4)
+        .take(max_clusters)
         .map(|(source_type, grouped_events)| {
             let cluster_id = format!("cluster-{}-{}", slug(primary_service), slug(&source_type));
             serde_json::json!({
@@ -877,10 +934,22 @@ fn related_services(config: &TomlValue, primary_service: &str) -> Vec<String> {
 
 fn event_severity(event: &EventRow) -> Option<i64> {
     event.severity.as_ref().and_then(|value| {
-        value
-            .as_i64()
-            .or_else(|| value.as_str().and_then(|raw| raw.parse::<i64>().ok()))
+        match value {
+            SeverityValue::Level(level) => Some(*level),
+            SeverityValue::Label(label) => severity_label_value(label),
+        }
     })
+}
+
+fn severity_label_value(raw: &str) -> Option<i64> {
+    match raw.trim().to_ascii_lowercase().as_str() {
+        "trace" | "debug" => Some(0),
+        "info" | "informational" => Some(SEVERITY_INFO),
+        "warn" | "warning" => Some(SEVERITY_WARN),
+        "error" => Some(SEVERITY_ERROR),
+        "critical" | "fatal" | "panic" => Some(4),
+        value => value.parse::<i64>().ok(),
+    }
 }
 
 fn max_severity(events: &[EventRow]) -> i64 {
@@ -1101,7 +1170,7 @@ fn enrich_service_rows(stats: &[ServiceStats], incidents: &[IncidentRow]) -> Vec
         .collect()
 }
 
-fn discover_projects(root: &Path) -> Vec<WorkspaceProject> {
+fn discover_projects(config: &TomlValue, root: &Path) -> Vec<WorkspaceProject> {
     let markers: &[(&str, &str)] = &[
         ("package.json", "node"),
         ("Cargo.toml", "rust"),
@@ -1110,37 +1179,95 @@ fn discover_projects(root: &Path) -> Vec<WorkspaceProject> {
         (".git", "git"),
     ];
     let mut out = Vec::new();
-    let max_depth = 3usize;
-    let max_results = 25usize;
+    let max_depth = workspace_max_depth(config);
+    let max_results = workspace_max_results(config);
 
-    for entry in WalkDir::new(root)
-        .max_depth(max_depth)
-        .into_iter()
-        .filter_map(|e| e.ok())
-    {
+    for scan_root in workspace_roots(config, root) {
+        for entry in WalkDir::new(&scan_root)
+            .max_depth(max_depth)
+            .into_iter()
+            .filter_map(|e| e.ok())
+        {
+            if out.len() >= max_results {
+                break;
+            }
+            let path = entry.path();
+            if !path.is_dir() {
+                continue;
+            }
+            for (name, kind) in markers {
+                if path.join(name).exists() {
+                    let rel = path.to_string_lossy().to_string();
+                    if out.iter().any(|p: &WorkspaceProject| p.path == rel) {
+                        break;
+                    }
+                    out.push(WorkspaceProject {
+                        path: rel,
+                        kind: (*kind).into(),
+                        marker: (*name).into(),
+                    });
+                    break;
+                }
+            }
+        }
         if out.len() >= max_results {
             break;
         }
-        let path = entry.path();
-        if !path.is_dir() {
-            continue;
-        }
-        for (name, kind) in markers {
-            if path.join(name).exists() {
-                let rel = path.to_string_lossy().to_string();
-                if out.iter().any(|p: &WorkspaceProject| p.path == rel) {
-                    break;
-                }
-                out.push(WorkspaceProject {
-                    path: rel,
-                    kind: (*kind).into(),
-                    marker: (*name).into(),
-                });
-                break;
+    }
+    out
+}
+
+fn workspace_enabled(config: &TomlValue) -> bool {
+    config
+        .get("workspace")
+        .and_then(|value| value.get("enabled"))
+        .and_then(TomlValue::as_bool)
+        .unwrap_or(true)
+}
+
+fn workspace_max_depth(config: &TomlValue) -> usize {
+    config
+        .get("workspace")
+        .and_then(|value| value.get("max_depth"))
+        .and_then(TomlValue::as_integer)
+        .unwrap_or(4)
+        .clamp(1, 16) as usize
+}
+
+fn workspace_max_results(config: &TomlValue) -> usize {
+    config
+        .get("workspace")
+        .and_then(|value| value.get("max_results"))
+        .and_then(TomlValue::as_integer)
+        .unwrap_or(100)
+        .clamp(1, 1000) as usize
+}
+
+fn workspace_roots(config: &TomlValue, default_root: &Path) -> Vec<std::path::PathBuf> {
+    let mut roots = Vec::new();
+    let base_root = default_root
+        .canonicalize()
+        .unwrap_or_else(|_| default_root.to_path_buf());
+    roots.push(base_root.clone());
+    if let Some(items) = config
+        .get("workspace")
+        .and_then(|value| value.get("roots"))
+        .and_then(TomlValue::as_array)
+    {
+        for item in items.iter().filter_map(TomlValue::as_str) {
+            let candidate = std::path::PathBuf::from(item);
+            let resolved = if candidate.is_absolute() {
+                candidate
+            } else {
+                base_root.join(candidate)
+            };
+            let resolved = resolved.canonicalize().unwrap_or(resolved);
+            if !roots.iter().any(|existing| existing == &resolved) {
+                roots.push(resolved);
             }
         }
     }
-    out
+    roots
 }
 
 fn config_workspace_mappings(config: &TomlValue) -> Vec<WorkspaceMapping> {
@@ -1203,4 +1330,74 @@ fn disk_free_near(path: &Path) -> Option<u64> {
         }
     }
     best.map(|(_, b)| b)
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use std::fs;
+    use std::time::{SystemTime, UNIX_EPOCH};
+
+    fn temp_dir(name: &str) -> std::path::PathBuf {
+        let unique = SystemTime::now()
+            .duration_since(UNIX_EPOCH)
+            .expect("time after epoch")
+            .as_nanos();
+        std::env::temp_dir().join(format!("inferra-core-{name}-{unique}"))
+    }
+
+    #[test]
+    fn ai_status_from_config_surfaces_model_overrides() {
+        let config: TomlValue = r#"
+[ai]
+enabled = true
+provider = "ollama"
+model = "gemma"
+model_status = "gemma-status"
+model_investigate = "gemma-investigate"
+"#
+        .parse()
+        .expect("parse config");
+
+        let status = ai_status_from_config(&config);
+        assert_eq!(status.status_model.as_deref(), Some("gemma-status"));
+        assert_eq!(
+            status.investigate_model.as_deref(),
+            Some("gemma-investigate")
+        );
+    }
+
+    #[test]
+    fn discover_projects_honors_workspace_roots_depth_and_limits() {
+        let root = temp_dir("workspace-scan");
+        let extra_root = root.join("extra-root");
+        fs::create_dir_all(root.join("service-a")).expect("create service-a");
+        fs::create_dir_all(root.join("service-b")).expect("create service-b");
+        fs::create_dir_all(root.join("deep/one/two/three")).expect("create deep service");
+        fs::create_dir_all(extra_root.join("service-c")).expect("create extra service");
+        fs::write(root.join("service-a/Cargo.toml"), "[package]\nname='a'\n")
+            .expect("write cargo marker");
+        fs::write(root.join("service-b/package.json"), "{}").expect("write package marker");
+        fs::write(root.join("deep/one/two/three/pyproject.toml"), "[project]\nname='deep'\n")
+            .expect("write deep marker");
+        fs::write(extra_root.join("service-c/go.mod"), "module example.com/servicec\n")
+            .expect("write go marker");
+
+        let config: TomlValue = r#"
+[workspace]
+max_depth = 2
+max_results = 10
+roots = ["extra-root"]
+"#
+        .parse()
+        .expect("parse config");
+
+        let projects = discover_projects(&config, &root);
+        assert!(projects.iter().any(|project| project.path.contains("service-a")));
+        assert!(projects.iter().any(|project| project.path.contains("service-b")));
+        assert!(projects.iter().any(|project| project.path.contains("service-c")));
+        assert!(!projects.iter().any(|project| project.path.contains("three")));
+
+        let _ = fs::remove_dir_all(&root);
+    }
 }

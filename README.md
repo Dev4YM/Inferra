@@ -19,7 +19,7 @@ Product positioning and AI boundaries are documented in [ADR 0001: Local-first g
 - Native CLI for setup, database initialization, service management, incidents, events, services, collectors, config, workspace inspection, and AI investigation flows.
 - Experience modes are reflected in configuration defaults and the web UI.
 - React control plane under `src/web/frontend` with an Overview, Incidents, Systems, Evidence, AI Investigator, Workspace, Control, and Settings layout (no raw-JSON-first pages).
-- Structured AI investigation contract (`/api/investigate/now|incident|service`, `/api/ai/ask`, `/api/ai/report/{incident_id}`, `/api/ai/status`, `/api/ai/doctor`) with cited evidence, explicit uncertainty, and a deterministic fallback when AI is disabled.
+- Structured AI investigation contract (`/api/investigate/now|incident|service`, `/api/ai/ask`, `/api/ai/report/{incident_id}`, `/api/ai/investigate-stream`, `/api/ai/status`, `/api/ai/doctor`) with cited evidence, explicit uncertainty, a deterministic fallback when AI is disabled, optional **`monitor_seconds`** on investigate/report URLs and on `ai ask`, and **SSE streaming** for token deltas plus a final JSON payload on `/api/ai/investigate-stream`.
 - Native Ollama-backed investigation when `ai.enabled = true` and the configured local model is available.
 - Workspace intelligence: project discovery, service-to-project mapping with confidence and signals, and explicit user mappings persisted into `inferra.toml` (`/api/workspace/*`).
 - Native Rust-hosted local web dashboard/control plane.
@@ -71,11 +71,23 @@ provider = "ollama"
 base_url = "http://127.0.0.1:11434"
 model = "gemma4:e4b"
 allow_remote = false
+investigation_monitor_seconds = 5
+investigation_monitor_interval_ms = 500
 ```
 
 After `inferra --config inferra.toml serve` is running, validate native provider readiness from the Control page or with `curl http://127.0.0.1:7433/api/ai/status` and `curl http://127.0.0.1:7433/api/ai/doctor`.
 
 Remote Ollama-compatible servers are configured through `ai.base_url`, `ai.allow_remote`, and optional `ai.token_env`.
+
+**Investigation bundle timing:** before each investigation, the server can sample host CPU/memory for a wall-clock window (`ai.investigation_monitor_seconds`, default 5, and `ai.investigation_monitor_interval_ms`). Use **`monitor_seconds=0`** on `GET /api/investigate/*` and `GET /api/ai/report/*`, or **`monitor_seconds`** in the JSON body of `POST /api/ai/ask`, to skip the timed series (tests and quick checks). The CLI mirrors this with **`--monitor-seconds`** on `ai ask`, `ai investigate`, and `ai report`.
+
+**Streaming (SSE):** live model deltas then a final structured payload:
+
+```bash
+curl -N -H "Content-Type: application/json" -H "Accept: text/event-stream" \
+  -d "{\"question\":\"What should I check first?\",\"scope\":\"overview\",\"mode\":\"operator\",\"monitor_seconds\":0}" \
+  http://127.0.0.1:7433/api/ai/investigate-stream
+```
 
 ## Command Surface
 
@@ -86,7 +98,7 @@ Remote Ollama-compatible servers are configured through `ai.base_url`, `ai.allow
 - Collectors: `collectors status`, `collectors start`, `collectors stop`
 - Config: `config show`, `config get <path>`, `config set <path> <value>`, `config preset <name>`
 - Workspace: `workspace map`, `workspace services`, `workspace inspect <path>`, `workspace projects`
-- AI: `ai status`, `ai doctor`, `ai ask "<question>"`, `ai report <incident_id>`, `ai investigate latest|incident <id>|service <id>`
+- AI: `ai status`, `ai doctor`, `ai ask "<question>" [--monitor-seconds N]`, `ai report <incident_id> [--monitor-seconds N]`, `ai investigate latest|incident <id>|service <id> [--monitor-seconds N]`
 - Windows service: `service status`, `service install`, `service start`, `service stop`, `service restart`, `service remove`, `service repair`
 - The local server exposes the same operator surfaces through `/api/*` for the web UI and loopback automation.
 
@@ -101,7 +113,8 @@ inferra --config inferra.toml collectors status
 inferra --config inferra.toml config preset windows-server
 inferra --config inferra.toml workspace map
 inferra --config inferra.toml ai status
-inferra --config inferra.toml ai investigate latest
+inferra --config inferra.toml ai investigate latest --monitor-seconds 5
+inferra --config inferra.toml ai ask "What failed?" --monitor-seconds 0
 inferra --config inferra.toml service status
 inferra --config inferra.toml service install --startup auto
 inferra --config inferra.toml service repair

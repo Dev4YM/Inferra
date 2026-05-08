@@ -22,10 +22,11 @@ inferra --config inferra.toml setup --yes
 inferra --config inferra.toml init-db
 inferra --config inferra.toml collectors status
 inferra --config inferra.toml ai status
+inferra --config inferra.toml
 inferra --config inferra.toml serve
 ```
 
-`setup` writes `inferra.toml` and sets `storage.data_dir` when requested. `init-db` is idempotent and runs entirely inside the Rust runtime. `collectors status` shows configured collector/runtime state, and `ai status` probes the configured provider. Use `inferra serve` to bind `[server].host`:`[server].port` and open the dashboard at `http://127.0.0.1:7433` by default.
+`setup` writes `inferra.toml` and sets `storage.data_dir` when requested. `init-db` is idempotent and runs entirely inside the Rust runtime. `collectors status` shows configured collector/runtime state, and `ai status` probes the configured provider. Running bare `inferra` now shows a welcome/status screen with the version, runtime snapshot, and next-step commands. Use `inferra serve` only when you intentionally want to start the local HTTP runtime and dashboard on `[server].host`:`[server].port` (default `http://127.0.0.1:7433`).
 
 ## Windows desktop
 
@@ -49,7 +50,7 @@ For unattended operation, install as a service:
 
 Run PowerShell **as Administrator** from the repository or deployment root. The script stages the runtime binary plus `runtime-assets` under `%ProgramFiles%\Inferra\`, creates `%ProgramData%\Inferra\`, applies ACLs for `SYSTEM` and `Administrators`, runs first-time `setup` when `inferra.toml` is missing, runs **`init-db`**, registers the `Inferra` service with automatic start, and starts it. Service registration uses the native `inferra service install|remove|start|stop|status` command surface only. After install it probes `http://127.0.0.1:<port>/api/health` and prints the **serve log** path (`%ProgramData%\Inferra\logs\serve.log`) if the runtime is not reachable yet.
 
-Optional **`-AllowFirewall`** opens the inbound TCP port from `[server].port` in `inferra.toml` (default 7433). Optional **`-AddCliToPath`** adds `%ProgramFiles%\Inferra\bin` to the machine PATH. Optional **`-KillInferraProcessesBeforeInstall`** aggressively stops the Inferra service and all `inferra.exe` before install (use only when no interactive `inferra serve` must remain — see [Windows exe build](windows_exe_build.md)).
+Optional **`-AllowFirewall`** opens the inbound TCP port from `[server].port` in `inferra.toml` (default 7433). Optional **`-AddCliToPath`** adds `%ProgramFiles%\Inferra\bin` to the machine PATH. Optional **`-KillInferraProcessesBeforeInstall`** aggressively stops the Inferra service and all `inferra.exe` before install (use only when no interactive `inferra serve` must remain — see [Windows exe build](windows_exe_build.md)). Once the service is installed, use `inferra` or `inferra status` for a quick local status snapshot, and reserve `inferra serve` for non-service foreground runs.
 
 **PyInstaller one-file `inferra.exe`** is now legacy and archived under `deprecated/windows-pyinstaller/`. Use the Rust-native build when possible. The legacy pipeline is still documented in **[Windows exe (PyInstaller)](windows_exe_build.md)**.
 
@@ -66,6 +67,7 @@ Service control on the Rust-native path uses the built-in service command surfac
 
 ```powershell
 inferra --config "C:\ProgramData\Inferra\inferra.toml" service status
+inferra --config "C:\ProgramData\Inferra\inferra.toml" status
 inferra --config "C:\ProgramData\Inferra\inferra.toml" service install --startup auto
 inferra service restart
 ```

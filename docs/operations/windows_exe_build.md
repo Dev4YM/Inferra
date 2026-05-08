@@ -39,7 +39,7 @@ Set-Location D:\MYFiles\Projects\py\Inferra
 
 This stages the runtime under `%ProgramFiles%\Inferra\` and keeps mutable state under `%ProgramData%\Inferra\`.
 
-3. Open `http://127.0.0.1:7433/` (or the port in `%ProgramData%\Inferra\inferra.toml`). If the dashboard does not load, inspect `%ProgramData%\Inferra\logs\serve.log`.
+3. Run `inferra` (or `inferra status`) to confirm the installed CLI sees the runtime and version banner, then open `http://127.0.0.1:7433/` (or the port in `%ProgramData%\Inferra\inferra.toml`). If the dashboard does not load, inspect `%ProgramData%\Inferra\logs\serve.log`.
 
 ## Legacy PyInstaller path
 

@@ -1,5 +1,9 @@
 # Current State Audit
 
+This document is a higher-level narrative snapshot and should not be used as the
+source of truth for implementation completeness. For the active crate-by-crate
+reality check, use `docs/dossier/architecture/inferra_reality_matrix.md`.
+
 This audit reflects the repo state after the dossier implementation and hardening pass.
 
 ## What Is Strong

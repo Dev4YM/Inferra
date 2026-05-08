@@ -117,7 +117,7 @@ pub fn remove_service() -> Result<()> {
         let output = run_sc_output(&["delete".into(), SERVICE_NAME.into()])?;
         if !output.status.success() {
             let text = String::from_utf8_lossy(&output.stderr);
-            if !text.to_ascii_lowercase().contains("does not exist") {
+            if !is_missing_service_error(&text) {
                 bail!("failed to delete service: {}", text.trim());
             }
         }
@@ -148,7 +148,12 @@ pub fn stop_service() -> Result<()> {
 }
 
 pub fn restart_service() -> Result<()> {
-    stop_service().ok();
+    if let Err(error) = stop_service() {
+        let text = error.to_string();
+        if !is_non_running_service_error(&text) && !is_missing_service_error(&text) {
+            return Err(error);
+        }
+    }
     start_service()
 }
 
@@ -265,10 +270,11 @@ fn sc_output_text(output: &std::process::Output) -> String {
 
 fn parse_sc_field(text: &str, field_name: &str) -> Option<String> {
     for line in text.lines() {
-        if !line.contains(field_name) {
+        let trimmed = line.trim_start();
+        let (name, tail) = trimmed.split_once(':')?;
+        if !name.trim().eq_ignore_ascii_case(field_name) {
             continue;
         }
-        let (_, tail) = line.split_once(':')?;
         return Some(tail.trim().to_string());
     }
     None
@@ -292,14 +298,45 @@ fn append_service_log(message: &str) {
         let _ = std::fs::create_dir_all(parent);
     }
     if let Ok(mut fp) = OpenOptions::new().create(true).append(true).open(log_path) {
-        let _ = writeln!(fp, "{message}");
+        let timestamp = std::time::SystemTime::now()
+            .duration_since(std::time::UNIX_EPOCH)
+            .unwrap_or_default()
+            .as_secs();
+        let _ = writeln!(fp, "[{timestamp}] {message}");
     }
+}
+
+fn is_missing_service_error(text: &str) -> bool {
+    let lowered = text.to_ascii_lowercase();
+    lowered.contains("does not exist") || lowered.contains("1060")
+}
+
+fn is_non_running_service_error(text: &str) -> bool {
+    let lowered = text.to_ascii_lowercase();
+    lowered.contains("service has not been started")
+        || lowered.contains("not started")
+        || lowered.contains("1062")
 }
 
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[cfg(unix)]
+    use std::os::unix::process::ExitStatusExt;
+    #[cfg(windows)]
     use std::os::windows::process::ExitStatusExt;
+
+    fn failing_status() -> std::process::ExitStatus {
+        #[cfg(unix)]
+        {
+            std::process::ExitStatus::from_raw(1 << 8)
+        }
+        #[cfg(windows)]
+        {
+            std::process::ExitStatus::from_raw(1)
+        }
+    }
 
     #[test]
     fn build_service_command_line_quotes_executable_and_embedded_paths() {
@@ -339,12 +376,19 @@ mod tests {
     #[test]
     fn sc_output_text_prefers_stdout_when_present() {
         let output = std::process::Output {
-            status: std::process::ExitStatus::from_raw(1),
+            status: failing_status(),
             stdout: b"[SC] CreateService FAILED 1072: The specified service has been marked for deletion.".to_vec(),
             stderr: Vec::new(),
         };
         let text = sc_output_text(&output);
         assert!(text.contains("marked for deletion"));
+    }
+
+    #[test]
+    fn parse_sc_field_requires_exact_field_name() {
+        let text = "SERVICE_NAME: Inferra\n        STATE              : 4  RUNNING\n";
+        assert_eq!(parse_sc_field(text, "STATE").as_deref(), Some("4  RUNNING"));
+        assert!(parse_sc_field(text, "ATE").is_none());
     }
 }
 

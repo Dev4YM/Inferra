@@ -160,30 +160,32 @@ fn toml_to_json(v: &TomlValue) -> JsonValue {
 }
 
 fn json_to_toml(v: &JsonValue) -> Result<TomlValue> {
-    Ok(match v {
-        JsonValue::Null => TomlValue::String(String::new()),
-        JsonValue::Bool(b) => TomlValue::Boolean(*b),
-        JsonValue::Number(n) => {
-            if let Some(i) = n.as_i64() {
-                TomlValue::Integer(i)
-            } else if let Some(f) = n.as_f64() {
-                TomlValue::Float(f)
-            } else {
-                TomlValue::String(n.to_string())
-            }
+    match v {
+        JsonValue::Null => {
+            anyhow::bail!(
+                "null config values are not supported; omit the key to keep the current value"
+            )
         }
-        JsonValue::String(s) => TomlValue::String(s.clone()),
-        JsonValue::Array(a) => {
-            TomlValue::Array(a.iter().map(json_to_toml).collect::<Result<Vec<_>, _>>()?)
-        }
+        JsonValue::Bool(b) => Ok(TomlValue::Boolean(*b)),
+        JsonValue::Number(n) => Ok(if let Some(i) = n.as_i64() {
+            TomlValue::Integer(i)
+        } else if let Some(f) = n.as_f64() {
+            TomlValue::Float(f)
+        } else {
+            TomlValue::String(n.to_string())
+        }),
+        JsonValue::String(s) => Ok(TomlValue::String(s.clone())),
+        JsonValue::Array(a) => Ok(TomlValue::Array(
+            a.iter().map(json_to_toml).collect::<Result<Vec<_>, _>>()?,
+        )),
         JsonValue::Object(o) => {
             let mut t = toml::map::Map::new();
             for (k, val) in o {
                 t.insert(k.clone(), json_to_toml(val)?);
             }
-            TomlValue::Table(t)
+            Ok(TomlValue::Table(t))
         }
-    })
+    }
 }
 
 /// Deep-merge JSON `patch` into `base` (objects recurse; scalars and arrays replace).
@@ -231,13 +233,20 @@ pub fn server_listen(config: &TomlValue) -> Result<(String, u16)> {
         .and_then(|s| s.get("host"))
         .and_then(|v| v.as_str())
         .unwrap_or("127.0.0.1")
+        .trim()
         .to_string();
+    if host.is_empty() {
+        anyhow::bail!("server.host cannot be empty");
+    }
     let port = config
         .get("server")
         .and_then(|s| s.get("port"))
         .and_then(|v| v.as_integer())
-        .unwrap_or(7433) as u16;
-    Ok((host, port))
+        .unwrap_or(7433);
+    if !(1..=u16::MAX as i64).contains(&port) {
+        anyhow::bail!("server.port must be between 1 and {}", u16::MAX);
+    }
+    Ok((host, port as u16))
 }
 
 pub fn experience_from_config(config: &TomlValue) -> ExperiencePayload {
@@ -279,7 +288,8 @@ pub fn experience_from_config(config: &TomlValue) -> ExperiencePayload {
 
 #[cfg(test)]
 mod tests {
-    use super::{load_merged_config, resolve_config_path, write_config, TomlValue};
+    use super::{apply_config_put, load_merged_config, resolve_config_path, server_listen, write_config, TomlValue};
+    use serde_json::json;
     use std::path::PathBuf;
     use std::sync::{Mutex, OnceLock};
 
@@ -344,5 +354,32 @@ mod tests {
         assert!(raw.contains("[server]"));
         assert!(toml::from_str::<TomlValue>(&raw).is_ok());
         let _ = std::fs::remove_dir_all(&root);
+    }
+
+    #[test]
+    fn apply_config_put_rejects_null_values() {
+        let base: TomlValue = r#"
+[server]
+host = "127.0.0.1"
+port = 7433
+"#
+        .parse()
+        .expect("parse base");
+        let error = apply_config_put(base, &json!({ "config": { "server": { "host": null } } }))
+            .expect_err("null values should be rejected");
+        assert!(error.to_string().contains("null config values are not supported"));
+    }
+
+    #[test]
+    fn server_listen_rejects_invalid_port_numbers() {
+        let config: TomlValue = r#"
+[server]
+host = "127.0.0.1"
+port = 70000
+"#
+        .parse()
+        .expect("parse config");
+        let error = server_listen(&config).expect_err("invalid port should fail");
+        assert!(error.to_string().contains("server.port must be between 1 and"));
     }
 }

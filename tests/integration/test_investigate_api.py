@@ -20,7 +20,7 @@ def test_investigate_now_returns_structured_output_without_ai(tmp_path):
     app = create_app(InferraConfig(storage=StorageConfig(data_dir=tmp_path)))
     with TestClient(app) as client:
         _ingest_two_errors(client)
-        response = client.get("/api/investigate/now")
+        response = client.get("/api/investigate/now", params={"monitor_seconds": 0})
         assert response.status_code == 200
         payload = response.json()
         assert payload["used_ai"] is False, "AI is disabled by default; must use deterministic fallback"
@@ -38,7 +38,7 @@ def test_investigate_incident_includes_evidence_and_safe_steps(tmp_path):
     app = create_app(InferraConfig(storage=StorageConfig(data_dir=tmp_path)))
     with TestClient(app) as client:
         incident_id = _ingest_two_errors(client)
-        response = client.get(f"/api/investigate/incident/{incident_id}")
+        response = client.get(f"/api/investigate/incident/{incident_id}", params={"monitor_seconds": 0})
         assert response.status_code == 200
         payload = response.json()
         output = payload["output"]
@@ -55,7 +55,12 @@ def test_ai_ask_with_overview_scope_returns_investigation(tmp_path):
         _ingest_two_errors(client)
         response = client.post(
             "/api/ai/ask",
-            json={"question": "what should I look at first?", "scope": "overview", "mode": "operator"},
+            json={
+                "question": "what should I look at first?",
+                "scope": "overview",
+                "mode": "operator",
+                "monitor_seconds": 0,
+            },
         )
         assert response.status_code == 200
         payload = response.json()
@@ -70,7 +75,12 @@ def test_ai_ask_with_latest_scope_resolves_to_latest_incident(tmp_path):
         incident_id = _ingest_two_errors(client)
         response = client.post(
             "/api/ai/ask",
-            json={"question": "what changed most recently?", "scope": "latest", "mode": "expert"},
+            json={
+                "question": "what changed most recently?",
+                "scope": "latest",
+                "mode": "expert",
+                "monitor_seconds": 0,
+            },
         )
         assert response.status_code == 200
         payload = response.json()
@@ -94,7 +104,10 @@ def test_ai_report_returns_structured_payload(tmp_path):
     app = create_app(InferraConfig(storage=StorageConfig(data_dir=tmp_path)))
     with TestClient(app) as client:
         incident_id = _ingest_two_errors(client)
-        response = client.get(f"/api/ai/report/{incident_id}", params={"mode": "operator"})
+        response = client.get(
+            f"/api/ai/report/{incident_id}",
+            params={"mode": "operator", "monitor_seconds": 0},
+        )
         assert response.status_code == 200
         payload = response.json()
         assert payload.get("report") is True
@@ -104,5 +117,5 @@ def test_ai_report_returns_structured_payload(tmp_path):
 def test_investigate_incident_404_for_unknown_id(tmp_path):
     app = create_app(InferraConfig(storage=StorageConfig(data_dir=tmp_path)))
     with TestClient(app) as client:
-        response = client.get("/api/investigate/incident/inc-does-not-exist")
+        response = client.get("/api/investigate/incident/inc-does-not-exist", params={"monitor_seconds": 0})
         assert response.status_code == 404

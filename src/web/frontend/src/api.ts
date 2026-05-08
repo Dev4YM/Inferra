@@ -68,6 +68,103 @@ export async function postJson<T>(path: string, body: unknown, init?: RequestIni
   });
 }
 
+export type InvestigateStreamCallbacks = {
+  onMeta?: (jsonLine: string) => void;
+  onDelta?: (text: string) => void;
+};
+
+/** POST `/api/ai/investigate-stream` (SSE). Parses `meta`, `delta`, `done`, `error` events until `done`. */
+export async function postInvestigateStream(
+  body: { question: string; scope: string; mode: string; monitor_seconds: number },
+  callbacks?: InvestigateStreamCallbacks,
+  signal?: AbortSignal,
+): Promise<InvestigationResponse> {
+  const path = "/api/ai/investigate-stream";
+  const response = await fetch(path, {
+    method: "POST",
+    headers: {
+      "content-type": "application/json",
+      accept: "text/event-stream",
+    },
+    body: JSON.stringify(body),
+    signal,
+  });
+  if (!response.ok) {
+    const text = await response.text();
+    throw new ApiError(
+      `${response.status} ${path}: ${text.trim() || response.statusText || "Request failed"}`,
+      path,
+      response.status,
+      text,
+    );
+  }
+  if (!response.body) {
+    throw new ApiError(`No response body from ${path}`, path, response.status);
+  }
+
+  const reader = response.body.getReader();
+  const decoder = new TextDecoder();
+  let carry = "";
+  let lastDone: InvestigationResponse | null = null;
+
+  const processCarry = () => {
+    const sep = "\n\n";
+    while (true) {
+      const pos = carry.indexOf(sep);
+      if (pos === -1) break;
+      const block = carry.slice(0, pos).trim();
+      carry = carry.slice(pos + sep.length);
+      if (!block || block.startsWith(":")) {
+        continue;
+      }
+      let eventName = "message";
+      const dataLines: string[] = [];
+      for (const rawLine of block.split("\n")) {
+        const line = rawLine.replace(/\r$/, "");
+        if (!line || line.startsWith(":")) continue;
+        if (line.startsWith("event:")) {
+          eventName = line.slice(6).trim();
+        } else if (line.startsWith("data:")) {
+          dataLines.push(line.slice(5).trimStart());
+        }
+      }
+      const data = dataLines.join("\n");
+      if (eventName === "meta") {
+        callbacks?.onMeta?.(data);
+      } else if (eventName === "delta") {
+        callbacks?.onDelta?.(data);
+      } else if (eventName === "done") {
+        try {
+          lastDone = JSON.parse(data) as InvestigationResponse;
+        } catch (error) {
+          throw new ApiError(
+            `Invalid JSON in done event: ${error instanceof Error ? error.message : String(error)}`,
+            path,
+            502,
+            data,
+          );
+        }
+      } else if (eventName === "error") {
+        throw new ApiError(data || "stream error", path, 502, data);
+      }
+    }
+  };
+
+  while (true) {
+    const { value, done } = await reader.read();
+    if (done) break;
+    carry += decoder.decode(value, { stream: true });
+    processCarry();
+  }
+  carry += decoder.decode();
+  processCarry();
+
+  if (!lastDone) {
+    throw new ApiError("Stream ended without a valid done event", path, 502);
+  }
+  return lastDone;
+}
+
 export async function putJson<T>(path: string, body: unknown, init?: RequestInit): Promise<T> {
   return fetchJson<T>(path, {
     ...init,
@@ -244,6 +341,8 @@ export type AiStatus = {
   error?: string;
   allow_remote?: boolean;
   registry_model?: Record<string, unknown> | null;
+  status_model?: string;
+  investigate_model?: string;
 };
 
 export type InvestigationStep = {
@@ -270,6 +369,11 @@ export type InvestigationOutput = {
   citations: string[];
 };
 
+export type InvestigationGrounding = {
+  removed_evidence_ids: string[];
+  removed_citation_ids: string[];
+};
+
 export type InvestigationResponse = {
   schema_version: number;
   output: InvestigationOutput;
@@ -277,6 +381,7 @@ export type InvestigationResponse = {
   fallback_reason: string;
   warnings?: string[];
   attempts?: number;
+  grounding?: InvestigationGrounding;
   provider: {
     enabled: boolean;
     available: boolean;
@@ -326,6 +431,7 @@ export type AiDoctorResponse = {
   provider: string;
   base_url: string;
   model: string;
+  investigate_model?: string;
   allow_remote: boolean;
   token_env_set: boolean;
   redact_raw_logs: boolean;
@@ -337,6 +443,7 @@ export type AiDoctorResponse = {
 export type HypothesisRow = {
   hypothesis_id: string;
   cause_type: string;
+  rank?: number;
   description?: string;
   total_score?: number;
   confidence_label?: string;

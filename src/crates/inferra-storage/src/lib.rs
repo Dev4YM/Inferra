@@ -1,9 +1,10 @@
 //! SQLite access compatible with the historical Python `events.db` and `incidents.db`.
 
 use anyhow::{Context, Result};
-use inferra_contracts::{EventRow, EventSourceRef, HypothesisRow, IncidentRow};
+use inferra_contracts::{EventRow, EventSourceRef, HypothesisRow, IncidentRow, SeverityValue};
 use rusqlite::{Connection, OptionalExtension, Row, Transaction};
 use serde_json::Value;
+use std::collections::HashMap;
 use std::fs;
 use std::path::Path;
 use time::{Duration, OffsetDateTime};
@@ -147,6 +148,24 @@ pub struct StoredAiTrace {
     pub blocked_fields: Vec<String>,
     pub raw_logs_sent: bool,
     pub trace_schema_version: i64,
+    pub created_at: String,
+}
+
+#[derive(Debug, Clone)]
+pub struct StoredInferenceGraphSnapshot {
+    pub incident_id: String,
+    pub graph_data: Value,
+    pub created_at: String,
+    pub event_count: i64,
+}
+
+#[derive(Debug, Clone)]
+pub struct StoredChatMessage {
+    pub message_id: String,
+    pub incident_id: String,
+    pub role: String,
+    pub content: String,
+    pub message_schema_version: i64,
     pub created_at: String,
 }
 
@@ -310,9 +329,31 @@ impl EventsStore {
     }
 
     pub fn get_events(&self, event_ids: &[String]) -> Result<Vec<EventRow>> {
-        let mut out = Vec::new();
+        if event_ids.is_empty() {
+            return Ok(Vec::new());
+        }
+        let placeholders = (0..event_ids.len())
+            .map(|idx| format!("?{}", idx + 1))
+            .collect::<Vec<_>>()
+            .join(", ");
+        let sql = format!(
+            "SELECT event_id, timestamp, severity, service_id, message, source_type, tags \
+             FROM events WHERE event_id IN ({placeholders})"
+        );
+        let mut stmt = self.conn.prepare(&sql).context("prepare batch event detail")?;
+        let rows = stmt
+            .query_map(rusqlite::params_from_iter(event_ids.iter()), event_row_from_row)
+            .context("query batch event detail")?;
+        let mut by_id = HashMap::new();
+        for row in rows {
+            let event = row?;
+            if let Some(event_id) = event.event_id.clone() {
+                by_id.insert(event_id, event);
+            }
+        }
+        let mut out = Vec::with_capacity(event_ids.len());
         for event_id in event_ids {
-            if let Some(event) = self.get_event(event_id)? {
+            if let Some(event) = by_id.remove(event_id) {
                 out.push(event);
             }
         }
@@ -616,14 +657,17 @@ impl EventsStore {
         collector_id: &str,
         state_key: &str,
     ) -> Result<Option<String>> {
-        self.conn
-            .query_row(
+        match self.conn.query_row(
                 "SELECT state_value FROM collector_state WHERE collector_id = ?1 AND state_key = ?2",
                 rusqlite::params![collector_id, state_key],
                 |row| row.get(0),
             )
             .optional()
-            .context("query collector state")
+        {
+            Ok(value) => Ok(value),
+            Err(error) if is_missing_table_error(&error) => Ok(None),
+            Err(error) => Err(error).context("query collector state"),
+        }
     }
 
     pub fn set_collector_state(
@@ -649,8 +693,13 @@ impl EventsStore {
     pub fn governance_summary(&self) -> Result<GovernanceSummary> {
         let tracked_fingerprints = self
             .conn
-            .query_row("SELECT COUNT(*) FROM fingerprint_seen", [], |row| {
-                row.get(0)
+            .query_row("SELECT COUNT(*) FROM fingerprint_seen", [], |row| row.get(0))
+            .or_else(|error| {
+                if is_missing_table_error(&error) {
+                    Ok(0)
+                } else {
+                    Err(error)
+                }
             })
             .context("count tracked fingerprints")?;
         let (active_dedup_windows, active_window_suppressed) = self
@@ -660,6 +709,13 @@ impl EventsStore {
                 [],
                 |row| Ok((row.get(0)?, row.get(1)?)),
             )
+            .or_else(|error| {
+                if is_missing_table_error(&error) {
+                    Ok((0, 0))
+                } else {
+                    Err(error)
+                }
+            })
             .context("summarize dedup windows")?;
         Ok(GovernanceSummary {
             dedup_suppressed_total: governance_counter(self, "dedup_suppressed_total")?,
@@ -673,7 +729,11 @@ impl EventsStore {
             tracked_fingerprints,
             active_dedup_windows,
             active_window_suppressed,
-            last_noise_reason: self.get_collector_state("governance", "last_noise_reason")?,
+            last_noise_reason: match self.get_collector_state("governance", "last_noise_reason") {
+                Ok(value) => value,
+                Err(error) if is_missing_table_error(&error) => None,
+                Err(error) => return Err(error),
+            },
         })
     }
 
@@ -915,10 +975,13 @@ fn set_governance_value(
 }
 
 fn governance_counter(store: &EventsStore, state_key: &str) -> Result<i64> {
-    Ok(store
-        .get_collector_state("governance", state_key)?
-        .and_then(|value| value.parse::<i64>().ok())
-        .unwrap_or_default())
+    match store.get_collector_state("governance", state_key) {
+        Ok(value) => Ok(value
+            .and_then(|item| item.parse::<i64>().ok())
+            .unwrap_or_default()),
+        Err(error) if is_missing_table_error(&error) => Ok(0),
+        Err(error) => Err(error),
+    }
 }
 
 pub fn initialize_databases(events_db: &Path, incidents_db: &Path) -> Result<()> {
@@ -1008,6 +1071,69 @@ impl IncidentsStore {
         Ok(Some(row.get(0)?))
     }
 
+    pub fn recent_incidents_excluding(
+        &self,
+        exclude_id: &str,
+        limit: usize,
+    ) -> Result<Vec<IncidentRow>> {
+        let mut stmt = self
+            .conn
+            .prepare(
+                "SELECT incident_id, state, severity, primary_service, affected_services, \
+                 created_at, updated_at, event_count FROM incidents \
+                 WHERE incident_id != ?1 \
+                 ORDER BY updated_at DESC LIMIT ?2",
+            )
+            .context("prepare recent incidents")?;
+        let rows = stmt
+            .query_map(rusqlite::params![exclude_id, limit as i64], |r| {
+                let affected_raw: String = r.get(4)?;
+                let affected: Option<Vec<String>> = serde_json::from_str(&affected_raw).ok();
+                Ok(IncidentRow {
+                    incident_id: r.get(0)?,
+                    state: r.get(1)?,
+                    severity: r.get(2)?,
+                    primary_service: r.get::<_, Option<String>>(3)?.unwrap_or_default(),
+                    affected_services: affected,
+                    created_at: r.get(5)?,
+                    updated_at: r.get(6)?,
+                    event_count: r.get(7)?,
+                })
+            })
+            .context("recent incidents query")?;
+        let mut out = Vec::new();
+        for row in rows {
+            out.push(row?);
+        }
+        Ok(out)
+    }
+
+    pub fn get_operator_context(&self, scope_key: &str) -> Result<Option<String>> {
+        let mut stmt = self
+            .conn
+            .prepare("SELECT body FROM ai_operator_context WHERE scope_key = ?1")
+            .context("prepare get_operator_context")?;
+        let mut rows = stmt.query(rusqlite::params![scope_key])?;
+        let Some(row) = rows.next()? else {
+            return Ok(None);
+        };
+        Ok(Some(row.get(0)?))
+    }
+
+    pub fn set_operator_context(&self, scope_key: &str, body: &str) -> Result<()> {
+        self.conn
+            .execute(
+                "INSERT INTO ai_operator_context (scope_key, body, updated_at) \
+                 VALUES (?1, ?2, strftime('%Y-%m-%dT%H:%M:%fZ', 'now')) \
+                 ON CONFLICT(scope_key) DO UPDATE SET \
+                    body = excluded.body, \
+                    updated_at = excluded.updated_at",
+                rusqlite::params![scope_key, body],
+            )
+            .context("upsert operator context")?;
+        Ok(())
+    }
+
     pub fn get_incident(&self, incident_id: &str) -> Result<Option<IncidentRow>> {
         let mut stmt = self
             .conn
@@ -1046,20 +1172,21 @@ impl IncidentsStore {
         let mut stmt = self
             .conn
             .prepare(
-                "SELECT hypothesis_id, cause_type, description, total_score, confidence_label, suggested_checks \
+                "SELECT hypothesis_id, cause_type, rank, description, total_score, confidence_label, suggested_checks \
                  FROM hypotheses WHERE incident_id = ?1 ORDER BY rank ASC, total_score DESC",
             )
             .context("prepare hypotheses")?;
         let rows = stmt
             .query_map(rusqlite::params![incident_id], |row| {
-                let suggested_raw: String = row.get(5)?;
+                let suggested_raw: String = row.get(6)?;
                 let suggested_checks = serde_json::from_str::<Vec<String>>(&suggested_raw).ok();
                 Ok(HypothesisRow {
                     hypothesis_id: row.get(0)?,
                     cause_type: row.get(1)?,
-                    description: row.get(2)?,
-                    total_score: row.get(3)?,
-                    confidence_label: row.get(4)?,
+                    rank: row.get(2)?,
+                    description: row.get(3)?,
+                    total_score: row.get(4)?,
+                    confidence_label: row.get(5)?,
                     suggested_checks,
                 })
             })
@@ -1091,6 +1218,52 @@ impl IncidentsStore {
             }
         }
         Ok(out)
+    }
+
+    pub fn upsert_inference_graph_snapshot(
+        &self,
+        snapshot: &StoredInferenceGraphSnapshot,
+    ) -> Result<()> {
+        self.conn
+            .execute(
+                "INSERT INTO inference_graph_snapshots (
+                    incident_id, graph_data, created_at, event_count
+                ) VALUES (?1, ?2, ?3, ?4)
+                ON CONFLICT(incident_id) DO UPDATE SET
+                    graph_data = excluded.graph_data,
+                    created_at = excluded.created_at,
+                    event_count = excluded.event_count",
+                rusqlite::params![
+                    snapshot.incident_id,
+                    snapshot.graph_data.to_string(),
+                    snapshot.created_at,
+                    snapshot.event_count,
+                ],
+            )
+            .context("upsert inference graph snapshot")?;
+        Ok(())
+    }
+
+    pub fn inference_graph_snapshot(&self, incident_id: &str) -> Result<Option<Value>> {
+        self.conn
+            .query_row(
+                "SELECT graph_data, created_at, event_count
+                 FROM inference_graph_snapshots WHERE incident_id = ?1",
+                rusqlite::params![incident_id],
+                |row| {
+                    let graph_raw: String = row.get(0)?;
+                    let graph_data = serde_json::from_str::<Value>(&graph_raw)
+                        .unwrap_or_else(|_| Value::Object(serde_json::Map::new()));
+                    Ok(serde_json::json!({
+                        "incident_id": incident_id,
+                        "graph_data": graph_data,
+                        "created_at": row.get::<_, String>(1)?,
+                        "event_count": row.get::<_, i64>(2)?,
+                    }))
+                },
+            )
+            .optional()
+            .context("query inference graph snapshot")
     }
 
     pub fn upsert_incident(
@@ -1418,6 +1591,52 @@ impl IncidentsStore {
             )
             .context("insert ai trace")?;
         Ok(())
+    }
+
+    pub fn add_chat_message(&self, message: &StoredChatMessage) -> Result<()> {
+        self.conn
+            .execute(
+                "INSERT INTO incident_chat_messages (
+                    message_id, incident_id, role, content, message_schema_version, created_at
+                ) VALUES (?1, ?2, ?3, ?4, ?5, ?6)",
+                rusqlite::params![
+                    message.message_id,
+                    message.incident_id,
+                    message.role,
+                    message.content,
+                    message.message_schema_version,
+                    message.created_at,
+                ],
+            )
+            .context("insert incident chat message")?;
+        Ok(())
+    }
+
+    pub fn list_chat_messages(&self, incident_id: &str) -> Result<Vec<Value>> {
+        let mut stmt = self
+            .conn
+            .prepare(
+                "SELECT message_id, role, content, message_schema_version, created_at
+                 FROM incident_chat_messages
+                 WHERE incident_id = ?1 ORDER BY created_at ASC",
+            )
+            .context("prepare incident chat query")?;
+        let rows = stmt
+            .query_map(rusqlite::params![incident_id], |row| {
+                Ok(serde_json::json!({
+                    "message_id": row.get::<_, String>(0)?,
+                    "role": row.get::<_, String>(1)?,
+                    "content": row.get::<_, String>(2)?,
+                    "message_schema_version": row.get::<_, i64>(3)?,
+                    "created_at": row.get::<_, String>(4)?,
+                }))
+            })
+            .context("query incident chat messages")?;
+        let mut out = Vec::new();
+        for row in rows {
+            out.push(row?);
+        }
+        Ok(out)
     }
 
     pub fn latest_ai_trace(&self, incident_id: &str) -> Result<Option<Value>> {
@@ -1923,6 +2142,15 @@ fn initialize_incidents_db(path: &Path) -> Result<()> {
         "TEXT NOT NULL DEFAULT 'ok'",
     )?;
     conn.execute(
+        "CREATE TABLE IF NOT EXISTS ai_operator_context (
+            scope_key TEXT PRIMARY KEY,
+            body TEXT NOT NULL,
+            updated_at TEXT NOT NULL DEFAULT (strftime('%Y-%m-%dT%H:%M:%fZ', 'now'))
+        );",
+        [],
+    )
+    .context("create ai_operator_context")?;
+    conn.execute(
         "INSERT INTO _schema_version(schema_name, version) VALUES ('incidents', 5)
          ON CONFLICT(schema_name) DO UPDATE SET version = excluded.version, applied_at = strftime('%Y-%m-%dT%H:%M:%fZ', 'now')",
         [],
@@ -1999,7 +2227,7 @@ fn event_row_from_row(row: &Row<'_>) -> rusqlite::Result<EventRow> {
     Ok(EventRow {
         event_id: row.get(0)?,
         timestamp: row.get(1)?,
-        severity: severity.map(Value::from),
+        severity: severity.map(SeverityValue::Level),
         service_id: row.get(3)?,
         message: row.get(4)?,
         summary: row.get(4)?,
@@ -2028,6 +2256,10 @@ fn parse_tags(raw: String) -> Option<Vec<String>> {
 
 fn parse_json_array(raw: String) -> Vec<String> {
     serde_json::from_str::<Vec<String>>(&raw).unwrap_or_default()
+}
+
+fn is_missing_table_error(error: &impl std::fmt::Display) -> bool {
+    error.to_string().to_ascii_lowercase().contains("no such table")
 }
 
 fn now_iso() -> String {
@@ -2138,6 +2370,46 @@ mod tests {
             .get_collector_state("host_metrics", "cursor")
             .expect("get collector state");
         assert_eq!(cursor.as_deref(), Some("42"));
+    }
+
+    #[test]
+    fn get_events_returns_rows_in_requested_order() {
+        let (_root, events_db, incidents_db) = temp_db_paths("events-batch-read");
+        initialize_databases(&events_db, &incidents_db).expect("initialize dbs");
+        let mut store = EventsStore::open(&events_db)
+            .expect("open events result")
+            .expect("events store present");
+        store
+            .insert_batch(&[
+                NewEventRecord::minimal(
+                    "evt-a",
+                    "2026-05-07T10:00:00Z",
+                    "api",
+                    2,
+                    "first event",
+                    "app_http",
+                    "2026-05-07T10:00:00Z",
+                ),
+                NewEventRecord::minimal(
+                    "evt-b",
+                    "2026-05-07T10:00:01Z",
+                    "api",
+                    3,
+                    "second event",
+                    "app_http",
+                    "2026-05-07T10:00:01Z",
+                ),
+            ])
+            .expect("insert events");
+
+        let events = store
+            .get_events(&["evt-b".into(), "evt-a".into()])
+            .expect("load events");
+        let ids = events
+            .into_iter()
+            .filter_map(|event| event.event_id)
+            .collect::<Vec<_>>();
+        assert_eq!(ids, vec!["evt-b".to_string(), "evt-a".to_string()]);
     }
 
     #[test]
@@ -2466,11 +2738,34 @@ mod tests {
                 created_at: "2026-05-07T10:03:30Z".into(),
             })
             .expect("add ai trace");
+        incidents
+            .upsert_inference_graph_snapshot(&StoredInferenceGraphSnapshot {
+                incident_id: "inc-1".into(),
+                graph_data: serde_json::json!({"nodes":["api", "postgres"], "edges":[["api","postgres"]]}),
+                created_at: "2026-05-07T10:03:15Z".into(),
+                event_count: 1,
+            })
+            .expect("add inference graph snapshot");
+        incidents
+            .add_chat_message(&StoredChatMessage {
+                message_id: "msg-1".into(),
+                incident_id: "inc-1".into(),
+                role: "user".into(),
+                content: "What failed first?".into(),
+                message_schema_version: 1,
+                created_at: "2026-05-07T10:03:20Z".into(),
+            })
+            .expect("add chat message");
         assert!(incidents
             .latest_ai_trace("inc-1")
             .expect("latest ai trace")
             .is_some());
+        assert!(incidents
+            .inference_graph_snapshot("inc-1")
+            .expect("graph snapshot")
+            .is_some());
         assert_eq!(incidents.list_feedback("inc-1").expect("feedback").len(), 1);
+        assert_eq!(incidents.list_chat_messages("inc-1").expect("chat").len(), 1);
         assert_eq!(
             incidents.list_state_log("inc-1").expect("state log").len(),
             2

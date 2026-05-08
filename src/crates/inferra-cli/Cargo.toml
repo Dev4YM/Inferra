@@ -11,12 +11,16 @@ path = "src/main.rs"
 [dependencies]
 anyhow = { workspace = true }
 clap = { workspace = true }
+comfy-table = "7.2.1"
+console = "0.16.1"
+dialoguer = "0.12.0"
 inferra-api = { path = "../inferra-api" }
 inferra-collectors = { path = "../inferra-collectors" }
 inferra-config = { path = "../inferra-config" }
 inferra-core = { path = "../inferra-core" }
 inferra-storage = { path = "../inferra-storage" }
 inferra-windows-service = { path = "../inferra-windows-service" }
+indicatif = "0.18.2"
 reqwest = { workspace = true }
 serde_json = { workspace = true }
 tokio = { workspace = true }

@@ -25,6 +25,7 @@ use tokio::task::JoinHandle;
 use toml::Value as TomlValue;
 
 static NEXT_EVENT_ID: AtomicU64 = AtomicU64::new(1);
+static GLOBAL_QUEUE_DEPTH: AtomicI64 = AtomicI64::new(0);
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct CollectorHealth {
@@ -48,6 +49,14 @@ pub struct CollectorRuntimeRow {
     pub lag_seconds: Option<f64>,
 }
 
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct AppIngestResult {
+    pub event_id: String,
+    pub accepted: bool,
+    pub suppressed_duplicates: u64,
+    pub suppressed_noise: u64,
+}
+
 #[derive(Clone, Default)]
 pub struct CollectorRuntime {
     inner: Arc<CollectorRuntimeInner>,
@@ -58,7 +67,13 @@ struct CollectorRuntimeInner {
     statuses: RwLock<HashMap<String, CollectorRuntimeRow>>,
     stop_sender: Mutex<Option<watch::Sender<bool>>>,
     handles: Mutex<Vec<JoinHandle<()>>>,
-    queue_depth: AtomicI64,
+    rate_state: Mutex<HashMap<String, CollectorRateState>>,
+}
+
+#[derive(Debug, Clone, Copy)]
+struct CollectorRateState {
+    last_events_emitted: u64,
+    last_observed_at_ms: i128,
 }
 
 #[derive(Debug, Clone)]
@@ -554,7 +569,7 @@ impl CollectorRuntime {
                 row.status = "stopped".into();
             }
         }
-        self.inner.queue_depth.store(0, Ordering::Relaxed);
+        GLOBAL_QUEUE_DEPTH.store(0, Ordering::Relaxed);
         Ok(())
     }
 
@@ -580,7 +595,7 @@ impl CollectorRuntime {
     }
 
     pub fn queue_depth(&self) -> i64 {
-        self.inner.queue_depth.load(Ordering::Relaxed)
+        GLOBAL_QUEUE_DEPTH.load(Ordering::Relaxed)
     }
 
     pub async fn total_errors(&self) -> i64 {
@@ -599,7 +614,7 @@ impl CollectorRuntime {
         incidents_db: &Path,
         config: &TomlValue,
         payload: &serde_json::Value,
-    ) -> Result<String> {
+    ) -> Result<AppIngestResult> {
         let timestamp = payload
             .get("timestamp")
             .and_then(|value| value.as_str())
@@ -637,29 +652,35 @@ impl CollectorRuntime {
             .unwrap_or_default();
         let event_id = next_event_id("app");
         let fingerprint = semantic_fingerprint("app", &service_id, "app_http", &message);
-        let mut store =
-            EventsStore::open(events_db)?.context("event store not found for app ingest")?;
-        let result = store.insert_batch_governed(
-            &[NewEventRecord {
-                event_id: event_id.clone(),
-                timestamp: timestamp.clone(),
-                service_id,
-                severity: severity_from_level(level),
-                message,
-                source_type: "app_http".into(),
-                source_id,
-                tags,
-                fingerprint,
-                host_id: "local".into(),
-                event_type: 0,
-                timestamp_source: "collector".into(),
-                collected_at: timestamp.clone(),
-                quality: Some("normalized".into()),
-                structured_data: Some(payload.clone()),
-                raw_offset: None,
-            }],
-            &ingest_governance(config),
-        )?;
+        adjust_queue_depth(1);
+        let result = (|| {
+            let mut store =
+                EventsStore::open(events_db)?.context("event store not found for app ingest")?;
+            store.insert_batch_governed(
+                &[NewEventRecord {
+                    event_id: event_id.clone(),
+                    timestamp: timestamp.clone(),
+                    service_id,
+                    severity: severity_from_level(level),
+                    message,
+                    source_type: "app_http".into(),
+                    source_id,
+                    tags,
+                    fingerprint,
+                    host_id: "local".into(),
+                    event_type: 0,
+                    timestamp_source: "collector".into(),
+                    collected_at: timestamp.clone(),
+                    quality: Some("normalized".into()),
+                    structured_data: Some(payload.clone()),
+                    raw_offset: None,
+                }],
+                &ingest_governance(config),
+            )
+        })();
+        adjust_queue_depth(-1);
+        let result = result?;
+        let accepted = result.inserted > 0;
         if result.inserted > 0 {
             reconcile_new_events(events_db, incidents_db, config, &result.inserted_event_ids)?;
             self.bump_success(
@@ -671,7 +692,12 @@ impl CollectorRuntime {
             )
             .await;
         }
-        Ok(event_id)
+        Ok(AppIngestResult {
+            event_id,
+            accepted,
+            suppressed_duplicates: result.suppressed_duplicates as u64,
+            suppressed_noise: result.suppressed_noise as u64,
+        })
     }
 
     async fn upsert_status(&self, row: CollectorRuntimeRow) {
@@ -704,9 +730,22 @@ impl CollectorRuntime {
         row.status = "running".into();
         row.events_emitted += emitted;
         row.dropped_events += dropped;
-        row.events_per_second = 0.0;
-        if last_event_at.is_some() {
-            row.last_event_at = last_event_at;
+        let now_ms = epoch_millis();
+        let mut rate_state = self.inner.rate_state.lock().expect("collector rate state lock");
+        let state = rate_state
+            .entry(collector_id.to_string())
+            .or_insert(CollectorRateState {
+                last_events_emitted: row.events_emitted.saturating_sub(emitted),
+                last_observed_at_ms: now_ms,
+            });
+        let emitted_delta = row.events_emitted.saturating_sub(state.last_events_emitted);
+        let elapsed_ms = (now_ms - state.last_observed_at_ms).max(1) as f64;
+        row.events_per_second = (emitted_delta as f64 / elapsed_ms) * 1000.0;
+        state.last_events_emitted = row.events_emitted;
+        state.last_observed_at_ms = now_ms;
+        if let Some(last_event_at) = last_event_at {
+            row.lag_seconds = lag_seconds_for(&last_event_at);
+            row.last_event_at = Some(last_event_at);
         }
     }
 
@@ -1809,7 +1848,7 @@ async fn handle_app_standalone_ingest(
             ));
         }
     }
-    let event_id = state
+    let result = state
         .runtime
         .ingest_app_event(
             &state.events_db,
@@ -1820,7 +1859,12 @@ async fn handle_app_standalone_ingest(
         .await
         .map_err(|error| (StatusCode::INTERNAL_SERVER_ERROR, error.to_string()))?;
     Ok(Json(
-        serde_json::json!({ "event_id": event_id, "accepted": true }),
+        serde_json::json!({
+            "event_id": result.event_id,
+            "accepted": result.accepted,
+            "suppressed_duplicates": result.suppressed_duplicates,
+            "suppressed_noise": result.suppressed_noise,
+        }),
     ))
 }
 
@@ -3124,9 +3168,12 @@ fn persist_events_and_reconcile(
     config: &TomlValue,
     events: &[NewEventRecord],
 ) -> Result<IngestBatchResult> {
-    let result = persist_events(events_db, config, events)?;
+    adjust_queue_depth(1);
+    let result = (|| persist_events(events_db, config, events))();
+    adjust_queue_depth(-1);
+    let result = result?;
     if result.inserted > 0 {
-        let _ = reconcile_new_events(events_db, incidents_db, config, &result.inserted_event_ids)?;
+        reconcile_new_events(events_db, incidents_db, config, &result.inserted_event_ids)?;
     }
     Ok(result)
 }
@@ -3278,9 +3325,49 @@ fn now_iso() -> String {
         .unwrap_or_else(|_| "1970-01-01T00:00:00Z".into())
 }
 
+fn adjust_queue_depth(delta: i64) {
+    if delta >= 0 {
+        GLOBAL_QUEUE_DEPTH.fetch_add(delta, Ordering::Relaxed);
+        return;
+    }
+    let previous = GLOBAL_QUEUE_DEPTH.fetch_sub(-delta, Ordering::Relaxed);
+    if previous <= -delta {
+        GLOBAL_QUEUE_DEPTH.store(0, Ordering::Relaxed);
+    }
+}
+
+fn epoch_millis() -> i128 {
+    SystemTime::now()
+        .duration_since(UNIX_EPOCH)
+        .unwrap_or_default()
+        .as_millis() as i128
+}
+
+fn lag_seconds_for(timestamp: &str) -> Option<f64> {
+    let observed = OffsetDateTime::parse(timestamp, &time::format_description::well_known::Rfc3339)
+        .ok()?;
+    let now = OffsetDateTime::now_utc();
+    let lag = (now - observed).whole_milliseconds() as f64 / 1000.0;
+    Some(lag.max(0.0))
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
+    use inferra_storage::initialize_databases;
+    use std::fs;
+    use std::time::{SystemTime, UNIX_EPOCH};
+
+    fn temp_db_paths(name: &str) -> (std::path::PathBuf, std::path::PathBuf, std::path::PathBuf) {
+        let unique = SystemTime::now()
+            .duration_since(UNIX_EPOCH)
+            .expect("time after epoch")
+            .as_nanos();
+        let root = std::env::temp_dir().join(format!("inferra-collectors-{name}-{unique}"));
+        let events = root.join("events.db");
+        let incidents = root.join("incidents.db");
+        (root, events, incidents)
+    }
 
     #[test]
     fn wildcard_match_supports_star_and_question_mark() {
@@ -3333,5 +3420,52 @@ max_payload_bytes = 2048
         assert_eq!(normalized_mount_path("api/ingest"), "/api/ingest");
         assert_eq!(normalized_mount_path("/api/ingest"), "/api/ingest");
         assert_eq!(normalized_mount_path(""), "/api/ingest");
+    }
+
+    #[tokio::test]
+    async fn ingest_app_event_reports_governance_suppression() {
+        let (root, events_db, incidents_db) = temp_db_paths("app-ingest");
+        initialize_databases(&events_db, &incidents_db).expect("initialize dbs");
+        let runtime = CollectorRuntime::default();
+        let config: TomlValue = r#"
+[deduplication]
+enabled = false
+
+[noise_filter]
+enabled = true
+blocklist_enabled = true
+allowlist_enabled = false
+always_keep_severity = "ERROR"
+
+[[noise_filter.blocklist]]
+pattern = "health check passed"
+severity_max = "INFO"
+reason = "routine health signal"
+"#
+        .parse()
+        .expect("parse config");
+
+        let result = runtime
+            .ingest_app_event(
+                &events_db,
+                &incidents_db,
+                &config,
+                &serde_json::json!({
+                    "service": "api",
+                    "level": "info",
+                    "message": "health check passed",
+                }),
+            )
+            .await
+            .expect("ingest app event");
+
+        assert!(!result.accepted);
+        assert_eq!(result.suppressed_noise, 1);
+        let store = EventsStore::open(&events_db)
+            .expect("open events store")
+            .expect("events store exists");
+        assert_eq!(store.count_events().expect("count events"), 0);
+
+        let _ = fs::remove_dir_all(root);
     }
 }

@@ -21,7 +21,7 @@ repository = "https://github.com/inferra/inferra"
 anyhow = "1"
 axum = { version = "0.8", features = ["macros", "json"] }
 bytes = "1"
-clap = { version = "4", features = ["derive", "env"] }
+clap = { version = "4", features = ["color", "derive", "env"] }
 futures-util = "0.3"
 http-body-util = "0.1"
 hyper = { version = "1", features = ["full"] }

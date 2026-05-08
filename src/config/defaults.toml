@@ -355,6 +355,10 @@ cache_ttl_seconds = 3600
 max_context_events = 30
 redact_raw_logs = true
 nl_search_min_confidence = 0.55
+investigation_monitor_seconds = 5
+investigation_monitor_interval_ms = 500
+model_status = ""
+model_investigate = ""
 
 [experience]
 mode = "operator"

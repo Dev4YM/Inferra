@@ -4,7 +4,7 @@ Inferra collectors are read-only toward observed systems. The active collector r
 
 ## Supervised collection
 
-Collectors run inside the local runtime started by `inferra serve`. The active CLI surface for operators is `collectors status`, `collectors start`, and `collectors stop`.
+Collectors run inside the local runtime started by `inferra serve`. Bare `inferra` now shows a welcome/status screen; it does not start the runtime. The active collector CLI surface for operators is `collectors status`, `collectors start`, and `collectors stop`.
 
 Windows:
 

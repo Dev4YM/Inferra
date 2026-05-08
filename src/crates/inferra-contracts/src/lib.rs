@@ -4,6 +4,13 @@ use serde::{Deserialize, Serialize};
 use serde_json::Value;
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
+#[serde(untagged)]
+pub enum SeverityValue {
+    Level(i64),
+    Label(String),
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct ConfigResponse {
     pub config: Value,
     #[serde(skip_serializing_if = "Option::is_none")]
@@ -208,6 +215,12 @@ pub struct AiStatusResponse {
     pub allow_remote: Option<bool>,
     #[serde(skip_serializing_if = "Option::is_none")]
     pub registry_model: Option<Value>,
+    /// Effective model used for `/api/ai/status` probe when `ai.model_status` is set.
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub status_model: Option<String>,
+    /// Effective model used for investigation/chat when `ai.model_investigate` is set.
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub investigate_model: Option<String>,
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
@@ -250,7 +263,7 @@ pub struct EventRow {
     #[serde(skip_serializing_if = "Option::is_none")]
     pub timestamp: Option<String>,
     #[serde(skip_serializing_if = "Option::is_none")]
-    pub severity: Option<Value>,
+    pub severity: Option<SeverityValue>,
     #[serde(skip_serializing_if = "Option::is_none")]
     pub service_id: Option<String>,
     #[serde(skip_serializing_if = "Option::is_none")]
@@ -267,6 +280,8 @@ pub struct EventRow {
 pub struct HypothesisRow {
     pub hypothesis_id: String,
     pub cause_type: String,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub rank: Option<i64>,
     #[serde(skip_serializing_if = "Option::is_none")]
     pub description: Option<String>,
     #[serde(skip_serializing_if = "Option::is_none")]
@@ -307,6 +322,8 @@ pub struct AiDoctorResponse {
     pub provider: String,
     pub base_url: String,
     pub model: String,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub investigate_model: Option<String>,
     pub allow_remote: bool,
     pub token_env_set: bool,
     pub redact_raw_logs: bool,

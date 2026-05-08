@@ -77,6 +77,30 @@ export function InvestigationView({
             </Alert>
           ) : null}
 
+          {result.grounding &&
+          (result.grounding.removed_evidence_ids.length > 0 || result.grounding.removed_citation_ids.length > 0) ? (
+            <Alert variant="info">
+              <ShieldCheck className="size-4" />
+              <div className="min-w-0 space-y-2">
+                <AlertTitle>Grounding cleanup</AlertTitle>
+                <AlertDescription>
+                  Citations or evidence entries that did not match IDs in the investigation bundle were removed before
+                  display.
+                </AlertDescription>
+                {result.grounding.removed_evidence_ids.length ? (
+                  <p className="text-xs text-muted-foreground">
+                    Removed evidence: {result.grounding.removed_evidence_ids.join(", ")}
+                  </p>
+                ) : null}
+                {result.grounding.removed_citation_ids.length ? (
+                  <p className="text-xs text-muted-foreground">
+                    Removed citations: {result.grounding.removed_citation_ids.join(", ")}
+                  </p>
+                ) : null}
+              </div>
+            </Alert>
+          ) : null}
+
           {!result.used_ai && result.fallback_reason ? (
             <Alert variant="info">
               <ShieldCheck className="size-4" />

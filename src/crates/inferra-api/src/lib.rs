@@ -1,14 +1,16 @@
 //! Axum HTTP server: native `/api/*` plus static UI.
 
 use anyhow::{bail, Context, Result};
+use async_stream::stream;
 use axum::{
     body::Body,
     extract::{Path as AxumPath, Query, Request, State},
     http::{header, HeaderValue, StatusCode},
-    response::{IntoResponse, Response},
+    response::{sse::Event, sse::KeepAlive, sse::Sse, IntoResponse, Response},
     routing::{get, post},
     Json, Router,
 };
+use futures_util::Stream;
 use inferra_collectors::{configured_collectors, CollectorRuntime};
 use inferra_config::{
     apply_config_put, config_to_json, experience_from_config, load_merged_config, resolve_data_dir,
@@ -19,11 +21,16 @@ use inferra_contracts::{
     ConfigResponse, IncidentDetailResponse, IncidentRow, OverviewResponse, ServiceDetailResponse,
     WorkspaceMapResponse,
 };
-use inferra_core::{ai_status_from_config, build_overview, build_workspace_map};
+use inferra_core::{
+    ai_status_from_config, build_overview, build_workspace_map, collect_host_resources_snapshot,
+    collect_runtime_monitor_window, try_collect_gpu_summary,
+};
 use inferra_storage::{
     initialize_databases, EventsStore, IncidentsStore, StoredAiTrace, StoredExplanation,
 };
 use serde_json::{json, Value as JsonValue};
+use std::collections::{HashMap, HashSet};
+use std::convert::Infallible;
 use std::future::Future;
 use std::hash::{Hash, Hasher};
 use std::path::PathBuf;
@@ -40,7 +47,10 @@ You receive a redacted runtime evidence bundle. You must:\n\
 - cite supporting incident_id, service_id, or event_id values when possible\n\
 - never claim you executed or modified anything\n\
 - never propose remediation that would mutate the observed system\n\
-- include explicit uncertainty when evidence is thin\n\n\
+- include explicit uncertainty when evidence is thin\n\
+- respect host_resources and runtime_monitor samples as authoritative for machine state during this investigation window\n\
+- if hypotheses[] is non-empty, list likely_causes in the SAME best-first order as hypotheses (by rank ascending, then total_score descending). If you disagree, keep that order and explain the disagreement under uncertainty[]\n\
+- never invent IDs: every citation and evidence[].id must exist in the bundle\n\n\
 Return a single JSON object. No markdown fences. No prose outside JSON.\n\
 Every next_steps entry must have safety=\"read_only\" and requires_user_action=true.";
 const INVESTIGATION_USER_TEMPLATE: &str = "Mode: {mode}\n\
@@ -69,6 +79,37 @@ Schema:\n\
   \"citations\": [\"string\"]\n\
 }}";
 
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+enum AiProbePurpose {
+    Status,
+    Investigate,
+}
+
+fn resolve_status_probe_model(ai: Option<&toml::value::Table>) -> String {
+    let s = ai_table_string(ai, "model_status", "");
+    if s.trim().is_empty() {
+        ai_table_string(ai, "model", "")
+    } else {
+        s
+    }
+}
+
+fn resolve_investigate_probe_model(ai: Option<&toml::value::Table>) -> String {
+    let s = ai_table_string(ai, "model_investigate", "");
+    if s.trim().is_empty() {
+        ai_table_string(ai, "model", "")
+    } else {
+        s
+    }
+}
+
+fn probe_model_name(ai: Option<&toml::value::Table>, purpose: AiProbePurpose) -> String {
+    match purpose {
+        AiProbePurpose::Status => resolve_status_probe_model(ai),
+        AiProbePurpose::Investigate => resolve_investigate_probe_model(ai),
+    }
+}
+
 #[derive(Clone, Debug)]
 struct AiProviderProbe {
     enabled: bool,
@@ -84,13 +125,14 @@ struct AiProviderProbe {
 }
 
 impl AiProviderProbe {
-    fn disabled(config: &TomlValue) -> Self {
+    fn disabled(config: &TomlValue, purpose: AiProbePurpose) -> Self {
         let ai = config.get("ai").and_then(|value| value.as_table());
+        let model = probe_model_name(ai, purpose);
         Self {
             enabled: false,
             provider: ai_table_string(ai, "provider", "ollama"),
             base_url: ai_table_string(ai, "base_url", "http://127.0.0.1:11434"),
-            model: ai_table_string(ai, "model", ""),
+            model,
             allow_remote: ai_table_bool(ai, "allow_remote", false),
             available: false,
             installed: false,
@@ -100,14 +142,15 @@ impl AiProviderProbe {
         }
     }
 
-    fn unavailable(config: &TomlValue, reason: impl Into<String>) -> Self {
+    fn unavailable(config: &TomlValue, purpose: AiProbePurpose, reason: impl Into<String>) -> Self {
         let ai = config.get("ai").and_then(|value| value.as_table());
+        let model = probe_model_name(ai, purpose);
         let reason = reason.into();
         Self {
             enabled: true,
             provider: ai_table_string(ai, "provider", "ollama"),
             base_url: ai_table_string(ai, "base_url", "http://127.0.0.1:11434"),
-            model: ai_table_string(ai, "model", ""),
+            model,
             allow_remote: ai_table_bool(ai, "allow_remote", false),
             available: false,
             installed: false,
@@ -168,6 +211,8 @@ pub fn app_router(state: AppState) -> Router {
         .route("/api/ai/status", get(api_ai_status))
         .route("/api/ai/doctor", get(api_ai_doctor))
         .route("/api/ai/ask", post(api_ai_ask))
+        .route("/api/ai/investigate-stream", post(api_ai_investigate_stream))
+        .route("/api/ai/context", get(api_ai_context_get).put(api_ai_context_put))
         .route("/api/ai/report/{incident_id}", get(api_ai_report))
         .route("/api/investigate/now", get(api_investigate_now))
         .route(
@@ -295,7 +340,7 @@ async fn api_overview(
     let cfg = state.config.read().await.clone();
     let mut overview = build_overview(&cfg, state.paths.as_ref())
         .map_err(|e| (StatusCode::INTERNAL_SERVER_ERROR, e.to_string()))?;
-    let probe = probe_ai_provider(&cfg).await;
+    let probe = probe_ai_provider(&cfg, AiProbePurpose::Status).await;
     if let Some(health) = overview.dashboard.health.as_mut() {
         health.ai_enabled = Some(probe.enabled);
         health.ai_available = Some(probe.available);
@@ -319,7 +364,7 @@ async fn api_metrics(State(state): State<AppState>) -> Response {
         .unwrap_or(0);
     let queue_depth = state.collectors.queue_depth();
     let payload = format!(
-        "# HELP inferra_events_total Approximate stored normalized events.\n# TYPE inferra_events_total counter\ninferra_events_total {event_count}\n# HELP inferra_active_incidents Active incidents (open, investigating, explained).\n# TYPE inferra_active_incidents gauge\ninferra_active_incidents {active_incidents}\n# HELP inferra_raw_queue_depth Raw ingestion queue depth.\n# TYPE inferra_raw_queue_depth gauge\ninferra_raw_queue_depth {queue_depth}\n"
+        "# HELP inferra_events_total Approximate stored normalized events.\n# TYPE inferra_events_total counter\ninferra_events_total {event_count}\n# HELP inferra_active_incidents Active incidents (open, investigating, explained).\n# TYPE inferra_active_incidents gauge\ninferra_active_incidents {active_incidents}\n# HELP inferra_raw_queue_depth In-flight ingestion operations.\n# TYPE inferra_raw_queue_depth gauge\ninferra_raw_queue_depth {queue_depth}\n"
     );
     (
         StatusCode::OK,
@@ -391,7 +436,7 @@ async fn api_anomaly_status(
         let severity = event
             .severity
             .as_ref()
-            .and_then(json_value_to_i64)
+            .and_then(severity_value_to_i64)
             .unwrap_or_default();
         *severity_buckets.entry(severity.to_string()).or_default() += 1;
         if severity >= 3 {
@@ -672,7 +717,10 @@ async fn api_service_events(
 async fn api_ai_status(State(state): State<AppState>) -> Json<AiStatusResponse> {
     let cfg = state.config.read().await.clone();
     let mut status = ai_status_from_config(&cfg);
-    let probe = probe_ai_provider(&cfg).await;
+    let ai = cfg.get("ai").and_then(|v| v.as_table());
+    status.status_model = Some(resolve_status_probe_model(ai));
+    status.investigate_model = Some(resolve_investigate_probe_model(ai));
+    let probe = probe_ai_provider(&cfg, AiProbePurpose::Status).await;
     status.enabled = probe.enabled;
     status.provider = Some(probe.provider.clone());
     status.base_url = Some(probe.base_url.clone());
@@ -714,7 +762,7 @@ async fn api_ai_doctor(
         .and_then(|v| v.as_bool())
         .unwrap_or(true);
     let mut warnings = Vec::new();
-    let probe = probe_ai_provider(&cfg).await;
+    let probe = probe_ai_provider(&cfg, AiProbePurpose::Status).await;
     if enabled && !probe.available {
         warnings.push(
             probe
@@ -738,12 +786,21 @@ async fn api_ai_doctor(
             probe.model, probe.base_url
         ));
     }
+    let inv = resolve_investigate_probe_model(cfg.get("ai").and_then(|v| v.as_table()));
+    let inv_probe = probe_ai_provider(&cfg, AiProbePurpose::Investigate).await;
+    if enabled && inv != probe.model && !inv_probe.installed {
+        warnings.push(format!(
+            "Investigation model {inv} is not installed at {} (status probe uses {}).",
+            probe.base_url, probe.model
+        ));
+    }
     Ok(Json(AiDoctorResponse {
         ok: !enabled || probe.available,
         enabled,
         provider: probe.provider,
         base_url: probe.base_url,
-        model: probe.resolved_model.unwrap_or(probe.model),
+        model: probe.resolved_model.clone().unwrap_or_else(|| probe.model.clone()),
+        investigate_model: Some(inv),
         allow_remote,
         token_env_set: !token_env.is_empty(),
         redact_raw_logs,
@@ -758,13 +815,22 @@ async fn api_ai_doctor(
 
 async fn api_investigate_now(
     State(state): State<AppState>,
-    Query(params): Query<std::collections::HashMap<String, String>>,
+    Query(params): Query<HashMap<String, String>>,
 ) -> Result<Json<JsonValue>, (StatusCode, String)> {
     let cfg = state.config.read().await.clone();
     let mode = current_mode(&cfg, params.get("mode").map(String::as_str));
     let focus = "overview".to_string();
-    let bundle = build_investigation_bundle(state.paths.as_ref(), &cfg, &focus, "", &mode)
-        .map_err(|e| (investigation_status(&e), e.to_string()))?;
+    let monitor = resolve_monitor_seconds(&cfg, params.get("monitor_seconds"), None);
+    let bundle = investigation_bundle_enriched(
+        state.paths.as_ref(),
+        &cfg,
+        &focus,
+        "",
+        &mode,
+        monitor,
+    )
+    .await
+    .map_err(|e| (investigation_status(&e), e.to_string()))?;
     investigation_response_for_bundle(
         state.paths.as_ref(),
         &cfg,
@@ -799,8 +865,17 @@ async fn api_ai_ask(
         return Err((StatusCode::BAD_REQUEST, "'question' is required".into()));
     }
     let mode = current_mode(&cfg, payload.get("mode").and_then(|v| v.as_str()));
-    let bundle = build_investigation_bundle(state.paths.as_ref(), &cfg, &focus, &question, &mode)
-        .map_err(|e| (investigation_status(&e), e.to_string()))?;
+    let monitor = resolve_monitor_seconds(&cfg, None, Some(&payload));
+    let bundle = investigation_bundle_enriched(
+        state.paths.as_ref(),
+        &cfg,
+        &focus,
+        &question,
+        &mode,
+        monitor,
+    )
+    .await
+    .map_err(|e| (investigation_status(&e), e.to_string()))?;
     investigation_response_for_bundle(
         state.paths.as_ref(),
         &cfg,
@@ -816,13 +891,22 @@ async fn api_ai_ask(
 async fn api_investigate_incident(
     State(state): State<AppState>,
     AxumPath(incident_id): AxumPath<String>,
-    Query(params): Query<std::collections::HashMap<String, String>>,
+    Query(params): Query<HashMap<String, String>>,
 ) -> Result<Json<JsonValue>, (StatusCode, String)> {
     let cfg = state.config.read().await.clone();
     let mode = current_mode(&cfg, params.get("mode").map(String::as_str));
     let focus = format!("incident:{incident_id}");
-    let bundle = build_investigation_bundle(state.paths.as_ref(), &cfg, &focus, "", &mode)
-        .map_err(|e| (investigation_status(&e), e.to_string()))?;
+    let monitor = resolve_monitor_seconds(&cfg, params.get("monitor_seconds"), None);
+    let bundle = investigation_bundle_enriched(
+        state.paths.as_ref(),
+        &cfg,
+        &focus,
+        "",
+        &mode,
+        monitor,
+    )
+    .await
+    .map_err(|e| (investigation_status(&e), e.to_string()))?;
     investigation_response_for_bundle(
         state.paths.as_ref(),
         &cfg,
@@ -838,13 +922,22 @@ async fn api_investigate_incident(
 async fn api_investigate_service(
     State(state): State<AppState>,
     AxumPath(service_id): AxumPath<String>,
-    Query(params): Query<std::collections::HashMap<String, String>>,
+    Query(params): Query<HashMap<String, String>>,
 ) -> Result<Json<JsonValue>, (StatusCode, String)> {
     let cfg = state.config.read().await.clone();
     let mode = current_mode(&cfg, params.get("mode").map(String::as_str));
     let focus = format!("service:{service_id}");
-    let bundle = build_investigation_bundle(state.paths.as_ref(), &cfg, &focus, "", &mode)
-        .map_err(|e| (investigation_status(&e), e.to_string()))?;
+    let monitor = resolve_monitor_seconds(&cfg, params.get("monitor_seconds"), None);
+    let bundle = investigation_bundle_enriched(
+        state.paths.as_ref(),
+        &cfg,
+        &focus,
+        "",
+        &mode,
+        monitor,
+    )
+    .await
+    .map_err(|e| (investigation_status(&e), e.to_string()))?;
     investigation_response_for_bundle(
         state.paths.as_ref(),
         &cfg,
@@ -860,13 +953,22 @@ async fn api_investigate_service(
 async fn api_ai_report(
     State(state): State<AppState>,
     AxumPath(incident_id): AxumPath<String>,
-    Query(params): Query<std::collections::HashMap<String, String>>,
+    Query(params): Query<HashMap<String, String>>,
 ) -> Result<Json<JsonValue>, (StatusCode, String)> {
     let cfg = state.config.read().await.clone();
     let mode = current_mode(&cfg, params.get("mode").map(String::as_str));
     let focus = format!("incident:{incident_id}");
-    let bundle = build_investigation_bundle(state.paths.as_ref(), &cfg, &focus, "", &mode)
-        .map_err(|e| (investigation_status(&e), e.to_string()))?;
+    let monitor = resolve_monitor_seconds(&cfg, params.get("monitor_seconds"), None);
+    let bundle = investigation_bundle_enriched(
+        state.paths.as_ref(),
+        &cfg,
+        &focus,
+        "",
+        &mode,
+        monitor,
+    )
+    .await
+    .map_err(|e| (investigation_status(&e), e.to_string()))?;
     investigation_response_for_bundle(
         state.paths.as_ref(),
         &cfg,
@@ -905,6 +1007,263 @@ async fn investigation_response_for_bundle(
         response["report"] = JsonValue::Bool(true);
     }
     Ok(Json(response))
+}
+
+async fn api_ai_context_get(
+    State(state): State<AppState>,
+    Query(params): Query<HashMap<String, String>>,
+) -> Result<Json<JsonValue>, (StatusCode, String)> {
+    let scope = params
+        .get("scope")
+        .map(String::as_str)
+        .filter(|s| !s.is_empty())
+        .ok_or_else(|| (StatusCode::BAD_REQUEST, "scope query parameter is required".into()))?;
+    initialize_databases(&state.paths.events_db, &state.paths.incidents_db)
+        .map_err(|e| (StatusCode::INTERNAL_SERVER_ERROR, e.to_string()))?;
+    let store = IncidentsStore::open(&state.paths.incidents_db)
+        .map_err(|e| (StatusCode::INTERNAL_SERVER_ERROR, e.to_string()))?
+        .ok_or_else(|| (StatusCode::NOT_FOUND, "incidents database missing".into()))?;
+    let body = store
+        .get_operator_context(scope)
+        .map_err(|e| (StatusCode::INTERNAL_SERVER_ERROR, e.to_string()))?
+        .unwrap_or_default();
+    Ok(Json(json!({ "scope": scope, "body": body })))
+}
+
+async fn api_ai_context_put(
+    State(state): State<AppState>,
+    Json(payload): Json<JsonValue>,
+) -> Result<Json<JsonValue>, (StatusCode, String)> {
+    let scope = payload
+        .get("scope")
+        .and_then(|s| s.as_str())
+        .map(str::trim)
+        .filter(|s| !s.is_empty())
+        .ok_or_else(|| (StatusCode::BAD_REQUEST, "scope field is required".into()))?
+        .to_string();
+    let body = payload
+        .get("body")
+        .and_then(|b| b.as_str())
+        .unwrap_or("")
+        .to_string();
+    initialize_databases(&state.paths.events_db, &state.paths.incidents_db)
+        .map_err(|e| (StatusCode::INTERNAL_SERVER_ERROR, e.to_string()))?;
+    let store = IncidentsStore::open(&state.paths.incidents_db)
+        .map_err(|e| (StatusCode::INTERNAL_SERVER_ERROR, e.to_string()))?
+        .ok_or_else(|| (StatusCode::NOT_FOUND, "incidents database missing".into()))?;
+    store
+        .set_operator_context(&scope, &body)
+        .map_err(|e| (StatusCode::INTERNAL_SERVER_ERROR, e.to_string()))?;
+    Ok(Json(json!({ "stored": true, "scope": scope })))
+}
+
+async fn api_ai_investigate_stream(
+    State(state): State<AppState>,
+    Json(payload): Json<JsonValue>,
+) -> Sse<impl Stream<Item = Result<Event, Infallible>>> {
+    let paths = state.paths.clone();
+    let cfg = state.config.read().await.clone();
+    let stream = stream! {
+        let scope = payload.get("scope").and_then(|s| s.as_str()).unwrap_or("overview");
+        let focus = match resolve_focus_from_scope(paths.as_ref(), scope) {
+            Ok(f) => f,
+            Err(e) => {
+                yield Ok(Event::default().event("error").data(e.to_string()));
+                return;
+            }
+        };
+        let question = payload
+            .get("question")
+            .and_then(|v| v.as_str())
+            .unwrap_or_default()
+            .to_string();
+        let mode = current_mode(&cfg, payload.get("mode").and_then(|v| v.as_str()));
+        let monitor = resolve_monitor_seconds(&cfg, None, Some(&payload));
+        let bundle = match investigation_bundle_enriched(paths.as_ref(), &cfg, &focus, &question, &mode, monitor).await {
+            Ok(b) => b,
+            Err(e) => {
+                yield Ok(Event::default().event("error").data(e.to_string()));
+                return;
+            }
+        };
+        yield Ok(Event::default().event("meta").data(
+            json!({
+                "focus": &focus,
+                "mode": &mode,
+                "monitor_seconds": monitor,
+            })
+            .to_string(),
+        ));
+
+        let redacted = redact_bundle_for_ai(&bundle, &cfg);
+        let provider = probe_ai_provider(&cfg, AiProbePurpose::Investigate).await;
+        if !provider.enabled || !provider.available {
+            let reason = if !provider.enabled {
+                "AI is disabled in config."
+            } else {
+                provider.reason.as_deref().unwrap_or("AI provider unavailable.")
+            };
+            let resp = deterministic_investigation_response(
+                &redacted,
+                provider.provider_payload(),
+                reason,
+                Vec::new(),
+                1,
+                Some(fallback_trace(
+                    if !provider.enabled { "provider_disabled" } else { "provider_unavailable" },
+                    reason,
+                )),
+            );
+            yield Ok(Event::default().event("done").data(resp.to_string()));
+            return;
+        }
+
+        let mode_str = redacted.get("mode").and_then(JsonValue::as_str).unwrap_or("operator");
+        let bundle_json = match serde_json::to_string(&redacted) {
+            Ok(s) => s,
+            Err(e) => {
+                yield Ok(Event::default().event("error").data(e.to_string()));
+                return;
+            }
+        };
+        let user_prompt = INVESTIGATION_USER_TEMPLATE
+            .replace("{mode}", mode_str)
+            .replace("{bundle_json}", &bundle_json);
+        let messages = json!([
+            {"role": "system", "content": INVESTIGATION_SYSTEM_PROMPT},
+            {"role": "user", "content": user_prompt},
+        ]);
+        let ai = cfg.get("ai").and_then(|v| v.as_table());
+        let base_url = ai_table_string(ai, "base_url", "http://127.0.0.1:11434");
+        let token_env = ai_table_string(ai, "token_env", "");
+        let connect_timeout = ai_table_f64(ai, "connect_timeout_seconds", 5.0);
+        let read_timeout = ai_table_f64(ai, "read_timeout_seconds", 120.0);
+        let client = match reqwest::Client::builder()
+            .connect_timeout(std::time::Duration::from_secs_f64(connect_timeout.max(0.1)))
+            .timeout(std::time::Duration::from_secs_f64(read_timeout.max(30.0)))
+            .build()
+        {
+            Ok(c) => c,
+            Err(e) => {
+                yield Ok(Event::default().event("error").data(e.to_string()));
+                return;
+            }
+        };
+        let url = format!("{}/api/chat", base_url.trim_end_matches('/'));
+        let ollama_body = json!({
+            "model": provider.resolved_model.clone().unwrap_or_else(|| provider.model.clone()),
+            "messages": messages,
+            "stream": true,
+            "options": {
+                "temperature": ai_table_f64(ai, "temperature", 1.0),
+                "top_p": ai_table_f64(ai, "top_p", 0.95),
+                "top_k": ai_table_u64(ai, "top_k", 64) as i64,
+                "num_predict": ai_table_u64(ai, "max_tokens", 2048) as i64,
+            }
+        });
+        let mut request = client.post(&url).json(&ollama_body);
+        if !token_env.is_empty() {
+            if let Ok(token) = std::env::var(&token_env) {
+                request = request.bearer_auth(token);
+            }
+        }
+        let response = match request.send().await {
+            Ok(r) => r,
+            Err(e) => {
+                yield Ok(Event::default().event("error").data(e.to_string()));
+                return;
+            }
+        };
+        if !response.status().is_success() {
+            let t = response.text().await.unwrap_or_default();
+            yield Ok(Event::default().event("error").data(format!("Ollama HTTP error: {t}")));
+            return;
+        }
+        let mut assembled = String::new();
+        let mut buf = String::new();
+        let mut body_stream = response.bytes_stream();
+        use futures_util::StreamExt;
+        while let Some(chunk) = body_stream.next().await {
+            let chunk = match chunk {
+                Ok(c) => c,
+                Err(e) => {
+                    yield Ok(Event::default().event("error").data(e.to_string()));
+                    return;
+                }
+            };
+            buf.push_str(&String::from_utf8_lossy(&chunk));
+            while let Some(pos) = buf.find('\n') {
+                let line = buf[..pos].trim().to_string();
+                buf.drain(..=pos);
+                if line.is_empty() {
+                    continue;
+                }
+                let Ok(v) = serde_json::from_str::<JsonValue>(&line) else { continue };
+                if let Some(p) = v
+                    .get("message")
+                    .and_then(|m| m.get("content"))
+                    .and_then(|c| c.as_str())
+                {
+                    if !p.is_empty() {
+                        assembled.push_str(p);
+                        yield Ok(Event::default().event("delta").data(p.to_string()));
+                    }
+                }
+            }
+        }
+        let parsed = extract_json_object(&assembled);
+        let response = if let Some(mut output) = parsed.and_then(normalize_investigation_output) {
+            if output_has_signal(&output) {
+                let trace = json!({
+                    "trace_kind": "investigate_stream",
+                    "sanitized_system_prompt": INVESTIGATION_SYSTEM_PROMPT,
+                    "sanitized_user_prompt": user_prompt,
+                    "allowed_fields": ["mode", "incident", "hypotheses", "events", "services", "runtime", "workspace", "user_question", "constraints", "runtime_monitor", "host_resources", "evidence_digest", "similar_incidents", "operator_memory"],
+                    "blocked_fields": ["raw_event_messages", "env_values", "ip_addresses", "secrets"],
+                    "raw_logs_sent": false,
+                    "schema_version": 1,
+                });
+                let grounding = apply_output_grounding(&mut output, &redacted);
+                let mut warnings = Vec::new();
+                if let Some(w) = hypothesis_rank_alignment_warning(&output, &redacted) {
+                    warnings.push(w);
+                }
+                json!({
+                    "schema_version": 1,
+                    "output": output,
+                    "used_ai": true,
+                    "fallback_reason": "",
+                    "warnings": warnings,
+                    "attempts": 1,
+                    "provider": provider.provider_payload(),
+                    "trace": trace,
+                    "bundle": redacted,
+                    "grounding": grounding,
+                })
+            } else {
+                deterministic_investigation_response(
+                    &redacted,
+                    provider.provider_payload(),
+                    "AI returned an investigation payload without meaningful content",
+                    vec!["stream_parse: empty signal".into()],
+                    1,
+                    None,
+                )
+            }
+        } else {
+            deterministic_investigation_response(
+                &redacted,
+                provider.provider_payload(),
+                "AI stream did not yield valid JSON",
+                vec!["stream_parse: invalid json".into()],
+                1,
+                None,
+            )
+        };
+        let _ = persist_investigation_artifacts(paths.as_ref(), &bundle, &response);
+        yield Ok(Event::default().event("done").data(response.to_string()));
+    };
+    Sse::new(stream).keep_alive(KeepAlive::default())
 }
 
 async fn api_collectors(State(state): State<AppState>) -> Json<CollectorsResponse> {
@@ -1214,7 +1573,7 @@ async fn run_investigation_response(
     bundle: &JsonValue,
 ) -> Result<JsonValue> {
     let redacted_bundle = redact_bundle_for_ai(bundle, config);
-    let provider = probe_ai_provider(config).await;
+    let provider = probe_ai_provider(config, AiProbePurpose::Investigate).await;
     if !provider.enabled {
         return Ok(deterministic_investigation_response(
             &redacted_bundle,
@@ -1259,7 +1618,7 @@ async fn run_investigation_response(
         "trace_kind": "investigate",
         "sanitized_system_prompt": INVESTIGATION_SYSTEM_PROMPT,
         "sanitized_user_prompt": user_prompt,
-        "allowed_fields": ["mode", "incident", "hypotheses", "events", "services", "runtime", "workspace", "user_question", "constraints"],
+        "allowed_fields": ["mode", "incident", "hypotheses", "events", "services", "runtime", "workspace", "user_question", "constraints", "runtime_monitor", "host_resources", "evidence_digest", "similar_incidents", "operator_memory"],
         "blocked_fields": ["raw_event_messages", "env_values", "ip_addresses", "secrets"],
         "raw_logs_sent": false,
         "schema_version": 1,
@@ -1270,8 +1629,12 @@ async fn run_investigation_response(
         match ollama_chat(config, &provider, &messages).await {
             Ok(raw) => {
                 let parsed = extract_json_object(&raw);
-                if let Some(output) = parsed.and_then(normalize_investigation_output) {
+                if let Some(mut output) = parsed.and_then(normalize_investigation_output) {
                     if output_has_signal(&output) {
+                        let grounding = apply_output_grounding(&mut output, &redacted_bundle);
+                        if let Some(w) = hypothesis_rank_alignment_warning(&output, &redacted_bundle) {
+                            warnings.push(w);
+                        }
                         return Ok(json!({
                             "schema_version": 1,
                             "output": output,
@@ -1282,6 +1645,7 @@ async fn run_investigation_response(
                             "provider": provider.provider_payload(),
                             "trace": trace,
                             "bundle": redacted_bundle,
+                            "grounding": grounding,
                         }));
                     }
                 }
@@ -1554,7 +1918,7 @@ fn fallback_trace(kind: &str, reason: &str) -> JsonValue {
         "trace_kind": kind,
         "sanitized_system_prompt": INVESTIGATION_SYSTEM_PROMPT,
         "sanitized_user_prompt": reason,
-        "allowed_fields": ["incident", "hypotheses", "events", "services", "runtime", "workspace"],
+        "allowed_fields": ["incident", "hypotheses", "events", "services", "runtime", "workspace", "runtime_monitor", "host_resources", "evidence_digest", "similar_incidents", "operator_memory"],
         "blocked_fields": ["raw_event_messages", "env_values", "ip_addresses", "secrets"],
         "raw_logs_sent": false,
         "schema_version": 1,
@@ -1593,17 +1957,53 @@ fn build_investigation_bundle(
     let overview = build_overview(config, paths)?;
     let workspace = build_workspace_map(config, paths)?;
     match focus_to_scope(focus) {
-        InvestigationScope::Overview => Ok(json!({
-            "mode": mode,
-            "incident": overview.dashboard.incidents.as_ref().and_then(|items| items.first().cloned()),
-            "hypotheses": [],
-            "events": [],
-            "services": overview.dashboard.services.unwrap_or_default(),
-            "runtime": overview.runtime,
-            "workspace": workspace,
-            "user_question": question,
-            "constraints": {},
-        })),
+        InvestigationScope::Overview => {
+            let mut hypotheses_json = json!([]);
+            let mut events_preview = json!([]);
+            if let Ok(Some(incidents)) = IncidentsStore::open(&paths.incidents_db) {
+                if let Ok(Some(latest_id)) = incidents.latest_active_incident_id() {
+                    if let Ok(hrows) = incidents.hypotheses(&latest_id) {
+                        hypotheses_json =
+                            serde_json::to_value(&hrows).unwrap_or_else(|_| json!([]));
+                    }
+                }
+            }
+            if let Ok(Some(ev)) = EventsStore::open(&paths.events_db) {
+                if let Ok(rows) = ev.latest_events(40) {
+                    let preview: Vec<JsonValue> = rows
+                        .into_iter()
+                        .map(|e| {
+                            let msg = e.message.clone().unwrap_or_default();
+                            let summary = if msg.len() > 200 {
+                                format!("{}...", &msg[..197])
+                            } else {
+                                msg
+                            };
+                            json!({
+                                "event_id": e.event_id,
+                                "timestamp": e.timestamp,
+                                "service_id": e.service_id,
+                                "severity": e.severity,
+                                "summary": summary,
+                                "tags": e.tags.unwrap_or_default(),
+                            })
+                        })
+                        .collect();
+                    events_preview = json!(preview);
+                }
+            }
+            Ok(json!({
+                "mode": mode,
+                "incident": overview.dashboard.incidents.as_ref().and_then(|items| items.first().cloned()),
+                "hypotheses": hypotheses_json,
+                "events": events_preview,
+                "services": overview.dashboard.services.unwrap_or_default(),
+                "runtime": overview.runtime,
+                "workspace": workspace,
+                "user_question": question,
+                "constraints": {},
+            }))
+        }
         InvestigationScope::Incident(incident_id) => {
             let incidents =
                 IncidentsStore::open(&paths.incidents_db)?.context("incident store not found")?;
@@ -1653,6 +2053,278 @@ fn build_investigation_bundle(
     }
 }
 
+fn resolve_monitor_seconds(
+    config: &TomlValue,
+    query_param: Option<&String>,
+    payload: Option<&JsonValue>,
+) -> u64 {
+    if let Some(p) = payload {
+        if let Some(v) = p.get("monitor_seconds").and_then(|x| x.as_u64()) {
+            return v.min(180);
+        }
+    }
+    if let Some(s) = query_param {
+        if let Ok(v) = s.parse::<u64>() {
+            return v.min(180);
+        }
+    }
+    ai_table_u64(
+        config.get("ai").and_then(|a| a.as_table()),
+        "investigation_monitor_seconds",
+        5,
+    )
+}
+
+fn operator_memory_scope_keys(focus: &str) -> Vec<String> {
+    let mut keys = vec!["global".to_string()];
+    if let Some(id) = focus.strip_prefix("incident:") {
+        if !id.is_empty() {
+            keys.push(format!("incident:{id}"));
+        }
+    }
+    if let Some(id) = focus.strip_prefix("service:") {
+        if !id.is_empty() {
+            keys.push(format!("service:{id}"));
+        }
+    }
+    keys
+}
+
+fn load_operator_memory(paths: &Paths, focus: &str) -> JsonValue {
+    let Some(store) = (match IncidentsStore::open(&paths.incidents_db) {
+        Ok(s) => s,
+        Err(_) => None,
+    }) else {
+        return json!({});
+    };
+    let mut out = serde_json::Map::new();
+    for key in operator_memory_scope_keys(focus) {
+        if let Ok(Some(body)) = store.get_operator_context(&key) {
+            out.insert(key, JsonValue::String(body));
+        }
+    }
+    JsonValue::Object(out)
+}
+
+fn build_fleet_evidence_digest(events: &EventsStore, limit: usize) -> Result<JsonValue> {
+    let rows = events.latest_events(limit)?;
+    let mut by_service: HashMap<String, u64> = HashMap::new();
+    let mut sev_counts: HashMap<String, u64> = HashMap::new();
+    for e in &rows {
+        if let Some(ref sid) = e.service_id {
+            *by_service.entry(sid.clone()).or_insert(0) += 1;
+        }
+        let sev_label = e
+            .severity
+            .as_ref()
+            .map(|value| match value {
+                inferra_contracts::SeverityValue::Level(level) => level.to_string(),
+                inferra_contracts::SeverityValue::Label(label) => label.clone(),
+            })
+            .unwrap_or_else(|| "unknown".into());
+        *sev_counts.entry(sev_label).or_insert(0) += 1;
+    }
+    let mut top: Vec<(String, u64)> = by_service.into_iter().collect();
+    top.sort_by(|a, b| b.1.cmp(&a.1));
+    top.truncate(12);
+    Ok(json!({
+        "window_events_sampled": rows.len(),
+        "top_services_by_recent_event_volume": top.into_iter().map(|(k, v)| json!({"service_id": k, "count": v})).collect::<Vec<_>>(),
+        "severity_counts_recent": sev_counts,
+    }))
+}
+
+fn attach_similar_incidents(paths: &Paths, bundle: &mut JsonValue) -> Result<()> {
+    let Some(inc_id) = investigation_incident_id(bundle) else {
+        return Ok(());
+    };
+    let Some(store) = IncidentsStore::open(&paths.incidents_db)? else {
+        return Ok(());
+    };
+    let Some(current) = store.get_incident(&inc_id)? else {
+        return Ok(());
+    };
+    let candidates = store.recent_incidents_excluding(&inc_id, 80)?;
+    let scored = score_similar_incidents(&current, candidates);
+    if let Some(obj) = bundle.as_object_mut() {
+        obj.insert("similar_incidents".into(), json!(scored));
+    }
+    Ok(())
+}
+
+fn score_similar_incidents(current: &IncidentRow, candidates: Vec<IncidentRow>) -> Vec<JsonValue> {
+    let mut rows: Vec<(i32, IncidentRow)> = candidates
+        .into_iter()
+        .map(|c| {
+            let mut s = 0_i32;
+            if !c.primary_service.is_empty() && c.primary_service == current.primary_service {
+                s += 4;
+            }
+            if c.severity == current.severity {
+                s += 1;
+            }
+            if c.state == current.state {
+                s += 1;
+            }
+            (s, c)
+        })
+        .collect();
+    rows.sort_by(|a, b| b.0.cmp(&a.0));
+    rows.into_iter()
+        .take(6)
+        .filter(|(s, _)| *s > 0)
+        .map(|(score, c)| {
+            json!({
+                "incident_id": c.incident_id,
+                "similarity_score": score,
+                "primary_service": c.primary_service,
+                "severity": c.severity,
+                "state": c.state,
+                "updated_at": c.updated_at,
+            })
+        })
+        .collect()
+}
+
+async fn investigation_bundle_enriched(
+    paths: &Paths,
+    config: &TomlValue,
+    focus: &str,
+    question: &str,
+    mode: &str,
+    monitor_seconds: u64,
+) -> Result<JsonValue> {
+    initialize_databases(&paths.events_db, &paths.incidents_db)?;
+    let mut bundle = build_investigation_bundle(paths, config, focus, question, mode)?;
+    let interval_ms = ai_table_u64(
+        config.get("ai").and_then(|a| a.as_table()),
+        "investigation_monitor_interval_ms",
+        500,
+    );
+    let monitor_json = if monitor_seconds > 0 {
+        collect_runtime_monitor_window(monitor_seconds, interval_ms).await
+    } else {
+        json!({
+            "skipped": true,
+            "reason": "monitor_seconds is 0 (instant snapshot only; host_resources still captured once).",
+        })
+    };
+    let mut host = collect_host_resources_snapshot();
+    let gpu = try_collect_gpu_summary().await;
+    if let Some(obj) = host.as_object_mut() {
+        obj.insert("gpu".into(), gpu);
+    }
+    if let Some(obj) = bundle.as_object_mut() {
+        obj.insert("runtime_monitor".into(), monitor_json);
+        obj.insert("host_resources".into(), host);
+        if let Ok(Some(ev)) = EventsStore::open(&paths.events_db) {
+            if let Ok(digest) = build_fleet_evidence_digest(&ev, 160) {
+                obj.insert("evidence_digest".into(), digest);
+            }
+        }
+        let mem = load_operator_memory(paths, focus);
+        if !mem.as_object().map(|o| o.is_empty()).unwrap_or(true) {
+            obj.insert("operator_memory".into(), mem);
+        }
+    }
+    let _ = attach_similar_incidents(paths, &mut bundle);
+    Ok(bundle)
+}
+
+fn collect_allowed_ids_from_bundle(bundle: &JsonValue) -> (HashSet<String>, HashSet<String>, HashSet<String>) {
+    let mut events = HashSet::new();
+    let mut services = HashSet::new();
+    let mut incidents = HashSet::new();
+    if let Some(inc) = bundle.get("incident").and_then(JsonValue::as_object) {
+        if let Some(id) = inc.get("incident_id").and_then(JsonValue::as_str) {
+            incidents.insert(id.to_string());
+        }
+    }
+    if let Some(arr) = bundle.get("events").and_then(JsonValue::as_array) {
+        for e in arr {
+            if let Some(id) = e.get("event_id").and_then(JsonValue::as_str) {
+                events.insert(id.to_string());
+            }
+        }
+    }
+    if let Some(arr) = bundle.get("services").and_then(JsonValue::as_array) {
+        for s in arr {
+            if let Some(id) = s.get("service_id").and_then(JsonValue::as_str) {
+                services.insert(id.to_string());
+            }
+        }
+    }
+    if let Some(arr) = bundle.get("similar_incidents").and_then(JsonValue::as_array) {
+        for s in arr {
+            if let Some(id) = s.get("incident_id").and_then(JsonValue::as_str) {
+                incidents.insert(id.to_string());
+            }
+        }
+    }
+    (events, services, incidents)
+}
+
+fn apply_output_grounding(output: &mut JsonValue, bundle: &JsonValue) -> JsonValue {
+    let (allowed_ev, allowed_svc, allowed_inc) = collect_allowed_ids_from_bundle(bundle);
+    let mut removed_evidence = Vec::new();
+    let mut removed_citations = Vec::new();
+    if let Some(arr) = output.get_mut("evidence").and_then(JsonValue::as_array_mut) {
+        arr.retain(|item| {
+            let t = item.get("type").and_then(JsonValue::as_str).unwrap_or("");
+            let id = item.get("id").and_then(JsonValue::as_str).unwrap_or("");
+            let ok = match t {
+                "event" => allowed_ev.contains(id),
+                "service" => allowed_svc.contains(id),
+                "incident" => allowed_inc.contains(id),
+                "workspace" => true,
+                _ => false,
+            };
+            if !ok && !id.is_empty() {
+                removed_evidence.push(format!("{t}:{id}"));
+            }
+            ok || id.is_empty()
+        });
+    }
+    if let Some(arr) = output.get_mut("citations").and_then(JsonValue::as_array_mut) {
+        arr.retain(|c| {
+            let id = c.as_str().unwrap_or("");
+            let ok = allowed_ev.contains(id) || allowed_svc.contains(id) || allowed_inc.contains(id);
+            if !ok && !id.is_empty() {
+                removed_citations.push(id.to_string());
+            }
+            ok || id.is_empty()
+        });
+    }
+    json!({
+        "removed_evidence_ids": removed_evidence,
+        "removed_citation_ids": removed_citations,
+    })
+}
+
+fn hypothesis_rank_alignment_warning(output: &JsonValue, bundle: &JsonValue) -> Option<String> {
+    let hypo = bundle.get("hypotheses").and_then(JsonValue::as_array)?;
+    if hypo.is_empty() {
+        return None;
+    }
+    let top_desc = hypo
+        .first()?
+        .get("description")
+        .and_then(JsonValue::as_str)
+        .map(str::trim)
+        .filter(|s| !s.is_empty())?;
+    let causes = output.get("likely_causes").and_then(JsonValue::as_array)?;
+    let first_cause = causes.first()?.as_str()?.trim();
+    let needle = top_desc.to_ascii_lowercase();
+    let hay = first_cause.to_ascii_lowercase();
+    if needle.len() > 8 && hay.contains(needle.as_str()) {
+        return None;
+    }
+    Some(
+        "Top likely_cause text does not resemble the highest-ranked hypothesis description; verify alignment with hypotheses[]."
+            .into(),
+    )
+}
+
 enum InvestigationScope {
     Overview,
     Incident(String),
@@ -1700,30 +2372,32 @@ fn ai_enabled(config: &TomlValue) -> bool {
         .unwrap_or(false)
 }
 
-async fn probe_ai_provider(config: &TomlValue) -> AiProviderProbe {
+async fn probe_ai_provider(config: &TomlValue, purpose: AiProbePurpose) -> AiProviderProbe {
     if !ai_enabled(config) {
-        return AiProviderProbe::disabled(config);
+        return AiProviderProbe::disabled(config, purpose);
     }
     let ai = config.get("ai").and_then(|value| value.as_table());
     let provider = ai_table_string(ai, "provider", "ollama");
     if provider != "ollama" {
         return AiProviderProbe::unavailable(
             config,
+            purpose,
             format!("Unsupported AI provider {provider}; only ollama is implemented in Rust."),
         );
     }
     let base_url = ai_table_string(ai, "base_url", "http://127.0.0.1:11434");
-    let model = ai_table_string(ai, "model", "");
+    let model = probe_model_name(ai, purpose);
     let allow_remote = ai_table_bool(ai, "allow_remote", false);
     if !allow_remote && !is_local_base_url(&base_url) {
         return AiProviderProbe::unavailable(
             config,
+            purpose,
             "Refusing to connect to non-local Ollama server while ai.allow_remote is false",
         );
     }
     let tags = match ollama_request_json(config, "GET", "/api/tags", None).await {
         Ok(payload) => payload,
-        Err(error) => return AiProviderProbe::unavailable(config, error.to_string()),
+        Err(error) => return AiProviderProbe::unavailable(config, purpose, error.to_string()),
     };
     let models = tags
         .get("models")
@@ -1893,6 +2567,7 @@ fn summarize_event_for_ai(event: &JsonValue) -> JsonValue {
     let message = event
         .get("message")
         .and_then(JsonValue::as_str)
+        .or_else(|| event.get("summary").and_then(JsonValue::as_str))
         .unwrap_or_default();
     let summary = if message.len() > 240 {
         format!("{}...", &message[..237])
@@ -2229,6 +2904,23 @@ fn deterministic_investigation_response(
         }));
     }
 
+    let likely_from_hypotheses: Vec<String> = bundle
+        .get("hypotheses")
+        .and_then(JsonValue::as_array)
+        .map(|arr| {
+            arr.iter()
+                .filter_map(|h| {
+                    h.get("description")
+                        .and_then(JsonValue::as_str)
+                        .map(str::trim)
+                        .filter(|s| !s.is_empty())
+                        .map(str::to_string)
+                })
+                .take(8)
+                .collect()
+        })
+        .unwrap_or_default();
+
     json!({
         "schema_version": 1,
         "output": {
@@ -2241,7 +2933,7 @@ fn deterministic_investigation_response(
             } else {
                 vec!["No urgent failure observed."]
             },
-            "likely_causes": Vec::<String>::new(),
+            "likely_causes": likely_from_hypotheses,
             "evidence": evidence,
             "missing_evidence": vec!["AI provider unavailable; reasoning is deterministic."],
             "next_steps": next_steps,
@@ -2255,6 +2947,10 @@ fn deterministic_investigation_response(
         "provider": provider,
         "trace": trace.unwrap_or(JsonValue::Null),
         "bundle": bundle.clone(),
+        "grounding": {
+            "removed_evidence_ids": [],
+            "removed_citation_ids": [],
+        },
     })
 }
 
@@ -2415,7 +3111,7 @@ async fn ingest_payload(
     }
     initialize_databases(&state.paths.events_db, &state.paths.incidents_db)
         .map_err(|e| (StatusCode::INTERNAL_SERVER_ERROR, e.to_string()))?;
-    let event_id = state
+    let ingest_result = state
         .collectors
         .ingest_app_event(
             &state.paths.events_db,
@@ -2425,7 +3121,12 @@ async fn ingest_payload(
         )
         .await
         .map_err(|e| (StatusCode::INTERNAL_SERVER_ERROR, e.to_string()))?;
-    Ok(json!({ "accepted": true, "event_id": event_id }))
+    Ok(json!({
+        "accepted": ingest_result.accepted,
+        "event_id": ingest_result.event_id,
+        "suppressed_duplicates": ingest_result.suppressed_duplicates,
+        "suppressed_noise": ingest_result.suppressed_noise,
+    }))
 }
 
 fn guess_mime(ext: Option<&str>) -> HeaderValue {
@@ -2440,10 +3141,20 @@ fn guess_mime(ext: Option<&str>) -> HeaderValue {
     })
 }
 
-fn json_value_to_i64(value: &JsonValue) -> Option<i64> {
-    value
-        .as_i64()
-        .or_else(|| value.as_str().and_then(|raw| raw.parse::<i64>().ok()))
+fn severity_value_to_i64(value: &inferra_contracts::SeverityValue) -> Option<i64> {
+    match value {
+        inferra_contracts::SeverityValue::Level(level) => Some(*level),
+        inferra_contracts::SeverityValue::Label(label) => label.parse::<i64>().ok().or_else(|| {
+            match label.trim().to_ascii_lowercase().as_str() {
+                "trace" | "debug" => Some(0),
+                "info" | "informational" => Some(1),
+                "warn" | "warning" => Some(2),
+                "error" => Some(3),
+                "critical" | "fatal" | "panic" => Some(4),
+                _ => None,
+            }
+        }),
+    }
 }
 
 fn discover_projects_with_limits(
@@ -2754,6 +3465,11 @@ enabled = false
                     incident_id TEXT,
                     cluster_id TEXT,
                     cluster_data TEXT
+                );
+                CREATE TABLE IF NOT EXISTS ai_operator_context (
+                    scope_key TEXT PRIMARY KEY,
+                    body TEXT NOT NULL,
+                    updated_at TEXT NOT NULL DEFAULT (strftime('%Y-%m-%dT%H:%M:%fZ', 'now'))
                 );",
             )
             .expect("create incidents schema");
@@ -3121,7 +3837,7 @@ enabled = false
     #[tokio::test]
     async fn investigate_now_uses_deterministic_fallback_when_ai_disabled() {
         let app = app_router(seeded_test_state("investigate-now", false));
-        let payload = get_json(app, "/api/investigate/now").await;
+        let payload = get_json(app, "/api/investigate/now?monitor_seconds=0").await;
         assert_eq!(payload.get("used_ai"), Some(&JsonValue::Bool(false)));
         assert_eq!(
             payload.get("focus"),
@@ -3160,7 +3876,7 @@ enabled = false
         assert_eq!(status.get("available"), Some(&JsonValue::Bool(true)));
         assert_eq!(status.get("installed"), Some(&JsonValue::Bool(true)));
 
-        let payload = get_json(app, "/api/investigate/now").await;
+        let payload = get_json(app, "/api/investigate/now?monitor_seconds=0").await;
         assert_eq!(payload.get("used_ai"), Some(&JsonValue::Bool(true)));
         assert_eq!(
             payload
@@ -3204,7 +3920,7 @@ enabled = false
             .expect("enable native ai");
         }
         let app = app_router(state);
-        let payload = get_json(app.clone(), "/api/investigate/incident/inc-1").await;
+        let payload = get_json(app.clone(), "/api/investigate/incident/inc-1?monitor_seconds=0").await;
         assert!(payload
             .get("audit")
             .and_then(|audit| audit.get("explanation"))
@@ -3241,6 +3957,7 @@ enabled = false
                             "question": "what changed most recently?",
                             "scope": "latest",
                             "mode": "expert",
+                            "monitor_seconds": 0,
                         }))
                         .expect("serialize request"),
                     ))
@@ -3361,5 +4078,27 @@ enabled = false
             .iter()
             .all(|row| row.get("is_running") == Some(&JsonValue::Bool(false)));
         assert!(statuses);
+    }
+
+    #[test]
+    fn grounding_removes_unknown_evidence_ids() {
+        let bundle = json!({
+            "events": [{"event_id": "evt-1"}],
+            "services": [{"service_id": "api"}],
+            "incident": {"incident_id": "inc-1"},
+        });
+        let mut output = json!({
+            "evidence": [
+                {"type": "event", "id": "evt-1", "summary": "ok"},
+                {"type": "event", "id": "evt-fake", "summary": "bad"},
+            ],
+            "citations": ["evt-1", "evt-nope", "api"],
+        });
+        let g = apply_output_grounding(&mut output, &bundle);
+        assert_eq!(output["evidence"].as_array().unwrap().len(), 1);
+        let removed = g["removed_evidence_ids"].as_array().unwrap();
+        assert!(removed.iter().any(|v| v == "event:evt-fake"));
+        let rc = g["removed_citation_ids"].as_array().unwrap();
+        assert!(rc.iter().any(|v| v == "evt-nope"));
     }
 }
