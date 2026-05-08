@@ -895,6 +895,7 @@ dependencies = [
  "inferra-contracts",
  "inferra-storage",
  "reqwest",
+ "serde",
  "serde_json",
  "sysinfo",
  "time",

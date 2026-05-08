@@ -10,13 +10,17 @@ use anyhow::Result;
 use inferra_config::{experience_from_config, Paths};
 use inferra_contracts::{
     AiStatusResponse, DashboardHealth, DashboardPayload, EventRow, IncidentRow, OverviewResponse,
-    QuickAnalysis, RuntimeContext, RuntimeProcess, ServiceRow, SeverityValue, WorkspaceMapResponse,
-    WorkspaceMapping, WorkspaceMappingSignal, WorkspaceProject,
+    QuickAnalysis, RuntimeContainer, RuntimeContext, RuntimeProcess, ServiceRow, SeverityValue,
+    WorkspaceMapResponse, WorkspaceMapping, WorkspaceMappingSignal, WorkspaceProject,
 };
 use inferra_storage::{
-    EventsStore, GovernanceSummary, IncidentRecord, IncidentsStore, ServiceStats, StoredHypothesis,
+    AdaptiveLearningAuditQuery, AdaptiveLearningHistoryQuery, EventsStore, GovernanceSummary,
+    IncidentRecord, IncidentsStore, ServiceStats, StoredAdaptiveLearningAuditEntry,
+    StoredAdaptiveLearningHistoryEntry, StoredAdaptiveReviewView, StoredAdaptiveReviewViewSelection,
+    StoredHypothesis, StoredInferenceGraphSnapshot,
 };
-use std::path::Path;
+use serde::{Deserialize, Serialize};
+use std::path::{Path, PathBuf};
 use sysinfo::{Disks, System};
 use toml::Value as TomlValue;
 use walkdir::WalkDir;
@@ -25,8 +29,321 @@ const SEVERITY_INFO: i64 = 1;
 const SEVERITY_WARN: i64 = 2;
 const SEVERITY_ERROR: i64 = 3;
 
+#[derive(Debug, Clone, Default)]
+pub struct OverviewRuntimeSignals {
+    pub ai_available: Option<bool>,
+    pub ai_reason: Option<String>,
+    pub queue_depth: Option<i64>,
+    pub collector_errors: Option<i64>,
+}
+
+#[derive(Debug, Clone)]
+struct Candidate {
+    cause_type: String,
+    description: String,
+    prior: f64,
+    score: f64,
+    suggested_checks: Vec<String>,
+    supporting_events: Vec<String>,
+    affected_services: Vec<String>,
+    contradicting_events: Vec<String>,
+    dependency_proximity: f64,
+    is_valid: bool,
+    invalidation_reasons: Vec<String>,
+    root_cause_event_id: Option<String>,
+    root_cause_timestamp: Option<String>,
+    scoring: CandidateScoring,
+    provenance_refs: Vec<LearningArtifactRef>,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize)]
+struct LearningArtifactRef {
+    kind: String,
+    artifact_id: String,
+    label: String,
+    reason: String,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    impact_metric: Option<String>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    impact_value: Option<f64>,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize)]
+struct AdaptiveLearningAuditEntry {
+    audit_id: String,
+    artifact_kind: String,
+    artifact_id: String,
+    action: String,
+    reason: Option<String>,
+    previous_status: String,
+    new_status: String,
+    review_status_before: Option<String>,
+    review_status_after: Option<String>,
+    runtime_effect: Option<String>,
+    created_at: String,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize)]
+struct AdaptiveLearningHistoryEntry {
+    entry_id: String,
+    artifact_kind: String,
+    artifact_id: String,
+    artifact_label: String,
+    incident_id: String,
+    cause_type: String,
+    hypothesis_id: String,
+    observed_at: String,
+    score: Option<f64>,
+    rank: Option<i64>,
+    estimated_impact: f64,
+    impact_metric: Option<String>,
+    score_delta: Option<f64>,
+    rank_delta: Option<i64>,
+    edge_delta: Option<f64>,
+}
+
+#[derive(Debug, Clone, Default)]
+struct CandidateScoring {
+    temporal_alignment: f64,
+    correlation_strength: f64,
+    frequency_weight: f64,
+    dependency_proximity: f64,
+    evidence_coverage: f64,
+    anomaly_severity: f64,
+    graph_impact: f64,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize)]
+struct CalibrationBucket {
+    score_lower: f64,
+    score_upper: f64,
+    total_predictions: u64,
+    correct_predictions: u64,
+    accuracy: f64,
+    sample_confidence: String,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize)]
+struct CalibrationModel {
+    schema_version: u64,
+    last_updated: Option<String>,
+    total_feedback_count: u64,
+    overall_accuracy: f64,
+    staleness_status: String,
+    buckets: Vec<CalibrationBucket>,
+    processed_feedback_ids: Vec<String>,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize)]
+struct WeightAdjustmentAudit {
+    feedback_id: String,
+    incident_id: String,
+    applied_at: String,
+    adjustments: std::collections::BTreeMap<String, f64>,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize)]
+struct LearnedScoringWeights {
+    schema_version: u64,
+    last_updated: Option<String>,
+    default_weights: std::collections::BTreeMap<String, f64>,
+    effective_weights: std::collections::BTreeMap<String, f64>,
+    processed_feedback_ids: Vec<String>,
+    audit: Vec<WeightAdjustmentAudit>,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize)]
+struct AdaptiveLearningModel {
+    schema_version: u64,
+    last_updated: Option<String>,
+    processed_feedback_ids: Vec<String>,
+    learned_detectors: Vec<LearnedDetector>,
+    learned_templates: Vec<LearnedTemplate>,
+    #[serde(default)]
+    learned_compositions: Vec<LearnedComposition>,
+    #[serde(default)]
+    learned_edge_profiles: Vec<LearnedEdgeProfile>,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize)]
+struct LearnedDetector {
+    detector_id: String,
+    requirement_name: String,
+    cause_type: String,
+    positive_terms: Vec<String>,
+    tags: Vec<String>,
+    source_types: Vec<String>,
+    min_severity: Option<i64>,
+    confirmations: u64,
+    false_positives: u64,
+    created_from_feedback_id: String,
+    updated_at: String,
+    #[serde(default)]
+    manually_disabled: bool,
+    #[serde(default)]
+    status_reason: Option<String>,
+    #[serde(default = "default_review_status")]
+    review_status: String,
+    #[serde(default)]
+    review_reason: Option<String>,
+    #[serde(default)]
+    last_reviewed_at: Option<String>,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize)]
+struct LearnedTemplate {
+    template_id: String,
+    template_name: String,
+    cause_type: String,
+    cause_subtype: Option<String>,
+    title_template: String,
+    confidence: f64,
+    requires: Vec<String>,
+    requires_same_service: bool,
+    requires_temporal_order: bool,
+    confirmations: u64,
+    false_positives: u64,
+    created_from_feedback_id: String,
+    updated_at: String,
+    #[serde(default)]
+    manually_disabled: bool,
+    #[serde(default)]
+    status_reason: Option<String>,
+    #[serde(default = "default_review_status")]
+    review_status: String,
+    #[serde(default)]
+    review_reason: Option<String>,
+    #[serde(default)]
+    last_reviewed_at: Option<String>,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize)]
+struct LearnedComposition {
+    composition_id: String,
+    composition_name: String,
+    cause_type: String,
+    cause_subtype: Option<String>,
+    title_template: String,
+    confidence: f64,
+    requires: Vec<String>,
+    requires_same_service: bool,
+    requires_temporal_order: bool,
+    preferred_edge_types: Vec<String>,
+    confirmations: u64,
+    false_positives: u64,
+    created_from_feedback_id: String,
+    updated_at: String,
+    #[serde(default)]
+    manually_disabled: bool,
+    #[serde(default)]
+    status_reason: Option<String>,
+    #[serde(default = "default_review_status")]
+    review_status: String,
+    #[serde(default)]
+    review_reason: Option<String>,
+    #[serde(default)]
+    last_reviewed_at: Option<String>,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize)]
+struct LearnedEdgeProfile {
+    profile_id: String,
+    edge_type: String,
+    source_service: Option<String>,
+    target_service: Option<String>,
+    cause_type: Option<String>,
+    confirmations: u64,
+    false_positives: u64,
+    average_plausibility: f64,
+    average_latency_ms: f64,
+    created_from_feedback_id: String,
+    updated_at: String,
+    #[serde(default)]
+    manually_disabled: bool,
+    #[serde(default)]
+    status_reason: Option<String>,
+    #[serde(default = "default_review_status")]
+    review_status: String,
+    #[serde(default)]
+    review_reason: Option<String>,
+    #[serde(default)]
+    last_reviewed_at: Option<String>,
+}
+
+#[derive(Debug, Clone, Default)]
+struct LearningArtifacts {
+    calibration: CalibrationModel,
+    weights: LearnedScoringWeights,
+    adaptive: AdaptiveLearningModel,
+}
+
+#[derive(Debug, Clone, Default, Serialize, Deserialize)]
+struct InferenceGraph {
+    nodes: Vec<InferenceNode>,
+    edges: Vec<InferenceEdge>,
+    root_candidates: Vec<String>,
+    leaf_nodes: Vec<String>,
+    truncated: bool,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize)]
+struct InferenceNode {
+    event_id: String,
+    service_id: String,
+    timestamp: String,
+    severity: i64,
+    summary: String,
+    node_type: String,
+    in_degree: usize,
+    out_degree: usize,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize)]
+struct InferenceEdge {
+    source_event_id: String,
+    target_event_id: String,
+    edge_type: String,
+    plausibility: f64,
+    latency_ms: f64,
+    evidence: String,
+    requires: Vec<String>,
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    learned_adjustments: Vec<InferenceEdgeAdjustment>,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize)]
+struct InferenceEdgeAdjustment {
+    artifact_id: String,
+    artifact_label: String,
+    baseline_plausibility: f64,
+    adjusted_plausibility: f64,
+    delta: f64,
+}
+
+#[derive(Debug, Clone)]
+struct GraphEvent {
+    event_id: String,
+    service_id: String,
+    timestamp: time::OffsetDateTime,
+    timestamp_raw: String,
+    severity: i64,
+    summary: String,
+    source_type: String,
+    tags: Vec<String>,
+}
+
 /// Build `/api/overview` from local SQLite + lightweight host snapshot.
 pub fn build_overview(config: &TomlValue, paths: &Paths) -> Result<OverviewResponse> {
+    build_overview_with_runtime_signals(config, paths, None)
+}
+
+/// Build `/api/overview`, optionally enriching health with live runtime signals.
+pub fn build_overview_with_runtime_signals(
+    config: &TomlValue,
+    paths: &Paths,
+    runtime_signals: Option<&OverviewRuntimeSignals>,
+) -> Result<OverviewResponse> {
+    run_incident_lifecycle_maintenance(paths, config)?;
     let experience = experience_from_config(config);
     let ai_enabled = config
         .get("ai")
@@ -70,11 +387,28 @@ pub fn build_overview(config: &TomlValue, paths: &Paths) -> Result<OverviewRespo
     let noise = noise_payload(config, &event_rate, &governance);
 
     let services = enrich_service_rows(&service_stats, &incidents);
+    let containers = discover_runtime_containers();
+    let containers_running = containers.as_ref().map(|items| items.len()).unwrap_or(0);
+    let runtime_signals = runtime_signals.cloned().unwrap_or_default();
 
     let storage_ok = paths.data_dir.exists();
     let mut degraded_reasons: Vec<String> = Vec::new();
     if !storage_ok {
         degraded_reasons.push("data directory does not exist yet".into());
+    }
+    if runtime_signals.collector_errors.unwrap_or_default() > 0 {
+        degraded_reasons.push(format!(
+            "{} collector error(s) reported by the active runtime",
+            runtime_signals.collector_errors.unwrap_or_default()
+        ));
+    }
+    if ai_enabled && runtime_signals.ai_available == Some(false) {
+        degraded_reasons.push(
+            runtime_signals
+                .ai_reason
+                .clone()
+                .unwrap_or_else(|| "AI provider probe reported unavailable".into()),
+        );
     }
 
     let free_bytes = disk_free_near(&paths.data_dir);
@@ -111,7 +445,7 @@ pub fn build_overview(config: &TomlValue, paths: &Paths) -> Result<OverviewRespo
 
     let runtime = RuntimeContext {
         hostname,
-        containers: None,
+        containers,
         processes: Some(processes),
     };
 
@@ -136,8 +470,13 @@ pub fn build_overview(config: &TomlValue, paths: &Paths) -> Result<OverviewRespo
         ));
     }
     if ai_enabled {
-        summary_parts
-            .push("AI enabled; availability is checked by the native provider probe.".into());
+        if runtime_signals.ai_available == Some(true) {
+            summary_parts.push("AI enabled and provider probe succeeded.".into());
+        } else if let Some(reason) = runtime_signals.ai_reason.as_deref() {
+            summary_parts.push(format!("AI enabled but unavailable: {reason}."));
+        } else {
+            summary_parts.push("AI enabled; availability is resolved by the active runtime.".into());
+        }
     }
 
     let risk = if degraded || incidents_n > 0 {
@@ -149,7 +488,7 @@ pub fn build_overview(config: &TomlValue, paths: &Paths) -> Result<OverviewRespo
     let quick = QuickAnalysis {
         headline: summary_parts.join(" "),
         risk_level: risk.into(),
-        containers_running: 0,
+        containers_running,
         process_sample_size: runtime.processes.as_ref().map(|p| p.len()).unwrap_or(0),
         code_projects_found: projects.len(),
         mode: experience.mode.clone(),
@@ -159,8 +498,8 @@ pub fn build_overview(config: &TomlValue, paths: &Paths) -> Result<OverviewRespo
     let health = DashboardHealth {
         status: Some((if degraded { "degraded" } else { "ok" }).into()),
         active_incidents: Some(incidents_n),
-        queue_depth: None,
-        collector_errors: None,
+        queue_depth: runtime_signals.queue_depth,
+        collector_errors: runtime_signals.collector_errors,
         degraded: Some(degraded),
         degraded_reasons: Some(if degraded_reasons.is_empty() && !storage_ok {
             vec!["storage path missing".into()]
@@ -170,8 +509,8 @@ pub fn build_overview(config: &TomlValue, paths: &Paths) -> Result<OverviewRespo
         storage_writes_ok: Some(storage_ok),
         data_dir_bytes_free: free_bytes,
         ai_enabled: Some(ai_enabled),
-        ai_available: None,
-        ai_reason: None,
+        ai_available: runtime_signals.ai_available,
+        ai_reason: runtime_signals.ai_reason,
     };
 
     let dashboard = DashboardPayload {
@@ -297,11 +636,14 @@ pub fn reconcile_new_events(
     let Some(mut incidents) = IncidentsStore::open(incidents_db)? else {
         return Ok(vec![]);
     };
+    let learning = sync_learning_artifacts(config, events_db, incidents_db, &mut incidents)?;
+    run_incident_lifecycle_maintenance_with_store(config, events_db, incidents_db, &mut incidents)?;
     let inserted = events.get_events(event_ids)?;
     if inserted.is_empty() {
         return Ok(vec![]);
     }
     let active = incidents.active_incidents(500)?;
+    let mut active_count = active.len();
     let merge_window_seconds = config
         .get("incident_lifecycle")
         .and_then(|value| value.get("merge_time_threshold_seconds"))
@@ -318,6 +660,30 @@ pub fn reconcile_new_events(
         .and_then(TomlValue::as_integer)
         .unwrap_or(2)
         .max(2) as usize;
+    let analysis_window_seconds = config
+        .get("correlation")
+        .and_then(|value| value.get("analysis_window_seconds"))
+        .and_then(TomlValue::as_integer)
+        .unwrap_or(60);
+    let max_events_per_incident = config
+        .get("incident_lifecycle")
+        .and_then(|value| value.get("limits"))
+        .and_then(|value| value.get("max_events_per_incident"))
+        .and_then(TomlValue::as_integer)
+        .unwrap_or(10_000)
+        .clamp(10, 100_000) as usize;
+    let max_active_incidents = config
+        .get("incident_lifecycle")
+        .and_then(|value| value.get("limits"))
+        .and_then(|value| value.get("max_active_incidents"))
+        .and_then(TomlValue::as_integer)
+        .unwrap_or(200)
+        .clamp(1, 10_000) as usize;
+    let enable_auto_split = config
+        .get("incident_lifecycle")
+        .and_then(|value| value.get("enable_auto_split"))
+        .and_then(TomlValue::as_bool)
+        .unwrap_or(true);
     let mut services = inserted
         .iter()
         .filter_map(|event| event.service_id.clone())
@@ -348,38 +714,46 @@ pub fn reconcile_new_events(
             &events,
             &domain_services,
             newest_inserted_at.as_deref(),
-            stale_timeout_seconds.max(merge_window_seconds * 2),
-            60,
+            stale_timeout_seconds
+                .max(merge_window_seconds * 2)
+                .max(analysis_window_seconds),
+            max_events_per_incident.clamp(60, 250),
         )?;
         if recent.is_empty() {
             continue;
         }
-        let max_severity = recent
+        let incident_events = trim_incident_events(&recent, max_events_per_incident, enable_auto_split);
+        let domain_metrics = analyze_domain_events(config, &incident_events);
+        let max_severity = incident_events
             .iter()
             .filter_map(event_severity)
             .max()
             .unwrap_or(SEVERITY_INFO);
-        let warn_or_higher = recent
+        let warn_or_higher = incident_events
             .iter()
             .filter(|event| event_severity(event).unwrap_or(SEVERITY_INFO) >= SEVERITY_WARN)
             .count();
-        let affected_services = services_in_events(&recent);
-        let source_types = distinct_source_types(&recent);
+        let affected_services = services_in_events(&incident_events);
+        let source_types = distinct_source_types(&incident_events);
         let should_open = max_severity >= SEVERITY_ERROR
             || warn_or_higher >= cluster_min_events
             || (warn_or_higher >= 1 && affected_services.len() > 1)
             || (warn_or_higher >= 1
                 && source_types.len() > 1
-                && recent.len() >= cluster_min_events);
+                && incident_events.len() >= cluster_min_events)
+            || domain_metrics.anomaly_status == "anomalous";
         let existing = active
             .iter()
             .find(|incident| incident_matches_domain(incident, &domain_services));
         if should_open {
-            let primary_service = dominant_service(&service_id, &recent);
+            if existing.is_none() && active_count >= max_active_incidents {
+                continue;
+            }
+            let primary_service = dominant_service(&service_id, &incident_events);
             let incident_id = existing
                 .map(|incident| incident.incident_id.clone())
                 .unwrap_or_else(|| format!("inc-{}-{}", slug(&primary_service), unix_seconds()));
-            let updated_at = recent
+            let updated_at = incident_events
                 .iter()
                 .filter_map(|event| event.timestamp.clone())
                 .max()
@@ -387,25 +761,25 @@ pub fn reconcile_new_events(
             let created_at = existing
                 .and_then(|incident| incident.created_at.clone())
                 .unwrap_or_else(|| {
-                    recent
+                    incident_events
                         .iter()
                         .filter_map(|event| event.timestamp.clone())
                         .min()
                         .unwrap_or_else(now_iso)
                 });
-            let first_seen = recent
+            let first_seen = incident_events
                 .iter()
                 .filter_map(|event| event.timestamp.clone())
                 .min()
                 .unwrap_or_else(|| created_at.clone());
-            let incident_event_ids = recent
+            let incident_event_ids = incident_events
                 .iter()
                 .filter_map(|event| event.event_id.clone())
                 .collect::<Vec<_>>();
             let cluster_payloads = build_clusters(
                 config,
                 &primary_service,
-                &recent,
+                &incident_events,
             );
             let cluster_ids = cluster_payloads
                 .iter()
@@ -437,12 +811,18 @@ pub fn reconcile_new_events(
                     "source_types": source_types,
                     "service_count": affected_services.len(),
                     "cluster_count": cluster_ids.len(),
-                    "top_messages": top_messages(&recent),
+                    "top_messages": top_messages(&incident_events),
+                    "anomaly_score": domain_metrics.anomaly_score,
+                    "anomaly_status": domain_metrics.anomaly_status,
+                    "temporal_alignment": domain_metrics.temporal_alignment,
+                    "auto_split_applied": incident_events.len() != recent.len(),
+                    "max_events_per_incident": max_events_per_incident,
                 })),
                 resolution_info: None,
             };
             incidents.upsert_incident(&incident, &incident_event_ids)?;
             if existing.is_none() {
+                active_count += 1;
                 incidents.record_state_log(
                     &incident_id,
                     "new",
@@ -459,9 +839,31 @@ pub fn reconcile_new_events(
                     incidents.upsert_cluster(&incident_id, cluster_id, &cluster)?;
                 }
             }
-            incidents.replace_hypotheses(
+            let inference_graph = build_inference_graph_with_learning(config, &incident_events, &learning);
+            incidents.upsert_inference_graph_snapshot(&StoredInferenceGraphSnapshot {
+                incident_id: incident_id.clone(),
+                graph_data: serde_json::to_value(&inference_graph).unwrap_or_else(|_| serde_json::json!({})),
+                created_at: updated_at.clone(),
+                event_count: incident_event_ids.len() as i64,
+            })?;
+            let previous_hypotheses = incidents
+                .hypothesis_records(&incident_id)
+                .unwrap_or_default();
+            let hypotheses = build_hypotheses(
+                config,
                 &incident_id,
-                &build_hypotheses(config, &incident_id, &recent, &updated_at),
+                &incident_events,
+                &updated_at,
+                &inference_graph,
+                &learning,
+            );
+            incidents.replace_hypotheses(&incident_id, &hypotheses)?;
+            record_adaptive_learning_history(
+                &mut incidents,
+                &incident_id,
+                &updated_at,
+                &previous_hypotheses,
+                &hypotheses,
             )?;
             touched.push(incident_id);
         } else if let Some(existing) = existing {
@@ -476,10 +878,809 @@ pub fn reconcile_new_events(
                 }),
                 &resolved_at,
             )?;
+            active_count = active_count.saturating_sub(1);
             touched.push(existing.incident_id.clone());
         }
     }
     Ok(touched)
+}
+
+pub fn refresh_incident_reasoning(
+    config: &TomlValue,
+    paths: &Paths,
+    incident_id: &str,
+) -> Result<bool> {
+    let Some(events) = EventsStore::open(&paths.events_db)? else {
+        return Ok(false);
+    };
+    let Some(mut incidents) = IncidentsStore::open(&paths.incidents_db)? else {
+        return Ok(false);
+    };
+    let learning = sync_learning_artifacts(config, &paths.events_db, &paths.incidents_db, &mut incidents)?;
+    refresh_single_incident_reasoning(
+        config,
+        &paths.incidents_db,
+        incident_id,
+        &events,
+        &mut incidents,
+        &learning,
+    )
+}
+
+pub fn adaptive_learning_summary(config: &TomlValue, paths: &Paths) -> Result<serde_json::Value> {
+    let adaptive_storage = adaptive_learning_storage_ref(&paths.incidents_db);
+    let audit_storage = adaptive_learning_audit_storage_ref(&paths.incidents_db);
+    let Some(mut incidents) = IncidentsStore::open(&paths.incidents_db)? else {
+        return Ok(adaptive_learning_summary_payload(
+            &AdaptiveLearningModel::default(),
+            &adaptive_storage,
+            &audit_storage,
+            &[],
+        ));
+    };
+    ensure_adaptive_learning_storage_imported(config, &paths.incidents_db, &mut incidents)?;
+    let audit = read_adaptive_learning_audit(&incidents, 25)?;
+    let learning = sync_learning_artifacts(config, &paths.events_db, &paths.incidents_db, &mut incidents)?;
+    Ok(adaptive_learning_summary_payload(
+        &learning.adaptive,
+        &adaptive_storage,
+        &audit_storage,
+        &audit,
+    ))
+}
+
+pub fn adaptive_learning_audit_log(
+    config: &TomlValue,
+    paths: &Paths,
+    query: &AdaptiveLearningAuditQuery,
+) -> Result<serde_json::Value> {
+    let storage = adaptive_learning_audit_storage_ref(&paths.incidents_db);
+    let Some(mut incidents) = IncidentsStore::open(&paths.incidents_db)? else {
+        return Ok(serde_json::json!({
+            "path": storage,
+            "entries": [],
+            "count": 0,
+            "query": {
+                "artifact_kind": query.artifact_kind.clone(),
+                "artifact_id": query.artifact_id.clone(),
+                "action": query.action.clone(),
+                "review_status_after": query.review_status_after.clone(),
+                "limit": query.limit,
+                "offset": query.offset,
+            },
+        }));
+    };
+    ensure_adaptive_learning_storage_imported(config, &paths.incidents_db, &mut incidents)?;
+    let entries = incidents
+        .list_adaptive_learning_audit(query)?
+        .into_iter()
+        .map(|entry| AdaptiveLearningAuditEntry {
+            audit_id: entry.audit_id,
+            artifact_kind: entry.artifact_kind,
+            artifact_id: entry.artifact_id,
+            action: entry.action,
+            reason: entry.reason,
+            previous_status: entry.previous_status,
+            new_status: entry.new_status,
+            review_status_before: entry.review_status_before,
+            review_status_after: entry.review_status_after,
+            runtime_effect: entry.runtime_effect,
+            created_at: entry.created_at,
+        })
+        .collect::<Vec<_>>();
+    let mut entries = entries;
+    entries.reverse();
+    Ok(serde_json::json!({
+        "path": storage,
+        "entries": entries.iter().map(adaptive_learning_audit_entry_json).collect::<Vec<_>>(),
+        "count": entries.len(),
+        "query": {
+            "artifact_kind": query.artifact_kind.clone(),
+            "artifact_id": query.artifact_id.clone(),
+            "action": query.action.clone(),
+            "review_status_after": query.review_status_after.clone(),
+            "limit": query.limit,
+            "offset": query.offset,
+        },
+    }))
+}
+
+pub fn adaptive_learning_review_summary(
+    config: &TomlValue,
+    paths: &Paths,
+) -> Result<serde_json::Value> {
+    let adaptive_storage = adaptive_learning_storage_ref(&paths.incidents_db);
+    let audit_storage = adaptive_learning_audit_storage_ref(&paths.incidents_db);
+    let Some(mut incidents) = IncidentsStore::open(&paths.incidents_db)? else {
+        return Ok(serde_json::json!({
+            "summary": adaptive_learning_summary_payload(
+                &AdaptiveLearningModel::default(),
+                &adaptive_storage,
+                &audit_storage,
+                &[],
+            ),
+            "active_incident_influence": [],
+            "artifacts_requiring_attention": [],
+            "review_counts": {},
+            "review_queue": [],
+            "recent_review_activity": [],
+            "history_summary": adaptive_learning_history_summary(config, paths, 500)?,
+            "comparison_rows": [],
+            "saved_views": [],
+            "trend_drilldowns": [],
+            "analytics": {
+                "kind_breakdown": [],
+                "top_confirmed": [],
+                "top_noisy": [],
+                "top_impact": [],
+                "recently_changed": [],
+            },
+        }));
+    };
+    ensure_adaptive_learning_storage_imported(config, &paths.incidents_db, &mut incidents)?;
+    let audit = read_adaptive_learning_audit(&incidents, 50)?;
+    let learning = sync_learning_artifacts(config, &paths.events_db, &paths.incidents_db, &mut incidents)?;
+    let history_summary = adaptive_learning_history_summary(config, paths, 500)?;
+    let trend_drilldowns = adaptive_learning_trend_drilldowns(&incidents, 2000, 8)?;
+    let active_incident_influence = incidents
+        .active_incidents(100)?
+        .into_iter()
+        .map(|incident| {
+            let hypotheses = incidents
+                .hypothesis_records(&incident.incident_id)
+                .unwrap_or_default();
+            let influenced = summarize_incident_learning_influence(&incident, &hypotheses);
+            serde_json::json!({
+                "incident_id": incident.incident_id,
+                "state": incident.state,
+                "primary_service": incident.primary_service,
+                "severity": incident.severity,
+                "learning": influenced,
+            })
+        })
+        .filter(|item| {
+            item.get("learning")
+                .and_then(|value| value.get("influenced_hypotheses"))
+                .and_then(serde_json::Value::as_u64)
+                .unwrap_or(0)
+                > 0
+        })
+        .collect::<Vec<_>>();
+    let comparison_rows =
+        adaptive_review_comparison_rows(&learning.adaptive, &history_summary, &active_incident_influence);
+    let saved_views = adaptive_review_saved_views(&incidents, &comparison_rows);
+    Ok(serde_json::json!({
+        "summary": adaptive_learning_summary_payload(
+            &learning.adaptive,
+            &adaptive_storage,
+            &audit_storage,
+            &audit,
+        ),
+        "active_incident_influence": active_incident_influence,
+        "artifacts_requiring_attention": artifacts_requiring_attention(&learning.adaptive),
+        "review_counts": adaptive_review_counts(&learning.adaptive),
+        "review_queue": adaptive_review_queue(&learning.adaptive),
+        "recent_review_activity": recent_review_activity(&audit, 25),
+        "history_summary": history_summary,
+        "comparison_rows": comparison_rows,
+        "saved_views": saved_views,
+        "trend_drilldowns": trend_drilldowns,
+        "analytics": adaptive_review_analytics(&comparison_rows),
+    }))
+}
+
+pub fn adaptive_learning_history(
+    config: &TomlValue,
+    paths: &Paths,
+    query: &AdaptiveLearningHistoryQuery,
+) -> Result<serde_json::Value> {
+    let storage = adaptive_learning_history_storage_ref(&paths.incidents_db);
+    let Some(mut incidents) = IncidentsStore::open(&paths.incidents_db)? else {
+        return Ok(serde_json::json!({
+            "path": storage,
+            "entries": [],
+            "count": 0,
+            "query": {
+                "artifact_kind": query.artifact_kind.clone(),
+                "artifact_id": query.artifact_id.clone(),
+                "incident_id": query.incident_id.clone(),
+                "cause_type": query.cause_type.clone(),
+                "limit": query.limit,
+                "offset": query.offset,
+            },
+        }));
+    };
+    ensure_adaptive_learning_storage_imported(config, &paths.incidents_db, &mut incidents)?;
+    let entries = incidents
+        .list_adaptive_learning_history(query)?
+        .into_iter()
+        .map(|entry| AdaptiveLearningHistoryEntry {
+            entry_id: entry.entry_id,
+            artifact_kind: entry.artifact_kind,
+            artifact_id: entry.artifact_id,
+            artifact_label: entry.artifact_label,
+            incident_id: entry.incident_id,
+            cause_type: entry.cause_type,
+            hypothesis_id: entry.hypothesis_id,
+            observed_at: entry.observed_at,
+            score: entry.score,
+            rank: entry.rank,
+            estimated_impact: entry.estimated_impact,
+            impact_metric: entry.impact_metric,
+            score_delta: entry.score_delta,
+            rank_delta: entry.rank_delta,
+            edge_delta: entry.edge_delta,
+        })
+        .collect::<Vec<_>>();
+    let mut entries = entries;
+    entries.reverse();
+    Ok(serde_json::json!({
+        "path": storage,
+        "entries": entries.iter().map(adaptive_learning_history_entry_json).collect::<Vec<_>>(),
+        "count": entries.len(),
+        "query": {
+            "artifact_kind": query.artifact_kind.clone(),
+            "artifact_id": query.artifact_id.clone(),
+            "incident_id": query.incident_id.clone(),
+            "cause_type": query.cause_type.clone(),
+            "limit": query.limit,
+            "offset": query.offset,
+        },
+    }))
+}
+
+pub fn adaptive_learning_history_summary(
+    config: &TomlValue,
+    paths: &Paths,
+    limit: usize,
+) -> Result<serde_json::Value> {
+    let storage = adaptive_learning_history_storage_ref(&paths.incidents_db);
+    let Some(mut incidents) = IncidentsStore::open(&paths.incidents_db)? else {
+        return Ok(serde_json::json!({
+            "path": storage,
+            "artifacts": [],
+            "count": 0,
+        }));
+    };
+    ensure_adaptive_learning_storage_imported(config, &paths.incidents_db, &mut incidents)?;
+    let entries = read_adaptive_learning_history(&incidents, limit)?;
+    let mut by_artifact = std::collections::BTreeMap::<(String, String), Vec<AdaptiveLearningHistoryEntry>>::new();
+    for entry in entries {
+        by_artifact
+            .entry((entry.artifact_kind.clone(), entry.artifact_id.clone()))
+            .or_default()
+            .push(entry);
+    }
+    let mut artifacts = by_artifact
+        .into_iter()
+        .map(|((kind, artifact_id), entries)| {
+            let latest = entries.last().cloned();
+            let cumulative_score_delta = entries
+                .iter()
+                .filter_map(|entry| entry.score_delta)
+                .sum::<f64>();
+            let cumulative_edge_delta = entries
+                .iter()
+                .filter_map(|entry| entry.edge_delta)
+                .sum::<f64>();
+            let best_rank = entries.iter().filter_map(|entry| entry.rank).min();
+            serde_json::json!({
+                "artifact_kind": kind,
+                "artifact_id": artifact_id,
+                "artifact_label": latest.as_ref().map(|entry| entry.artifact_label.clone()),
+                "observations": entries.len(),
+                "latest_observed_at": latest.as_ref().map(|entry| entry.observed_at.clone()),
+                "latest_score": latest.as_ref().and_then(|entry| entry.score),
+                "latest_rank": latest.as_ref().and_then(|entry| entry.rank),
+                "best_rank": best_rank,
+                "cumulative_score_delta": cumulative_score_delta,
+                "cumulative_edge_delta": cumulative_edge_delta,
+                "latest_estimated_impact": latest.as_ref().map(|entry| entry.estimated_impact).unwrap_or_default(),
+            })
+        })
+        .collect::<Vec<_>>();
+    artifacts.sort_by(|left, right| {
+        let left_value = left
+            .get("cumulative_score_delta")
+            .and_then(serde_json::Value::as_f64)
+            .unwrap_or_default()
+            .abs()
+            + left
+                .get("cumulative_edge_delta")
+                .and_then(serde_json::Value::as_f64)
+                .unwrap_or_default()
+                .abs();
+        let right_value = right
+            .get("cumulative_score_delta")
+            .and_then(serde_json::Value::as_f64)
+            .unwrap_or_default()
+            .abs()
+            + right
+                .get("cumulative_edge_delta")
+                .and_then(serde_json::Value::as_f64)
+                .unwrap_or_default()
+                .abs();
+        right_value
+            .partial_cmp(&left_value)
+            .unwrap_or(std::cmp::Ordering::Equal)
+    });
+    let count = artifacts.len();
+    Ok(serde_json::json!({
+        "path": storage,
+        "artifacts": artifacts,
+        "count": count,
+    }))
+}
+
+#[derive(Debug, Clone)]
+pub struct AdaptiveArtifactSelection {
+    pub artifact_kind: String,
+    pub artifact_id: String,
+}
+
+#[derive(Debug, Clone)]
+pub struct AdaptiveSavedReviewViewDraft {
+    pub view_id: Option<String>,
+    pub name: String,
+    pub description: Option<String>,
+    pub search_text: Option<String>,
+    pub assigned_reviewer: Option<String>,
+    pub artifact_selections: Vec<AdaptiveArtifactSelection>,
+}
+
+#[derive(Debug, Clone)]
+struct AdaptiveArtifactMutationRecord {
+    artifact_kind: String,
+    artifact_id: String,
+    label: String,
+    previous_status: String,
+    new_status: String,
+    review_status_before: Option<String>,
+    review_status_after: Option<String>,
+    runtime_effect: Option<String>,
+    updated_at: String,
+    refresh_reasoning: bool,
+}
+
+fn adaptive_artifact_mutation_record_json(record: &AdaptiveArtifactMutationRecord) -> serde_json::Value {
+    serde_json::json!({
+        "artifact_kind": record.artifact_kind,
+        "artifact_id": record.artifact_id,
+        "label": record.label,
+        "previous_status": record.previous_status,
+        "new_status": record.new_status,
+        "review_status_before": record.review_status_before,
+        "review_status_after": record.review_status_after,
+        "runtime_effect": record.runtime_effect,
+        "updated_at": record.updated_at,
+    })
+}
+
+pub fn adaptive_learning_set_artifact_state(
+    config: &TomlValue,
+    paths: &Paths,
+    artifact_kind: &str,
+    artifact_id: &str,
+    action: &str,
+    reason: Option<&str>,
+) -> Result<serde_json::Value> {
+    let adaptive_storage = adaptive_learning_storage_ref(&paths.incidents_db);
+    let audit_storage = adaptive_learning_audit_storage_ref(&paths.incidents_db);
+    let Some(mut incidents) = IncidentsStore::open(&paths.incidents_db)? else {
+        return Err(anyhow::anyhow!("incident store not found"));
+    };
+    ensure_adaptive_learning_storage_imported(config, &paths.incidents_db, &mut incidents)?;
+    let learning = sync_learning_artifacts(config, &paths.events_db, &paths.incidents_db, &mut incidents)?;
+    let mut adaptive = learning.adaptive;
+    let normalized_kind = artifact_kind.trim().to_ascii_lowercase();
+    let normalized_action = action.trim().to_ascii_lowercase();
+    let disable = match normalized_action.as_str() {
+        "disable" | "retire" => true,
+        "enable" | "restore" => false,
+        other => {
+            return Err(anyhow::anyhow!(
+                "unsupported action '{other}', expected disable/retire or enable/restore"
+            ))
+        }
+    };
+    let status_reason = reason
+        .map(str::trim)
+        .filter(|value| !value.is_empty())
+        .map(str::to_string);
+    let updated_at = now_iso();
+    let Some(mutation) = apply_runtime_action_to_selected_artifact(
+        &mut adaptive,
+        &normalized_kind,
+        artifact_id,
+        disable,
+        &status_reason,
+        &updated_at,
+    )? else {
+        return Err(anyhow::anyhow!(
+            "adaptive learning artifact '{artifact_id}' not found in kind '{artifact_kind}'"
+        ));
+    };
+    adaptive.last_updated = Some(updated_at);
+    incidents.replace_adaptive_learning_model(&stored_adaptive_learning_model(&adaptive))?;
+    let audit_entry = AdaptiveLearningAuditEntry {
+        audit_id: format!(
+            "audit-{}-{}",
+            artifact_id,
+            time::OffsetDateTime::now_utc().unix_timestamp_nanos()
+        ),
+        artifact_kind: normalized_kind,
+        artifact_id: artifact_id.to_string(),
+        action: normalized_action,
+        reason: status_reason,
+        previous_status: mutation.previous_status,
+        new_status: mutation.new_status,
+        review_status_before: None,
+        review_status_after: None,
+        runtime_effect: mutation.runtime_effect,
+        created_at: adaptive.last_updated.clone().unwrap_or_else(now_iso),
+    };
+    append_adaptive_learning_audit(&incidents, &audit_entry)?;
+    refresh_active_incident_reasoning(config, &paths.events_db, &paths.incidents_db, &mut incidents)?;
+    let audit = read_adaptive_learning_audit(&incidents, 25)?;
+    Ok(adaptive_learning_summary_payload(&adaptive, &adaptive_storage, &audit_storage, &audit))
+}
+
+pub fn adaptive_learning_review_artifact(
+    config: &TomlValue,
+    paths: &Paths,
+    artifact_kind: &str,
+    artifact_id: &str,
+    decision: &str,
+    reason: Option<&str>,
+) -> Result<serde_json::Value> {
+    let Some(mut incidents) = IncidentsStore::open(&paths.incidents_db)? else {
+        return Err(anyhow::anyhow!("incident store not found"));
+    };
+    ensure_adaptive_learning_storage_imported(config, &paths.incidents_db, &mut incidents)?;
+    let learning = sync_learning_artifacts(config, &paths.events_db, &paths.incidents_db, &mut incidents)?;
+    let mut adaptive = learning.adaptive;
+    let normalized_kind = artifact_kind.trim().to_ascii_lowercase();
+    let normalized_decision = decision.trim().to_ascii_lowercase();
+    let review_reason = reason
+        .map(str::trim)
+        .filter(|value| !value.is_empty())
+        .map(str::to_string);
+    let reviewed_at = now_iso();
+    let Some(mutation) = apply_review_decision_to_selected_artifact(
+        &mut adaptive,
+        &normalized_kind,
+        artifact_id,
+        &normalized_decision,
+        &review_reason,
+        &reviewed_at,
+    )? else {
+        return Err(anyhow::anyhow!(
+            "adaptive learning artifact '{artifact_id}' not found in kind '{artifact_kind}'"
+        ));
+    };
+    adaptive.last_updated = Some(reviewed_at.clone());
+    incidents.replace_adaptive_learning_model(&stored_adaptive_learning_model(&adaptive))?;
+    let audit_entry = AdaptiveLearningAuditEntry {
+        audit_id: format!(
+            "audit-review-{}-{}",
+            artifact_id,
+            time::OffsetDateTime::now_utc().unix_timestamp_nanos()
+        ),
+        artifact_kind: normalized_kind,
+        artifact_id: artifact_id.to_string(),
+        action: format!("review:{normalized_decision}"),
+        reason: review_reason,
+        previous_status: mutation.previous_status,
+        new_status: mutation.new_status,
+        review_status_before: mutation.review_status_before,
+        review_status_after: mutation.review_status_after,
+        runtime_effect: mutation.runtime_effect,
+        created_at: reviewed_at,
+    };
+    append_adaptive_learning_audit(&incidents, &audit_entry)?;
+    if mutation.refresh_reasoning {
+        refresh_active_incident_reasoning(config, &paths.events_db, &paths.incidents_db, &mut incidents)?;
+    }
+    adaptive_learning_review_summary(config, paths)
+}
+
+pub fn adaptive_learning_bulk_review_artifacts(
+    config: &TomlValue,
+    paths: &Paths,
+    artifacts: &[AdaptiveArtifactSelection],
+    decision: &str,
+    reason: Option<&str>,
+) -> Result<serde_json::Value> {
+    let Some(mut incidents) = IncidentsStore::open(&paths.incidents_db)? else {
+        return Err(anyhow::anyhow!("incident store not found"));
+    };
+    if artifacts.is_empty() {
+        return Err(anyhow::anyhow!("no adaptive learning artifacts were selected"));
+    }
+    ensure_adaptive_learning_storage_imported(config, &paths.incidents_db, &mut incidents)?;
+    let learning = sync_learning_artifacts(config, &paths.events_db, &paths.incidents_db, &mut incidents)?;
+    let mut adaptive = learning.adaptive;
+    let normalized_decision = decision.trim().to_ascii_lowercase();
+    let review_reason = reason
+        .map(str::trim)
+        .filter(|value| !value.is_empty())
+        .map(str::to_string);
+    let reviewed_at = now_iso();
+    let mut seen = std::collections::BTreeSet::<(String, String)>::new();
+    let mut updates = Vec::new();
+    let mut refresh_reasoning = false;
+    for selection in artifacts {
+        let normalized_kind = normalize_adaptive_artifact_kind(&selection.artifact_kind)?.to_string();
+        let dedup_key = (normalized_kind.clone(), selection.artifact_id.clone());
+        if !seen.insert(dedup_key) {
+            continue;
+        }
+        let Some(update) = apply_review_decision_to_selected_artifact(
+            &mut adaptive,
+            &normalized_kind,
+            &selection.artifact_id,
+            &normalized_decision,
+            &review_reason,
+            &reviewed_at,
+        )? else {
+            return Err(anyhow::anyhow!(
+                "adaptive learning artifact '{}' not found in kind '{}'",
+                selection.artifact_id,
+                selection.artifact_kind
+            ));
+        };
+        refresh_reasoning |= update.refresh_reasoning;
+        updates.push(update);
+    }
+    if updates.is_empty() {
+        return Err(anyhow::anyhow!("no adaptive learning artifacts were selected"));
+    }
+    adaptive.last_updated = Some(reviewed_at.clone());
+    incidents.replace_adaptive_learning_model(&stored_adaptive_learning_model(&adaptive))?;
+    for (index, update) in updates.iter().enumerate() {
+        append_adaptive_learning_audit(
+            &incidents,
+            &AdaptiveLearningAuditEntry {
+                audit_id: format!(
+                    "audit-review-bulk-{}-{}-{}",
+                    update.artifact_id,
+                    time::OffsetDateTime::now_utc().unix_timestamp_nanos(),
+                    index
+                ),
+                artifact_kind: update.artifact_kind.clone(),
+                artifact_id: update.artifact_id.clone(),
+                action: format!("review:{normalized_decision}"),
+                reason: review_reason.clone(),
+                previous_status: update.previous_status.clone(),
+                new_status: update.new_status.clone(),
+                review_status_before: update.review_status_before.clone(),
+                review_status_after: update.review_status_after.clone(),
+                runtime_effect: update.runtime_effect.clone(),
+                created_at: reviewed_at.clone(),
+            },
+        )?;
+    }
+    if refresh_reasoning {
+        refresh_active_incident_reasoning(config, &paths.events_db, &paths.incidents_db, &mut incidents)?;
+    }
+    Ok(serde_json::json!({
+        "updated": true,
+        "updated_count": updates.len(),
+        "decision": normalized_decision,
+        "artifacts": updates.iter().map(adaptive_artifact_mutation_record_json).collect::<Vec<_>>(),
+        "review": adaptive_learning_review_summary(config, paths)?,
+    }))
+}
+
+pub fn adaptive_learning_bulk_set_artifact_state(
+    config: &TomlValue,
+    paths: &Paths,
+    artifacts: &[AdaptiveArtifactSelection],
+    action: &str,
+    reason: Option<&str>,
+) -> Result<serde_json::Value> {
+    let Some(mut incidents) = IncidentsStore::open(&paths.incidents_db)? else {
+        return Err(anyhow::anyhow!("incident store not found"));
+    };
+    if artifacts.is_empty() {
+        return Err(anyhow::anyhow!("no adaptive learning artifacts were selected"));
+    }
+    ensure_adaptive_learning_storage_imported(config, &paths.incidents_db, &mut incidents)?;
+    let learning = sync_learning_artifacts(config, &paths.events_db, &paths.incidents_db, &mut incidents)?;
+    let mut adaptive = learning.adaptive;
+    let normalized_action = action.trim().to_ascii_lowercase();
+    let disable = match normalized_action.as_str() {
+        "disable" | "retire" => true,
+        "enable" | "restore" => false,
+        other => {
+            return Err(anyhow::anyhow!(
+                "unsupported action '{other}', expected disable/retire or enable/restore"
+            ))
+        }
+    };
+    let status_reason = reason
+        .map(str::trim)
+        .filter(|value| !value.is_empty())
+        .map(str::to_string);
+    let updated_at = now_iso();
+    let mut seen = std::collections::BTreeSet::<(String, String)>::new();
+    let mut updates = Vec::new();
+    for selection in artifacts {
+        let normalized_kind = normalize_adaptive_artifact_kind(&selection.artifact_kind)?.to_string();
+        let dedup_key = (normalized_kind.clone(), selection.artifact_id.clone());
+        if !seen.insert(dedup_key) {
+            continue;
+        }
+        let Some(update) = apply_runtime_action_to_selected_artifact(
+            &mut adaptive,
+            &normalized_kind,
+            &selection.artifact_id,
+            disable,
+            &status_reason,
+            &updated_at,
+        )? else {
+            return Err(anyhow::anyhow!(
+                "adaptive learning artifact '{}' not found in kind '{}'",
+                selection.artifact_id,
+                selection.artifact_kind
+            ));
+        };
+        updates.push(update);
+    }
+    if updates.is_empty() {
+        return Err(anyhow::anyhow!("no adaptive learning artifacts were selected"));
+    }
+    adaptive.last_updated = Some(updated_at.clone());
+    incidents.replace_adaptive_learning_model(&stored_adaptive_learning_model(&adaptive))?;
+    for (index, update) in updates.iter().enumerate() {
+        append_adaptive_learning_audit(
+            &incidents,
+            &AdaptiveLearningAuditEntry {
+                audit_id: format!(
+                    "audit-bulk-{}-{}-{}",
+                    update.artifact_id,
+                    time::OffsetDateTime::now_utc().unix_timestamp_nanos(),
+                    index
+                ),
+                artifact_kind: update.artifact_kind.clone(),
+                artifact_id: update.artifact_id.clone(),
+                action: normalized_action.clone(),
+                reason: status_reason.clone(),
+                previous_status: update.previous_status.clone(),
+                new_status: update.new_status.clone(),
+                review_status_before: None,
+                review_status_after: None,
+                runtime_effect: update.runtime_effect.clone(),
+                created_at: updated_at.clone(),
+            },
+        )?;
+    }
+    refresh_active_incident_reasoning(config, &paths.events_db, &paths.incidents_db, &mut incidents)?;
+    Ok(serde_json::json!({
+        "updated": true,
+        "updated_count": updates.len(),
+        "action": normalized_action,
+        "artifacts": updates.iter().map(adaptive_artifact_mutation_record_json).collect::<Vec<_>>(),
+        "review": adaptive_learning_review_summary(config, paths)?,
+    }))
+}
+
+pub fn adaptive_learning_save_review_view(
+    config: &TomlValue,
+    paths: &Paths,
+    draft: &AdaptiveSavedReviewViewDraft,
+) -> Result<serde_json::Value> {
+    let Some(mut incidents) = IncidentsStore::open(&paths.incidents_db)? else {
+        return Err(anyhow::anyhow!("incident store not found"));
+    };
+    ensure_adaptive_learning_storage_imported(config, &paths.incidents_db, &mut incidents)?;
+    let name = draft.name.trim();
+    if name.is_empty() {
+        return Err(anyhow::anyhow!("saved review view name must not be empty"));
+    }
+    let existing_views = incidents.list_adaptive_review_views()?;
+    let now = now_iso();
+    let existing = draft
+        .view_id
+        .as_ref()
+        .and_then(|view_id| existing_views.iter().find(|view| &view.view_id == view_id));
+    let view_id = draft
+        .view_id
+        .clone()
+        .filter(|value| !value.trim().is_empty())
+        .unwrap_or_else(|| {
+            format!(
+                "review-view-{}",
+                time::OffsetDateTime::now_utc().unix_timestamp_nanos()
+            )
+        });
+    let mut seen = std::collections::BTreeSet::<(String, String)>::new();
+    let artifact_selections = draft
+        .artifact_selections
+        .iter()
+        .filter_map(|selection| {
+            let kind = normalize_adaptive_artifact_kind(&selection.artifact_kind).ok()?.to_string();
+            let artifact_id = selection.artifact_id.trim();
+            if artifact_id.is_empty() {
+                return None;
+            }
+            let key = (kind.clone(), artifact_id.to_string());
+            if !seen.insert(key.clone()) {
+                return None;
+            }
+            Some(StoredAdaptiveReviewViewSelection {
+                artifact_kind: key.0,
+                artifact_id: key.1,
+            })
+        })
+        .collect::<Vec<_>>();
+    incidents.upsert_adaptive_review_view(&StoredAdaptiveReviewView {
+        view_id: view_id.clone(),
+        name: name.to_string(),
+        description: draft
+            .description
+            .as_ref()
+            .map(|value| value.trim())
+            .filter(|value| !value.is_empty())
+            .map(str::to_string),
+        search_text: draft
+            .search_text
+            .as_ref()
+            .map(|value| value.trim())
+            .filter(|value| !value.is_empty())
+            .map(str::to_string),
+        assigned_reviewer: draft
+            .assigned_reviewer
+            .as_ref()
+            .map(|value| value.trim())
+            .filter(|value| !value.is_empty())
+            .map(str::to_string),
+        artifact_selections,
+        created_at: existing.map(|view| view.created_at.clone()).unwrap_or_else(|| now.clone()),
+        updated_at: now.clone(),
+        last_used_at: existing.and_then(|view| view.last_used_at.clone()),
+    })?;
+    Ok(serde_json::json!({
+        "updated": true,
+        "view_id": view_id,
+        "review": adaptive_learning_review_summary(config, paths)?,
+    }))
+}
+
+pub fn adaptive_learning_delete_review_view(
+    config: &TomlValue,
+    paths: &Paths,
+    view_id: &str,
+) -> Result<serde_json::Value> {
+    let Some(mut incidents) = IncidentsStore::open(&paths.incidents_db)? else {
+        return Err(anyhow::anyhow!("incident store not found"));
+    };
+    ensure_adaptive_learning_storage_imported(config, &paths.incidents_db, &mut incidents)?;
+    incidents.delete_adaptive_review_view(view_id)?;
+    Ok(serde_json::json!({
+        "deleted": true,
+        "view_id": view_id,
+        "review": adaptive_learning_review_summary(config, paths)?,
+    }))
+}
+
+pub fn adaptive_learning_touch_review_view(
+    config: &TomlValue,
+    paths: &Paths,
+    view_id: &str,
+) -> Result<serde_json::Value> {
+    let Some(mut incidents) = IncidentsStore::open(&paths.incidents_db)? else {
+        return Err(anyhow::anyhow!("incident store not found"));
+    };
+    ensure_adaptive_learning_storage_imported(config, &paths.incidents_db, &mut incidents)?;
+    let used_at = now_iso();
+    incidents.touch_adaptive_review_view(view_id, &used_at)?;
+    Ok(serde_json::json!({
+        "updated": true,
+        "view_id": view_id,
+        "used_at": used_at,
+        "review": adaptive_learning_review_summary(config, paths)?,
+    }))
 }
 
 fn build_hypotheses(
@@ -487,21 +1688,45 @@ fn build_hypotheses(
     incident_id: &str,
     events: &[EventRow],
     updated_at: &str,
+    inference_graph: &InferenceGraph,
+    learning: &LearningArtifacts,
 ) -> Vec<StoredHypothesis> {
-    #[derive(Clone)]
-    struct Candidate {
-        cause_type: String,
-        description: String,
-        score: f64,
-        suggested_checks: Vec<String>,
-        supporting_events: Vec<String>,
-        affected_services: Vec<String>,
-        contradicting_events: Vec<String>,
-    }
-
     let all_services = services_in_events(events);
     let source_types = distinct_source_types(events);
     let max_severity_value = max_severity(events);
+    let domain_metrics = analyze_domain_events(config, events);
+    let min_supporting_events = config
+        .get("hypothesis_engine")
+        .and_then(|value| value.get("min_supporting_events"))
+        .and_then(TomlValue::as_integer)
+        .unwrap_or(1)
+        .max(1) as usize;
+    let min_generation_confidence = config
+        .get("hypothesis_engine")
+        .and_then(|value| value.get("min_generation_confidence"))
+        .and_then(TomlValue::as_float)
+        .or_else(|| {
+            config
+                .get("hypothesis_engine")
+                .and_then(|value| value.get("min_generation_confidence"))
+                .and_then(TomlValue::as_integer)
+                .map(|value| value as f64)
+        })
+        .unwrap_or(0.1)
+        .clamp(0.0, 1.0);
+    let dedup_overlap_threshold = config
+        .get("hypothesis_engine")
+        .and_then(|value| value.get("dedup_overlap_threshold"))
+        .and_then(TomlValue::as_float)
+        .or_else(|| {
+            config
+                .get("hypothesis_engine")
+                .and_then(|value| value.get("dedup_overlap_threshold"))
+                .and_then(TomlValue::as_integer)
+                .map(|value| value as f64)
+        })
+        .unwrap_or(0.5)
+        .clamp(0.0, 1.0);
     let dependency_support = events
         .iter()
         .filter(|event| {
@@ -580,14 +1805,23 @@ fn build_hypotheses(
         .filter_map(|event| event.event_id.clone())
         .collect::<Vec<_>>();
     let mut candidates = Vec::<Candidate>::new();
+    candidates.extend(graph_root_candidates(
+        events,
+        &all_services,
+        &source_types,
+        &domain_metrics,
+        inference_graph,
+    ));
+    candidates.extend(custom_rule_candidates(
+        config,
+        events,
+        &all_services,
+        &source_types,
+        &domain_metrics,
+        inference_graph,
+        learning,
+    ));
     if !dependency_support.is_empty() {
-        let score = candidate_score(
-            max_severity_value,
-            dependency_support.len(),
-            all_services.len(),
-            source_types.len(),
-            0.56,
-        );
         candidates.push(Candidate {
             cause_type: "dependency_failure".into(),
             description: if all_services.len() > 1 {
@@ -598,7 +1832,8 @@ fn build_hypotheses(
             } else {
                 "Evidence points to an upstream dependency timing out, refusing connections, or becoming unavailable.".into()
             },
-            score,
+            prior: 0.56,
+            score: 0.0,
             suggested_checks: vec![
                 "Check dependency connectivity and credentials".into(),
                 "Inspect upstream health and latency around the incident window".into(),
@@ -606,20 +1841,21 @@ fn build_hypotheses(
             supporting_events: dependency_support,
             affected_services: all_services.clone(),
             contradicting_events: Vec::new(),
+            dependency_proximity: dependency_proximity_score("dependency_failure", events),
+            is_valid: true,
+            invalidation_reasons: Vec::new(),
+            root_cause_event_id: graph_root_for_cause(inference_graph, "dependency_failure"),
+            root_cause_timestamp: None,
+            scoring: CandidateScoring::default(),
+            provenance_refs: Vec::new(),
         });
     }
     if !resource_support.is_empty() {
-        let score = candidate_score(
-            max_severity_value,
-            resource_support.len(),
-            all_services.len(),
-            source_types.len(),
-            0.52,
-        );
         candidates.push(Candidate {
             cause_type: "resource_pressure".into(),
             description: "Host or process telemetry indicates resource pressure contributing to the incident.".into(),
-            score,
+            prior: 0.52,
+            score: 0.0,
             suggested_checks: vec![
                 "Inspect CPU, memory, and disk saturation near the first warning".into(),
                 "Review process-level spikes or OOM conditions".into(),
@@ -627,20 +1863,21 @@ fn build_hypotheses(
             supporting_events: resource_support,
             affected_services: all_services.clone(),
             contradicting_events: Vec::new(),
+            dependency_proximity: dependency_proximity_score("resource_pressure", events),
+            is_valid: true,
+            invalidation_reasons: Vec::new(),
+            root_cause_event_id: graph_root_for_cause(inference_graph, "resource_pressure"),
+            root_cause_timestamp: None,
+            scoring: CandidateScoring::default(),
+            provenance_refs: Vec::new(),
         });
     }
     if !instability_support.is_empty() {
-        let score = candidate_score(
-            max_severity_value,
-            instability_support.len(),
-            all_services.len(),
-            source_types.len(),
-            0.49,
-        );
         candidates.push(Candidate {
             cause_type: "service_instability".into(),
             description: "Lifecycle signals show the service or a nearby runtime repeatedly failing, restarting, or stopping.".into(),
-            score,
+            prior: 0.49,
+            score: 0.0,
             suggested_checks: vec![
                 "Inspect restart loops, crash output, and supervisor state".into(),
                 "Correlate deploy or restart timing with dependency and resource signals".into(),
@@ -648,20 +1885,21 @@ fn build_hypotheses(
             supporting_events: instability_support,
             affected_services: all_services.clone(),
             contradicting_events: Vec::new(),
+            dependency_proximity: dependency_proximity_score("service_instability", events),
+            is_valid: true,
+            invalidation_reasons: Vec::new(),
+            root_cause_event_id: graph_root_for_cause(inference_graph, "service_instability"),
+            root_cause_timestamp: None,
+            scoring: CandidateScoring::default(),
+            provenance_refs: Vec::new(),
         });
     }
     if !orchestration_support.is_empty() {
-        let score = candidate_score(
-            max_severity_value,
-            orchestration_support.len(),
-            all_services.len(),
-            source_types.len(),
-            0.46,
-        );
         candidates.push(Candidate {
             cause_type: "orchestration_change".into(),
             description: "Container or orchestration activity changed during the incident window and may have triggered downstream impact.".into(),
-            score,
+            prior: 0.46,
+            score: 0.0,
             suggested_checks: vec![
                 "Review recent pod/container scheduling, restart, and rollout events".into(),
                 "Compare runtime changes with the first user-visible failure".into(),
@@ -669,6 +1907,13 @@ fn build_hypotheses(
             supporting_events: orchestration_support,
             affected_services: all_services.clone(),
             contradicting_events: Vec::new(),
+            dependency_proximity: dependency_proximity_score("orchestration_change", events),
+            is_valid: true,
+            invalidation_reasons: Vec::new(),
+            root_cause_event_id: graph_root_for_cause(inference_graph, "orchestration_change"),
+            root_cause_timestamp: None,
+            scoring: CandidateScoring::default(),
+            provenance_refs: Vec::new(),
         });
     }
     if all_services.len() > 1 && source_types.len() > 1 {
@@ -676,17 +1921,11 @@ fn build_hypotheses(
             .iter()
             .filter_map(|event| event.event_id.clone())
             .collect::<Vec<_>>();
-        let score = candidate_score(
-            max_severity_value,
-            support.len(),
-            all_services.len(),
-            source_types.len(),
-            0.44,
-        );
         candidates.push(Candidate {
             cause_type: "shared_fate".into(),
             description: "Multiple related services degraded together, which suggests a shared dependency or infrastructure fault domain.".into(),
-            score,
+            prior: 0.44,
+            score: 0.0,
             suggested_checks: vec![
                 "Trace common dependencies across the affected services".into(),
                 "Review topology edges and shared infrastructure during the incident window".into(),
@@ -694,13 +1933,21 @@ fn build_hypotheses(
             supporting_events: support,
             affected_services: all_services.clone(),
             contradicting_events: Vec::new(),
+            dependency_proximity: dependency_proximity_score("shared_fate", events),
+            is_valid: true,
+            invalidation_reasons: Vec::new(),
+            root_cause_event_id: graph_root_for_cause(inference_graph, "shared_fate"),
+            root_cause_timestamp: None,
+            scoring: CandidateScoring::default(),
+            provenance_refs: Vec::new(),
         });
     }
     if candidates.is_empty() {
         candidates.push(Candidate {
             cause_type: "unknown".into(),
             description: "Elevated signal was detected but did not match a stronger native hypothesis template.".into(),
-            score: 0.48,
+            prior: 0.48,
+            score: 0.0,
             suggested_checks: vec![
                 "Inspect the grouped event timeline".into(),
                 "Add topology and service mappings for stronger correlation".into(),
@@ -708,25 +1955,100 @@ fn build_hypotheses(
             supporting_events: events.iter().filter_map(|event| event.event_id.clone()).collect(),
             affected_services: all_services.clone(),
             contradicting_events: Vec::new(),
+            dependency_proximity: 0.2,
+            is_valid: true,
+            invalidation_reasons: Vec::new(),
+            root_cause_event_id: inference_graph.root_candidates.first().cloned(),
+            root_cause_timestamp: inference_graph
+                .root_candidates
+                .first()
+                .and_then(|event_id| graph_node(inference_graph, event_id))
+                .map(|node| node.timestamp.clone()),
+            scoring: CandidateScoring::default(),
+            provenance_refs: Vec::new(),
         });
+    }
+    for candidate in &mut candidates {
+        candidate.supporting_events.sort();
+        candidate.supporting_events.dedup();
+        candidate.root_cause_timestamp = candidate
+            .root_cause_event_id
+            .as_ref()
+            .and_then(|event_id| graph_node(inference_graph, event_id))
+            .map(|node| node.timestamp.clone());
+        candidate.contradicting_events =
+            contradiction_events_for_candidate(config, events, &candidate.cause_type);
+        let contradiction_ratio = candidate.contradicting_events.len() as f64
+            / candidate.supporting_events.len().max(1) as f64;
+        candidate.scoring = candidate_scoring_components(
+            events,
+            candidate,
+            &domain_metrics,
+            inference_graph,
+        );
+        candidate.score = candidate_score(
+            config,
+            max_severity_value,
+            candidate.prior,
+            &candidate.scoring,
+            contradiction_ratio,
+            &learning.weights,
+        );
+        candidate.is_valid = true;
+        if candidate.supporting_events.len() < min_supporting_events {
+            candidate.is_valid = false;
+            candidate.invalidation_reasons.push(format!(
+                "supporting evidence below hypothesis_engine.min_supporting_events ({min_supporting_events})"
+            ));
+        }
+        if candidate.score < min_generation_confidence {
+            candidate.is_valid = false;
+            candidate.invalidation_reasons.push(format!(
+                "score {:.2} below hypothesis_engine.min_generation_confidence {:.2}",
+                candidate.score, min_generation_confidence
+            ));
+        }
+        if contradiction_ratio >= contradiction_fail_threshold(config) {
+            candidate.is_valid = false;
+            candidate
+                .invalidation_reasons
+                .push("contradiction ratio exceeded fail threshold".into());
+        } else if contradiction_ratio >= contradiction_warn_threshold(config) {
+            candidate
+                .invalidation_reasons
+                .push("contradiction ratio exceeded warning threshold".into());
+        }
     }
     candidates.sort_by(|left, right| {
         right
             .score
             .partial_cmp(&left.score)
             .unwrap_or(std::cmp::Ordering::Equal)
+            .then_with(|| candidate_tiebreak_ordering(config, left, right))
     });
+    let mut deduped = Vec::<Candidate>::new();
+    for candidate in candidates {
+        let duplicate = deduped.iter().any(|existing| {
+            existing.cause_type == candidate.cause_type
+                && candidate_overlap_ratio(existing, &candidate) >= dedup_overlap_threshold
+        });
+        if !duplicate {
+            deduped.push(candidate);
+        }
+    }
     let max_hypotheses = config
         .get("hypothesis_engine")
         .and_then(|value| value.get("max_hypotheses_per_incident"))
         .and_then(TomlValue::as_integer)
         .unwrap_or(4)
         .max(1) as usize;
-    candidates
+    deduped
         .into_iter()
         .take(max_hypotheses)
         .enumerate()
-        .map(|(index, candidate)| StoredHypothesis {
+        .map(|(index, candidate)| {
+            let provenance = candidate_learning_provenance(&candidate, events, inference_graph, learning);
+            StoredHypothesis {
             hypothesis_id: format!("{incident_id}-hyp-{}", index + 1),
             rank: Some((index + 1) as i64),
             cause_type: candidate.cause_type,
@@ -737,19 +2059,81 @@ fn build_hypotheses(
                 "supporting_events": candidate.supporting_events.len(),
                 "related_services": candidate.affected_services.len(),
                 "source_types": source_types.clone(),
-                "heuristic_score": candidate.score,
+                "heuristic_score": candidate.prior,
+                "temporal_alignment": candidate.scoring.temporal_alignment,
+                "correlation_strength": candidate.scoring.correlation_strength,
+                "frequency_weight": candidate.scoring.frequency_weight,
+                "dependency_proximity": candidate.scoring.dependency_proximity,
+                "evidence_coverage": candidate.scoring.evidence_coverage,
+                "anomaly_severity": candidate.scoring.anomaly_severity,
+                "graph_impact": candidate.scoring.graph_impact,
+                "root_cause_event_id": candidate.root_cause_event_id,
+                "root_cause_timestamp": candidate.root_cause_timestamp,
+                "calibration_bucket_accuracy": calibration_bucket_accuracy(&learning.calibration, candidate.score),
+                "calibration_status": learning.calibration.staleness_status,
+                "provenance": provenance,
             }),
             supporting_events: candidate.supporting_events,
             contradicting_events: candidate.contradicting_events,
             affected_services: candidate.affected_services,
             suggested_checks: candidate.suggested_checks,
-            confidence_label: Some(confidence_label(candidate.score).into()),
-            is_valid: true,
-            invalidation_reasons: Vec::new(),
+            confidence_label: Some(confidence_label(config, candidate.score, &learning.calibration)),
+            is_valid: candidate.is_valid,
+            invalidation_reasons: candidate.invalidation_reasons,
             created_at: updated_at.to_string(),
             updated_at: updated_at.to_string(),
-        })
+        }})
         .collect()
+}
+
+fn refresh_single_incident_reasoning(
+    config: &TomlValue,
+    _incidents_db: &Path,
+    incident_id: &str,
+    events: &EventsStore,
+    incidents: &mut IncidentsStore,
+    learning: &LearningArtifacts,
+) -> Result<bool> {
+    let event_ids = incidents.incident_event_ids(incident_id)?;
+    if event_ids.is_empty() {
+        return Ok(false);
+    }
+    let incident_events = events.get_events(&event_ids)?;
+    if incident_events.is_empty() {
+        return Ok(false);
+    }
+    let updated_at = incident_events
+        .iter()
+        .filter_map(|event| event.timestamp.clone())
+        .max()
+        .unwrap_or_else(now_iso);
+    let inference_graph = build_inference_graph_with_learning(config, &incident_events, learning);
+    incidents.upsert_inference_graph_snapshot(&StoredInferenceGraphSnapshot {
+        incident_id: incident_id.to_string(),
+        graph_data: serde_json::to_value(&inference_graph).unwrap_or_else(|_| serde_json::json!({})),
+        created_at: updated_at.clone(),
+        event_count: incident_events.len() as i64,
+    })?;
+    let previous_hypotheses = incidents
+        .hypothesis_records(incident_id)
+        .unwrap_or_default();
+    let hypotheses = build_hypotheses(
+        config,
+        incident_id,
+        &incident_events,
+        &updated_at,
+        &inference_graph,
+        learning,
+    );
+    incidents.replace_hypotheses(incident_id, &hypotheses)?;
+    record_adaptive_learning_history(
+        incidents,
+        incident_id,
+        &updated_at,
+        &previous_hypotheses,
+        &hypotheses,
+    )?;
+    Ok(true)
 }
 
 fn recent_domain_events(
@@ -877,31 +2261,64 @@ fn has_any_term(text: &str, terms: &[&str]) -> bool {
 }
 
 fn candidate_score(
+    config: &TomlValue,
     severity: i64,
-    supporting_events: usize,
-    related_services: usize,
-    source_types: usize,
-    base: f64,
+    prior: f64,
+    scoring: &CandidateScoring,
+    contradiction_ratio: f64,
+    learned_weights: &LearnedScoringWeights,
 ) -> f64 {
-    let mut score = base;
-    score += (supporting_events.min(4) as f64) * 0.06;
-    score += ((related_services.saturating_sub(1)).min(2) as f64) * 0.05;
-    score += ((source_types.saturating_sub(1)).min(2) as f64) * 0.03;
-    if severity >= SEVERITY_ERROR {
-        score += 0.06;
-    } else if severity >= SEVERITY_WARN {
-        score += 0.03;
-    }
-    score.clamp(0.0, 0.95)
+    let severity_score = match severity {
+        value if value >= 4 => 1.0,
+        value if value >= SEVERITY_ERROR => 0.85,
+        value if value >= SEVERITY_WARN => 0.6,
+        _ => 0.35,
+    };
+    let weights = effective_scoring_weights(config, learned_weights);
+    let weighted = weights.temporal_alignment * scoring.temporal_alignment
+        + weights.correlation_strength * scoring.correlation_strength
+        + weights.frequency_weight * scoring.frequency_weight
+        + weights.dependency_proximity * scoring.dependency_proximity
+        + weights.evidence_coverage * scoring.evidence_coverage
+        + weights.anomaly_severity * scoring.anomaly_severity;
+    let normalized = weighted / weights.total.max(0.0001);
+    let contradiction_penalty = contradiction_penalty(config, contradiction_ratio);
+    ((prior * 0.25)
+        + (severity_score * 0.1)
+        + (normalized * 0.45)
+        + (scoring.graph_impact * 0.2)
+        - contradiction_penalty)
+    .clamp(0.0, 0.98)
 }
 
-fn confidence_label(score: f64) -> &'static str {
-    if score >= 0.8 {
-        "high"
-    } else if score >= 0.65 {
-        "medium"
+fn confidence_label(config: &TomlValue, score: f64, calibration: &CalibrationModel) -> String {
+    let bucket_accuracy = calibration_bucket_accuracy(calibration, score);
+    if calibration_enabled(config) && calibration_bucket_is_sufficient(calibration, score) {
+        let base = if bucket_accuracy >= 0.7 {
+            "high"
+        } else if bucket_accuracy >= 0.4 {
+            "medium"
+        } else {
+            "low"
+        };
+        if calibration.staleness_status == "stale" {
+            format!("{base} (calibration outdated)")
+        } else {
+            base.into()
+        }
     } else {
-        "low"
+        default_confidence_label(config, score)
+    }
+}
+
+fn default_confidence_label(config: &TomlValue, score: f64) -> String {
+    let (high_threshold, medium_threshold) = calibration_thresholds(config);
+    if score >= high_threshold {
+        "medium".into()
+    } else if score >= medium_threshold {
+        "low".into()
+    } else {
+        "low".into()
     }
 }
 
@@ -976,6 +2393,5214 @@ fn top_messages(events: &[EventRow]) -> Vec<String> {
         .filter_map(|event| event.message.clone().or_else(|| event.summary.clone()))
         .take(5)
         .collect()
+}
+
+#[derive(Debug, Clone)]
+struct DomainMetrics {
+    event_count: usize,
+    warn_count: usize,
+    error_count: usize,
+    anomaly_score: f64,
+    anomaly_status: String,
+    temporal_alignment: f64,
+}
+
+#[derive(Debug, Clone, Copy)]
+struct ScoringWeights {
+    temporal_alignment: f64,
+    correlation_strength: f64,
+    frequency_weight: f64,
+    dependency_proximity: f64,
+    evidence_coverage: f64,
+    anomaly_severity: f64,
+    total: f64,
+}
+
+impl Default for CalibrationModel {
+    fn default() -> Self {
+        Self {
+            schema_version: 1,
+            last_updated: None,
+            total_feedback_count: 0,
+            overall_accuracy: 0.0,
+            staleness_status: "insufficient_data".into(),
+            buckets: default_calibration_buckets(5),
+            processed_feedback_ids: Vec::new(),
+        }
+    }
+}
+
+impl Default for LearnedScoringWeights {
+    fn default() -> Self {
+        let defaults = scoring_weight_defaults();
+        Self {
+            schema_version: 1,
+            last_updated: None,
+            default_weights: defaults.clone(),
+            effective_weights: defaults,
+            processed_feedback_ids: Vec::new(),
+            audit: Vec::new(),
+        }
+    }
+}
+
+impl Default for AdaptiveLearningModel {
+    fn default() -> Self {
+        Self {
+            schema_version: 1,
+            last_updated: None,
+            processed_feedback_ids: Vec::new(),
+            learned_detectors: Vec::new(),
+            learned_templates: Vec::new(),
+            learned_compositions: Vec::new(),
+            learned_edge_profiles: Vec::new(),
+        }
+    }
+}
+
+fn adaptive_learning_from_stored(
+    stored: inferra_storage::StoredAdaptiveLearningModel,
+) -> AdaptiveLearningModel {
+    AdaptiveLearningModel {
+        schema_version: stored.schema_version.max(1) as u64,
+        last_updated: stored.last_updated,
+        processed_feedback_ids: stored.processed_feedback_ids,
+        learned_detectors: stored
+            .learned_detectors
+            .into_iter()
+            .map(|item| LearnedDetector {
+                detector_id: item.detector_id,
+                requirement_name: item.requirement_name,
+                cause_type: item.cause_type,
+                positive_terms: item.positive_terms,
+                tags: item.tags,
+                source_types: item.source_types,
+                min_severity: item.min_severity,
+                confirmations: item.confirmations.max(0) as u64,
+                false_positives: item.false_positives.max(0) as u64,
+                created_from_feedback_id: item.created_from_feedback_id,
+                updated_at: item.updated_at,
+                manually_disabled: item.manually_disabled,
+                status_reason: item.status_reason,
+                review_status: item.review_status,
+                review_reason: item.review_reason,
+                last_reviewed_at: item.last_reviewed_at,
+            })
+            .collect(),
+        learned_templates: stored
+            .learned_templates
+            .into_iter()
+            .map(|item| LearnedTemplate {
+                template_id: item.template_id,
+                template_name: item.template_name,
+                cause_type: item.cause_type,
+                cause_subtype: item.cause_subtype,
+                title_template: item.title_template,
+                confidence: item.confidence,
+                requires: item.requires,
+                requires_same_service: item.requires_same_service,
+                requires_temporal_order: item.requires_temporal_order,
+                confirmations: item.confirmations.max(0) as u64,
+                false_positives: item.false_positives.max(0) as u64,
+                created_from_feedback_id: item.created_from_feedback_id,
+                updated_at: item.updated_at,
+                manually_disabled: item.manually_disabled,
+                status_reason: item.status_reason,
+                review_status: item.review_status,
+                review_reason: item.review_reason,
+                last_reviewed_at: item.last_reviewed_at,
+            })
+            .collect(),
+        learned_compositions: stored
+            .learned_compositions
+            .into_iter()
+            .map(|item| LearnedComposition {
+                composition_id: item.composition_id,
+                composition_name: item.composition_name,
+                cause_type: item.cause_type,
+                cause_subtype: item.cause_subtype,
+                title_template: item.title_template,
+                confidence: item.confidence,
+                requires: item.requires,
+                requires_same_service: item.requires_same_service,
+                requires_temporal_order: item.requires_temporal_order,
+                preferred_edge_types: item.preferred_edge_types,
+                confirmations: item.confirmations.max(0) as u64,
+                false_positives: item.false_positives.max(0) as u64,
+                created_from_feedback_id: item.created_from_feedback_id,
+                updated_at: item.updated_at,
+                manually_disabled: item.manually_disabled,
+                status_reason: item.status_reason,
+                review_status: item.review_status,
+                review_reason: item.review_reason,
+                last_reviewed_at: item.last_reviewed_at,
+            })
+            .collect(),
+        learned_edge_profiles: stored
+            .learned_edge_profiles
+            .into_iter()
+            .map(|item| LearnedEdgeProfile {
+                profile_id: item.profile_id,
+                edge_type: item.edge_type,
+                source_service: item.source_service,
+                target_service: item.target_service,
+                cause_type: item.cause_type,
+                confirmations: item.confirmations.max(0) as u64,
+                false_positives: item.false_positives.max(0) as u64,
+                average_plausibility: item.average_plausibility,
+                average_latency_ms: item.average_latency_ms,
+                created_from_feedback_id: item.created_from_feedback_id,
+                updated_at: item.updated_at,
+                manually_disabled: item.manually_disabled,
+                status_reason: item.status_reason,
+                review_status: item.review_status,
+                review_reason: item.review_reason,
+                last_reviewed_at: item.last_reviewed_at,
+            })
+            .collect(),
+    }
+}
+
+fn stored_adaptive_learning_model(
+    adaptive: &AdaptiveLearningModel,
+) -> inferra_storage::StoredAdaptiveLearningModel {
+    inferra_storage::StoredAdaptiveLearningModel {
+        schema_version: adaptive.schema_version.max(1) as i64,
+        last_updated: adaptive.last_updated.clone(),
+        processed_feedback_ids: adaptive.processed_feedback_ids.clone(),
+        learned_detectors: adaptive
+            .learned_detectors
+            .iter()
+            .map(|item| inferra_storage::StoredLearnedDetector {
+                detector_id: item.detector_id.clone(),
+                requirement_name: item.requirement_name.clone(),
+                cause_type: item.cause_type.clone(),
+                positive_terms: item.positive_terms.clone(),
+                tags: item.tags.clone(),
+                source_types: item.source_types.clone(),
+                min_severity: item.min_severity,
+                confirmations: item.confirmations as i64,
+                false_positives: item.false_positives as i64,
+                created_from_feedback_id: item.created_from_feedback_id.clone(),
+                updated_at: item.updated_at.clone(),
+                manually_disabled: item.manually_disabled,
+                status_reason: item.status_reason.clone(),
+                review_status: item.review_status.clone(),
+                review_reason: item.review_reason.clone(),
+                last_reviewed_at: item.last_reviewed_at.clone(),
+            })
+            .collect(),
+        learned_templates: adaptive
+            .learned_templates
+            .iter()
+            .map(|item| inferra_storage::StoredLearnedTemplate {
+                template_id: item.template_id.clone(),
+                template_name: item.template_name.clone(),
+                cause_type: item.cause_type.clone(),
+                cause_subtype: item.cause_subtype.clone(),
+                title_template: item.title_template.clone(),
+                confidence: item.confidence,
+                requires: item.requires.clone(),
+                requires_same_service: item.requires_same_service,
+                requires_temporal_order: item.requires_temporal_order,
+                confirmations: item.confirmations as i64,
+                false_positives: item.false_positives as i64,
+                created_from_feedback_id: item.created_from_feedback_id.clone(),
+                updated_at: item.updated_at.clone(),
+                manually_disabled: item.manually_disabled,
+                status_reason: item.status_reason.clone(),
+                review_status: item.review_status.clone(),
+                review_reason: item.review_reason.clone(),
+                last_reviewed_at: item.last_reviewed_at.clone(),
+            })
+            .collect(),
+        learned_compositions: adaptive
+            .learned_compositions
+            .iter()
+            .map(|item| inferra_storage::StoredLearnedComposition {
+                composition_id: item.composition_id.clone(),
+                composition_name: item.composition_name.clone(),
+                cause_type: item.cause_type.clone(),
+                cause_subtype: item.cause_subtype.clone(),
+                title_template: item.title_template.clone(),
+                confidence: item.confidence,
+                requires: item.requires.clone(),
+                requires_same_service: item.requires_same_service,
+                requires_temporal_order: item.requires_temporal_order,
+                preferred_edge_types: item.preferred_edge_types.clone(),
+                confirmations: item.confirmations as i64,
+                false_positives: item.false_positives as i64,
+                created_from_feedback_id: item.created_from_feedback_id.clone(),
+                updated_at: item.updated_at.clone(),
+                manually_disabled: item.manually_disabled,
+                status_reason: item.status_reason.clone(),
+                review_status: item.review_status.clone(),
+                review_reason: item.review_reason.clone(),
+                last_reviewed_at: item.last_reviewed_at.clone(),
+            })
+            .collect(),
+        learned_edge_profiles: adaptive
+            .learned_edge_profiles
+            .iter()
+            .map(|item| inferra_storage::StoredLearnedEdgeProfile {
+                profile_id: item.profile_id.clone(),
+                edge_type: item.edge_type.clone(),
+                source_service: item.source_service.clone(),
+                target_service: item.target_service.clone(),
+                cause_type: item.cause_type.clone(),
+                confirmations: item.confirmations as i64,
+                false_positives: item.false_positives as i64,
+                average_plausibility: item.average_plausibility,
+                average_latency_ms: item.average_latency_ms,
+                created_from_feedback_id: item.created_from_feedback_id.clone(),
+                updated_at: item.updated_at.clone(),
+                manually_disabled: item.manually_disabled,
+                status_reason: item.status_reason.clone(),
+                review_status: item.review_status.clone(),
+                review_reason: item.review_reason.clone(),
+                last_reviewed_at: item.last_reviewed_at.clone(),
+            })
+            .collect(),
+    }
+}
+
+fn analyze_domain_events(config: &TomlValue, events: &[EventRow]) -> DomainMetrics {
+    let event_count = events.len().max(1);
+    let warn_count = events
+        .iter()
+        .filter(|event| event_severity(event).unwrap_or(SEVERITY_INFO) >= SEVERITY_WARN)
+        .count();
+    let error_count = events
+        .iter()
+        .filter(|event| event_severity(event).unwrap_or(SEVERITY_INFO) >= SEVERITY_ERROR)
+        .count();
+    let restart_count = events
+        .iter()
+        .filter(|event| {
+            has_any_term(
+                &event_signal_text(event),
+                &["restart", "crash", "panic", "oom", "stopped", "failed"],
+            )
+        })
+        .count();
+    let unique_messages = events
+        .iter()
+        .map(event_signal_text)
+        .filter(|text| !text.trim().is_empty())
+        .collect::<std::collections::BTreeSet<_>>()
+        .len();
+    let unique_ratio = (unique_messages as f64 / event_count as f64).clamp(0.0, 1.0);
+    let error_rate = error_count as f64 / event_count as f64;
+    let warn_rate = warn_count as f64 / event_count as f64;
+    let volume_score = (event_count as f64 / 12.0).clamp(0.0, 1.0);
+    let restart_score = (restart_count as f64 / event_count as f64 * 2.0).clamp(0.0, 1.0);
+    let weights = anomaly_weights(config);
+    let anomaly_score = (weights.error_rate * error_rate
+        + weights.event_volume * volume_score
+        + weights.new_fingerprint_rate * unique_ratio
+        + weights.restart_count * restart_score
+        + weights.warn_rate * warn_rate)
+        .clamp(0.0, 1.0);
+    let temporal_alignment = temporal_alignment_score(config, events);
+    let min_samples = config
+        .get("anomaly_detection")
+        .and_then(|value| value.get("min_samples_for_confidence"))
+        .and_then(TomlValue::as_integer)
+        .unwrap_or(4)
+        .max(1) as usize;
+    let anomaly_threshold = anomaly_trigger_threshold(config);
+    let anomaly_status = if event_count < min_samples {
+        "insufficient_data"
+    } else if anomaly_score >= anomaly_threshold {
+        "anomalous"
+    } else if anomaly_score >= (anomaly_threshold * 0.7).clamp(0.2, 0.8) {
+        "elevated"
+    } else {
+        "normal"
+    };
+    DomainMetrics {
+        event_count,
+        warn_count,
+        error_count,
+        anomaly_score,
+        anomaly_status: anomaly_status.into(),
+        temporal_alignment,
+    }
+}
+
+fn temporal_alignment_score(config: &TomlValue, events: &[EventRow]) -> f64 {
+    let mut timestamps = events
+        .iter()
+        .filter_map(|event| event.timestamp.as_deref())
+        .filter_map(parse_rfc3339)
+        .collect::<Vec<_>>();
+    timestamps.sort();
+    let window_seconds = config
+        .get("correlation")
+        .and_then(|value| value.get("analysis_window_seconds"))
+        .and_then(TomlValue::as_integer)
+        .unwrap_or(60)
+        .max(1) as f64;
+    let span_seconds = match (timestamps.first(), timestamps.last()) {
+        (Some(first), Some(last)) => (*last - *first).whole_seconds().abs() as f64,
+        _ => 0.0,
+    };
+    (1.0 - (span_seconds / window_seconds).clamp(0.0, 1.0)).clamp(0.1, 1.0)
+}
+
+fn trim_incident_events(
+    events: &[EventRow],
+    max_events_per_incident: usize,
+    enable_auto_split: bool,
+) -> Vec<EventRow> {
+    if events.len() <= max_events_per_incident {
+        return events.to_vec();
+    }
+    if !enable_auto_split {
+        return events[events.len().saturating_sub(max_events_per_incident)..].to_vec();
+    }
+    let mut grouped = std::collections::BTreeMap::<String, Vec<EventRow>>::new();
+    for event in events {
+        let key = event
+            .source_ref
+            .as_ref()
+            .and_then(|source| source.source_type.clone())
+            .unwrap_or_else(|| "runtime".into());
+        grouped.entry(key).or_default().push(event.clone());
+    }
+    let mut ranked = grouped.into_values().collect::<Vec<_>>();
+    ranked.sort_by(|left, right| {
+        max_severity(right)
+            .cmp(&max_severity(left))
+            .then_with(|| right.len().cmp(&left.len()))
+            .then_with(|| last_event_timestamp(right).cmp(&last_event_timestamp(left)))
+    });
+    let mut trimmed = Vec::new();
+    for mut group in ranked {
+        if trimmed.len() >= max_events_per_incident {
+            break;
+        }
+        let remaining = max_events_per_incident - trimmed.len();
+        if group.len() > remaining {
+            let start = group.len().saturating_sub(remaining);
+            trimmed.extend(group.drain(start..));
+        } else {
+            trimmed.append(&mut group);
+        }
+    }
+    trimmed.sort_by(|left, right| left.timestamp.cmp(&right.timestamp));
+    trimmed
+}
+
+fn last_event_timestamp(events: &[EventRow]) -> Option<String> {
+    events.iter().filter_map(|event| event.timestamp.clone()).max()
+}
+
+fn run_incident_lifecycle_maintenance(paths: &Paths, config: &TomlValue) -> Result<()> {
+    let Some(mut incidents) = IncidentsStore::open(&paths.incidents_db)? else {
+        return Ok(());
+    };
+    let _ = sync_learning_artifacts(config, &paths.events_db, &paths.incidents_db, &mut incidents)?;
+    run_incident_lifecycle_maintenance_with_store(
+        config,
+        &paths.events_db,
+        &paths.incidents_db,
+        &mut incidents,
+    )
+}
+
+fn run_incident_lifecycle_maintenance_with_store(
+    config: &TomlValue,
+    events_db: &Path,
+    incidents_db: &Path,
+    incidents: &mut IncidentsStore,
+) -> Result<()> {
+    let stale_timeout_seconds = config
+        .get("incident_lifecycle")
+        .and_then(|value| value.get("stale_timeout_seconds"))
+        .and_then(TomlValue::as_integer)
+        .unwrap_or(900)
+        .max(60);
+    let archive_after_days = config
+        .get("incident_lifecycle")
+        .and_then(|value| value.get("archive_after_days"))
+        .and_then(TomlValue::as_integer)
+        .unwrap_or(7)
+        .max(1);
+    let stale_cutoff = iso_time_before_seconds(stale_timeout_seconds);
+    for incident_id in incidents.stale_incident_ids_before(&stale_cutoff, 200)? {
+        incidents.transition_state(
+            &incident_id,
+            "stale",
+            &format!("No new events for {stale_timeout_seconds}s"),
+            &now_iso(),
+        )?;
+    }
+    let archive_cutoff = iso_time_before_seconds(archive_after_days * 24 * 60 * 60);
+    let archived_at = now_iso();
+    let archive_path = archive_db_path(incidents_db, &archived_at);
+    for incident_id in incidents.archive_candidate_ids_before(&archive_cutoff, 200)? {
+        let _ = incidents.archive_incident_to_path(&incident_id, &archive_path, &archived_at)?;
+    }
+    refresh_active_incident_reasoning(config, events_db, incidents_db, incidents)?;
+    Ok(())
+}
+
+fn sync_learning_artifacts(
+    config: &TomlValue,
+    events_db: &Path,
+    incidents_db: &Path,
+    incidents: &mut IncidentsStore,
+) -> Result<LearningArtifacts> {
+    let calibration_path = calibration_persistence_path(config, incidents_db);
+    let weights_path = scoring_weights_persistence_path(config, incidents_db);
+    let events = EventsStore::open(events_db)?;
+    let mut calibration =
+        load_json_file::<CalibrationModel>(&calibration_path)?.unwrap_or_else(|| {
+            let mut model = CalibrationModel::default();
+            model.buckets = default_calibration_buckets(calibration_bucket_count(config));
+            model
+        });
+    if calibration.buckets.is_empty() {
+        calibration.buckets = default_calibration_buckets(calibration_bucket_count(config));
+    }
+    let mut weights =
+        load_json_file::<LearnedScoringWeights>(&weights_path)?.unwrap_or_else(|| {
+            let defaults = scoring_weight_defaults();
+            LearnedScoringWeights {
+                default_weights: defaults.clone(),
+                effective_weights: defaults,
+                ..LearnedScoringWeights::default()
+            }
+        });
+    if weights.default_weights.is_empty() {
+        let defaults = scoring_weight_defaults();
+        weights.default_weights = defaults.clone();
+        if weights.effective_weights.is_empty() {
+            weights.effective_weights = defaults;
+        }
+    }
+    import_legacy_adaptive_learning_registry(config, incidents_db, incidents)?;
+    let mut adaptive = incidents
+        .adaptive_learning_model()?
+        .map(adaptive_learning_from_stored)
+        .unwrap_or_default();
+    for feedback in incidents.all_feedback()? {
+        let hypotheses = incidents
+            .hypothesis_records(&feedback.incident_id)
+            .unwrap_or_default();
+        if !calibration
+            .processed_feedback_ids
+            .iter()
+            .any(|item| item == &feedback.feedback_id)
+        {
+            apply_feedback_to_calibration(config, &mut calibration, &feedback, &hypotheses);
+        }
+        if !weights
+            .processed_feedback_ids
+            .iter()
+            .any(|item| item == &feedback.feedback_id)
+        {
+            apply_feedback_to_weights(config, &mut weights, &feedback, &hypotheses);
+        }
+        if !adaptive
+            .processed_feedback_ids
+            .iter()
+            .any(|item| item == &feedback.feedback_id)
+        {
+            apply_feedback_to_adaptive_learning(
+                &mut adaptive,
+                &feedback,
+                &hypotheses,
+                incidents,
+                events.as_ref(),
+            )?;
+        }
+    }
+    calibration.staleness_status = calibration_staleness_status(config, &calibration);
+    write_json_file(&calibration_path, &calibration)?;
+    write_json_file(&weights_path, &weights)?;
+    incidents.replace_adaptive_learning_model(&stored_adaptive_learning_model(&adaptive))?;
+    Ok(LearningArtifacts {
+        calibration,
+        weights,
+        adaptive,
+    })
+}
+
+fn refresh_active_incident_reasoning(
+    config: &TomlValue,
+    events_db: &Path,
+    incidents_db: &Path,
+    incidents: &mut IncidentsStore,
+) -> Result<()> {
+    let Some(events) = EventsStore::open(events_db)? else {
+        return Ok(());
+    };
+    let learning = sync_learning_artifacts(config, events_db, incidents_db, incidents)?;
+    let active_ids = incidents
+        .active_incidents(200)?
+        .into_iter()
+        .map(|incident| incident.incident_id)
+        .collect::<Vec<_>>();
+    for incident_id in active_ids {
+        let _ = refresh_single_incident_reasoning(
+            config,
+            incidents_db,
+            &incident_id,
+            &events,
+            incidents,
+            &learning,
+        )?;
+    }
+    Ok(())
+}
+
+fn calibration_persistence_path(config: &TomlValue, incidents_db: &Path) -> PathBuf {
+    let raw = config
+        .get("calibration")
+        .and_then(|value| value.get("persistence_file"))
+        .and_then(TomlValue::as_str)
+        .unwrap_or("./data/calibration.json");
+    resolve_runtime_sidecar_path(raw, incidents_db)
+}
+
+fn scoring_weights_persistence_path(config: &TomlValue, incidents_db: &Path) -> PathBuf {
+    let calibration_path = calibration_persistence_path(config, incidents_db);
+    calibration_path.with_file_name("scoring_weights.json")
+}
+
+fn adaptive_learning_persistence_path(config: &TomlValue, incidents_db: &Path) -> PathBuf {
+    let calibration_path = calibration_persistence_path(config, incidents_db);
+    calibration_path.with_file_name("adaptive_learning.json")
+}
+
+fn adaptive_learning_storage_ref(incidents_db: &Path) -> String {
+    format!("{}#adaptive_learning_registry", incidents_db.display())
+}
+
+fn adaptive_learning_audit_path(config: &TomlValue, incidents_db: &Path) -> PathBuf {
+    let adaptive_path = adaptive_learning_persistence_path(config, incidents_db);
+    adaptive_path.with_file_name("adaptive_learning_audit.jsonl")
+}
+
+fn adaptive_learning_history_path(config: &TomlValue, incidents_db: &Path) -> PathBuf {
+    let adaptive_path = adaptive_learning_persistence_path(config, incidents_db);
+    adaptive_path.with_file_name("adaptive_learning_history.jsonl")
+}
+
+fn adaptive_learning_audit_storage_ref(incidents_db: &Path) -> String {
+    format!("{}#adaptive_learning_audit", incidents_db.display())
+}
+
+fn adaptive_learning_history_storage_ref(incidents_db: &Path) -> String {
+    format!("{}#adaptive_learning_history", incidents_db.display())
+}
+
+fn adaptive_learning_summary_payload(
+    adaptive: &AdaptiveLearningModel,
+    adaptive_storage: &str,
+    audit_storage: &str,
+    recent_audit: &[AdaptiveLearningAuditEntry],
+) -> serde_json::Value {
+    serde_json::json!({
+        "schema_version": adaptive.schema_version,
+        "last_updated": adaptive.last_updated,
+        "path": adaptive_storage,
+        "audit_path": audit_storage,
+        "processed_feedback_count": adaptive.processed_feedback_ids.len(),
+        "counts": {
+            "detectors": adaptive.learned_detectors.len(),
+            "templates": adaptive.learned_templates.len(),
+            "compositions": adaptive.learned_compositions.len(),
+            "edge_profiles": adaptive.learned_edge_profiles.len(),
+            "active_detectors": adaptive.learned_detectors.iter().filter(|item| detector_is_active(item)).count(),
+            "active_templates": adaptive.learned_templates.iter().filter(|item| template_is_active(item)).count(),
+            "active_compositions": adaptive.learned_compositions.iter().filter(|item| composition_is_active(item)).count(),
+            "active_edge_profiles": adaptive.learned_edge_profiles.iter().filter(|item| edge_profile_is_active(item)).count(),
+            "manually_disabled": adaptive.learned_detectors.iter().filter(|item| item.manually_disabled).count()
+                + adaptive.learned_templates.iter().filter(|item| item.manually_disabled).count()
+                + adaptive.learned_compositions.iter().filter(|item| item.manually_disabled).count()
+                + adaptive.learned_edge_profiles.iter().filter(|item| item.manually_disabled).count(),
+        },
+        "detectors": adaptive.learned_detectors.iter().map(adaptive_detector_json).collect::<Vec<_>>(),
+        "templates": adaptive.learned_templates.iter().map(adaptive_template_json).collect::<Vec<_>>(),
+        "compositions": adaptive.learned_compositions.iter().map(adaptive_composition_json).collect::<Vec<_>>(),
+        "edge_profiles": adaptive.learned_edge_profiles.iter().map(adaptive_edge_profile_json).collect::<Vec<_>>(),
+        "recent_audit": recent_audit.iter().map(adaptive_learning_audit_entry_json).collect::<Vec<_>>(),
+    })
+}
+
+fn append_adaptive_learning_audit(
+    incidents: &IncidentsStore,
+    entry: &AdaptiveLearningAuditEntry,
+) -> Result<()> {
+    incidents.add_adaptive_learning_audit_entry(&StoredAdaptiveLearningAuditEntry {
+        audit_id: entry.audit_id.clone(),
+        artifact_kind: entry.artifact_kind.clone(),
+        artifact_id: entry.artifact_id.clone(),
+        action: entry.action.clone(),
+        reason: entry.reason.clone(),
+        previous_status: entry.previous_status.clone(),
+        new_status: entry.new_status.clone(),
+        review_status_before: entry.review_status_before.clone(),
+        review_status_after: entry.review_status_after.clone(),
+        runtime_effect: entry.runtime_effect.clone(),
+        created_at: entry.created_at.clone(),
+    })
+}
+
+fn read_adaptive_learning_audit(
+    incidents: &IncidentsStore,
+    limit: usize,
+) -> Result<Vec<AdaptiveLearningAuditEntry>> {
+    let mut entries = incidents
+        .list_adaptive_learning_audit(&AdaptiveLearningAuditQuery {
+            limit,
+            ..AdaptiveLearningAuditQuery::default()
+        })?
+        .into_iter()
+        .map(|entry| AdaptiveLearningAuditEntry {
+            audit_id: entry.audit_id,
+            artifact_kind: entry.artifact_kind,
+            artifact_id: entry.artifact_id,
+            action: entry.action,
+            reason: entry.reason,
+            previous_status: entry.previous_status,
+            new_status: entry.new_status,
+            review_status_before: entry.review_status_before,
+            review_status_after: entry.review_status_after,
+            runtime_effect: entry.runtime_effect,
+            created_at: entry.created_at,
+        })
+        .collect::<Vec<_>>();
+    entries.reverse();
+    Ok(entries)
+}
+
+fn adaptive_learning_audit_entry_json(entry: &AdaptiveLearningAuditEntry) -> serde_json::Value {
+    serde_json::json!({
+        "audit_id": entry.audit_id,
+        "artifact_kind": entry.artifact_kind,
+        "artifact_id": entry.artifact_id,
+        "action": entry.action,
+        "reason": entry.reason,
+        "previous_status": entry.previous_status,
+        "new_status": entry.new_status,
+        "review_status_before": entry.review_status_before,
+        "review_status_after": entry.review_status_after,
+        "runtime_effect": entry.runtime_effect,
+        "created_at": entry.created_at,
+    })
+}
+
+fn append_adaptive_learning_history(
+    incidents: &mut IncidentsStore,
+    entries: &[AdaptiveLearningHistoryEntry],
+) -> Result<()> {
+    incidents.add_adaptive_learning_history_entries(
+        &entries
+            .iter()
+            .map(|entry| StoredAdaptiveLearningHistoryEntry {
+                entry_id: entry.entry_id.clone(),
+                artifact_kind: entry.artifact_kind.clone(),
+                artifact_id: entry.artifact_id.clone(),
+                artifact_label: entry.artifact_label.clone(),
+                incident_id: entry.incident_id.clone(),
+                cause_type: entry.cause_type.clone(),
+                hypothesis_id: entry.hypothesis_id.clone(),
+                observed_at: entry.observed_at.clone(),
+                score: entry.score,
+                rank: entry.rank,
+                estimated_impact: entry.estimated_impact,
+                impact_metric: entry.impact_metric.clone(),
+                score_delta: entry.score_delta,
+                rank_delta: entry.rank_delta,
+                edge_delta: entry.edge_delta,
+            })
+            .collect::<Vec<_>>(),
+    )
+}
+
+fn read_adaptive_learning_history(
+    incidents: &IncidentsStore,
+    limit: usize,
+) -> Result<Vec<AdaptiveLearningHistoryEntry>> {
+    let mut entries = incidents
+        .list_adaptive_learning_history(&AdaptiveLearningHistoryQuery {
+            limit,
+            ..AdaptiveLearningHistoryQuery::default()
+        })?
+        .into_iter()
+        .map(|entry| AdaptiveLearningHistoryEntry {
+            entry_id: entry.entry_id,
+            artifact_kind: entry.artifact_kind,
+            artifact_id: entry.artifact_id,
+            artifact_label: entry.artifact_label,
+            incident_id: entry.incident_id,
+            cause_type: entry.cause_type,
+            hypothesis_id: entry.hypothesis_id,
+            observed_at: entry.observed_at,
+            score: entry.score,
+            rank: entry.rank,
+            estimated_impact: entry.estimated_impact,
+            impact_metric: entry.impact_metric,
+            score_delta: entry.score_delta,
+            rank_delta: entry.rank_delta,
+            edge_delta: entry.edge_delta,
+        })
+        .collect::<Vec<_>>();
+    entries.reverse();
+    Ok(entries)
+}
+
+fn adaptive_learning_history_entry_json(entry: &AdaptiveLearningHistoryEntry) -> serde_json::Value {
+    serde_json::json!({
+        "entry_id": entry.entry_id,
+        "artifact_kind": entry.artifact_kind,
+        "artifact_id": entry.artifact_id,
+        "artifact_label": entry.artifact_label,
+        "incident_id": entry.incident_id,
+        "cause_type": entry.cause_type,
+        "hypothesis_id": entry.hypothesis_id,
+        "observed_at": entry.observed_at,
+        "score": entry.score,
+        "rank": entry.rank,
+        "estimated_impact": entry.estimated_impact,
+        "impact_metric": entry.impact_metric,
+        "score_delta": entry.score_delta,
+        "rank_delta": entry.rank_delta,
+        "edge_delta": entry.edge_delta,
+    })
+}
+
+fn ensure_adaptive_learning_storage_imported(
+    config: &TomlValue,
+    incidents_db: &Path,
+    incidents: &mut IncidentsStore,
+) -> Result<()> {
+    import_legacy_adaptive_learning_registry(config, incidents_db, incidents)?;
+    import_legacy_adaptive_learning_audit(config, incidents_db, incidents)?;
+    import_legacy_adaptive_learning_history(config, incidents_db, incidents)?;
+    Ok(())
+}
+
+fn import_legacy_adaptive_learning_registry(
+    config: &TomlValue,
+    incidents_db: &Path,
+    incidents: &mut IncidentsStore,
+) -> Result<()> {
+    if incidents.adaptive_learning_model()?.is_some() {
+        return Ok(());
+    }
+    let legacy_path = adaptive_learning_persistence_path(config, incidents_db);
+    if !legacy_path.exists() {
+        return Ok(());
+    }
+    let Some(model) = load_json_file::<AdaptiveLearningModel>(&legacy_path)? else {
+        return Ok(());
+    };
+    incidents.replace_adaptive_learning_model(&stored_adaptive_learning_model(&model))?;
+    Ok(())
+}
+
+fn import_legacy_adaptive_learning_audit(
+    config: &TomlValue,
+    incidents_db: &Path,
+    incidents: &mut IncidentsStore,
+) -> Result<()> {
+    let legacy_path = adaptive_learning_audit_path(config, incidents_db);
+    if !legacy_path.exists() {
+        return Ok(());
+    }
+    if !incidents
+        .list_adaptive_learning_audit(&AdaptiveLearningAuditQuery {
+            limit: 1,
+            ..AdaptiveLearningAuditQuery::default()
+        })?
+        .is_empty()
+    {
+        return Ok(());
+    }
+    let raw = std::fs::read_to_string(&legacy_path)
+        .map_err(|error| anyhow::anyhow!("read {}: {error}", legacy_path.display()))?;
+    for entry in raw
+        .lines()
+        .filter(|line| !line.trim().is_empty())
+        .filter_map(|line| serde_json::from_str::<AdaptiveLearningAuditEntry>(line).ok())
+    {
+        append_adaptive_learning_audit(incidents, &entry)?;
+    }
+    Ok(())
+}
+
+fn import_legacy_adaptive_learning_history(
+    config: &TomlValue,
+    incidents_db: &Path,
+    incidents: &mut IncidentsStore,
+) -> Result<()> {
+    let legacy_path = adaptive_learning_history_path(config, incidents_db);
+    if !legacy_path.exists() {
+        return Ok(());
+    }
+    if !incidents
+        .list_adaptive_learning_history(&AdaptiveLearningHistoryQuery {
+            limit: 1,
+            ..AdaptiveLearningHistoryQuery::default()
+        })?
+        .is_empty()
+    {
+        return Ok(());
+    }
+    let raw = std::fs::read_to_string(&legacy_path)
+        .map_err(|error| anyhow::anyhow!("read {}: {error}", legacy_path.display()))?;
+    let entries = raw
+        .lines()
+        .filter(|line| !line.trim().is_empty())
+        .filter_map(|line| serde_json::from_str::<AdaptiveLearningHistoryEntry>(line).ok())
+        .collect::<Vec<_>>();
+    append_adaptive_learning_history(incidents, &entries)
+}
+
+fn record_adaptive_learning_history(
+    incidents: &mut IncidentsStore,
+    incident_id: &str,
+    observed_at: &str,
+    previous_hypotheses: &[serde_json::Value],
+    new_hypotheses: &[StoredHypothesis],
+) -> Result<()> {
+    let entries = build_adaptive_learning_history_entries(
+        incident_id,
+        observed_at,
+        previous_hypotheses,
+        new_hypotheses,
+    );
+    append_adaptive_learning_history(incidents, &entries)
+}
+
+fn build_adaptive_learning_history_entries(
+    incident_id: &str,
+    observed_at: &str,
+    previous_hypotheses: &[serde_json::Value],
+    new_hypotheses: &[StoredHypothesis],
+) -> Vec<AdaptiveLearningHistoryEntry> {
+    let mut entries = Vec::new();
+    for hypothesis in new_hypotheses {
+        let Some(provenance) = hypothesis.score_breakdown.get("provenance") else {
+            continue;
+        };
+        let Some(artifacts) = provenance.get("artifacts").and_then(serde_json::Value::as_array) else {
+            continue;
+        };
+        for artifact in artifacts {
+            let artifact_kind = artifact
+                .get("kind")
+                .and_then(serde_json::Value::as_str)
+                .unwrap_or("unknown");
+            let artifact_id = artifact
+                .get("artifact_id")
+                .and_then(serde_json::Value::as_str)
+                .unwrap_or("unknown");
+            let artifact_label = artifact
+                .get("label")
+                .and_then(serde_json::Value::as_str)
+                .unwrap_or(artifact_id);
+            let impact_metric = artifact
+                .get("impact_metric")
+                .and_then(serde_json::Value::as_str)
+                .map(str::to_string);
+            let estimated_impact = artifact
+                .get("impact_value")
+                .and_then(serde_json::Value::as_f64)
+                .unwrap_or_default();
+            let previous = previous_artifact_observation(
+                previous_hypotheses,
+                artifact_kind,
+                artifact_id,
+                &hypothesis.cause_type,
+            );
+            entries.push(AdaptiveLearningHistoryEntry {
+                entry_id: format!(
+                    "hist-{}-{}-{}",
+                    artifact_id,
+                    hypothesis.hypothesis_id,
+                    time::OffsetDateTime::now_utc().unix_timestamp_nanos()
+                ),
+                artifact_kind: artifact_kind.to_string(),
+                artifact_id: artifact_id.to_string(),
+                artifact_label: artifact_label.to_string(),
+                incident_id: incident_id.to_string(),
+                cause_type: hypothesis.cause_type.clone(),
+                hypothesis_id: hypothesis.hypothesis_id.clone(),
+                observed_at: observed_at.to_string(),
+                score: hypothesis.total_score,
+                rank: hypothesis.rank,
+                estimated_impact,
+                impact_metric: impact_metric.clone(),
+                score_delta: previous
+                    .and_then(|(score, _)| hypothesis.total_score.map(|current| current - score)),
+                rank_delta: previous
+                    .and_then(|(_, rank)| hypothesis.rank.map(|current| rank - current)),
+                edge_delta: (impact_metric.as_deref() == Some("plausibility_delta"))
+                    .then_some(estimated_impact),
+            });
+        }
+    }
+    entries
+}
+
+fn previous_artifact_observation(
+    previous_hypotheses: &[serde_json::Value],
+    artifact_kind: &str,
+    artifact_id: &str,
+    cause_type: &str,
+) -> Option<(f64, i64)> {
+    previous_hypotheses
+        .iter()
+        .filter(|hypothesis| {
+            hypothesis
+                .get("cause_type")
+                .and_then(serde_json::Value::as_str)
+                == Some(cause_type)
+        })
+        .find_map(|hypothesis| {
+            let matched = hypothesis
+                .get("score_breakdown")
+                .and_then(|value| value.get("provenance"))
+                .and_then(|value| value.get("artifacts"))
+                .and_then(serde_json::Value::as_array)
+                .map(|items| {
+                    items.iter().any(|artifact| {
+                        artifact.get("kind").and_then(serde_json::Value::as_str) == Some(artifact_kind)
+                            && artifact.get("artifact_id").and_then(serde_json::Value::as_str)
+                                == Some(artifact_id)
+                    })
+                })
+                .unwrap_or(false);
+            if !matched {
+                return None;
+            }
+            Some((
+                hypothesis
+                    .get("total_score")
+                    .and_then(serde_json::Value::as_f64)
+                    .unwrap_or_default(),
+                hypothesis
+                    .get("rank")
+                    .and_then(serde_json::Value::as_i64)
+                    .unwrap_or_default(),
+            ))
+        })
+}
+
+fn summarize_incident_learning_influence(
+    incident: &IncidentRow,
+    hypotheses: &[serde_json::Value],
+) -> serde_json::Value {
+    let mut influenced_hypotheses = 0u64;
+    let mut total_estimated_impact = 0.0;
+    let mut artifacts = std::collections::BTreeMap::<String, serde_json::Value>::new();
+    for hypothesis in hypotheses {
+        let Some(provenance) = hypothesis
+            .get("score_breakdown")
+            .and_then(|value| value.get("provenance"))
+        else {
+            continue;
+        };
+        if provenance
+            .get("has_learned_influence")
+            .and_then(serde_json::Value::as_bool)
+            .unwrap_or(false)
+        {
+            influenced_hypotheses += 1;
+        }
+        total_estimated_impact += provenance
+            .get("estimated_total_impact")
+            .and_then(serde_json::Value::as_f64)
+            .unwrap_or_default();
+        for artifact in provenance
+            .get("artifacts")
+            .and_then(serde_json::Value::as_array)
+            .into_iter()
+            .flatten()
+        {
+            let key = format!(
+                "{}:{}",
+                artifact
+                    .get("kind")
+                    .and_then(serde_json::Value::as_str)
+                    .unwrap_or("unknown"),
+                artifact
+                    .get("artifact_id")
+                    .and_then(serde_json::Value::as_str)
+                    .unwrap_or("unknown")
+            );
+            let impact = artifact
+                .get("impact_value")
+                .and_then(serde_json::Value::as_f64)
+                .unwrap_or_default();
+            let entry = artifacts.entry(key).or_insert_with(|| {
+                serde_json::json!({
+                    "kind": artifact.get("kind").cloned().unwrap_or(serde_json::Value::Null),
+                    "artifact_id": artifact.get("artifact_id").cloned().unwrap_or(serde_json::Value::Null),
+                    "label": artifact.get("label").cloned().unwrap_or(serde_json::Value::Null),
+                    "impact_metric": artifact.get("impact_metric").cloned().unwrap_or(serde_json::Value::Null),
+                    "cumulative_impact": 0.0,
+                })
+            });
+            let current = entry
+                .get("cumulative_impact")
+                .and_then(serde_json::Value::as_f64)
+                .unwrap_or_default();
+            entry["cumulative_impact"] = serde_json::json!(current + impact);
+        }
+    }
+    let mut artifact_list = artifacts.into_values().collect::<Vec<_>>();
+    artifact_list.sort_by(|left, right| {
+        right["cumulative_impact"]
+            .as_f64()
+            .unwrap_or_default()
+            .partial_cmp(&left["cumulative_impact"].as_f64().unwrap_or_default())
+            .unwrap_or(std::cmp::Ordering::Equal)
+    });
+    serde_json::json!({
+        "incident_id": incident.incident_id,
+        "influenced_hypotheses": influenced_hypotheses,
+        "estimated_total_impact": total_estimated_impact,
+        "artifacts": artifact_list,
+    })
+}
+
+fn artifacts_requiring_attention(adaptive: &AdaptiveLearningModel) -> Vec<serde_json::Value> {
+    let mut items = Vec::new();
+    for detector in adaptive.learned_detectors.iter().filter(|item| {
+        item.manually_disabled || item.false_positives > 0 || !detector_is_active(item)
+    }) {
+        let mut value = adaptive_detector_json(detector);
+        value["kind"] = serde_json::json!("detector");
+        items.push(value);
+    }
+    for template in adaptive.learned_templates.iter().filter(|item| {
+        item.manually_disabled || item.false_positives > 0 || !template_is_active(item)
+    }) {
+        let mut value = adaptive_template_json(template);
+        value["kind"] = serde_json::json!("template");
+        items.push(value);
+    }
+    for composition in adaptive.learned_compositions.iter().filter(|item| {
+        item.manually_disabled || item.false_positives > 0 || !composition_is_active(item)
+    }) {
+        let mut value = adaptive_composition_json(composition);
+        value["kind"] = serde_json::json!("composition");
+        items.push(value);
+    }
+    for profile in adaptive.learned_edge_profiles.iter().filter(|item| {
+        item.manually_disabled || item.false_positives > 0 || !edge_profile_is_active(item)
+    }) {
+        let mut value = adaptive_edge_profile_json(profile);
+        value["kind"] = serde_json::json!("edge_profile");
+        items.push(value);
+    }
+    items
+}
+
+fn adaptive_detector_json(detector: &LearnedDetector) -> serde_json::Value {
+    serde_json::json!({
+        "detector_id": detector.detector_id,
+        "requirement_name": detector.requirement_name,
+        "cause_type": detector.cause_type,
+        "positive_terms": detector.positive_terms,
+        "tags": detector.tags,
+        "source_types": detector.source_types,
+        "min_severity": detector.min_severity,
+        "confirmations": detector.confirmations,
+        "false_positives": detector.false_positives,
+        "manually_disabled": detector.manually_disabled,
+        "status_reason": detector.status_reason,
+        "status": adaptive_artifact_status(detector.manually_disabled, detector.confirmations, detector.false_positives),
+        "review_status": detector.review_status,
+        "review_reason": detector.review_reason,
+        "last_reviewed_at": detector.last_reviewed_at,
+        "created_from_feedback_id": detector.created_from_feedback_id,
+        "updated_at": detector.updated_at,
+    })
+}
+
+fn adaptive_template_json(template: &LearnedTemplate) -> serde_json::Value {
+    serde_json::json!({
+        "template_id": template.template_id,
+        "template_name": template.template_name,
+        "cause_type": template.cause_type,
+        "cause_subtype": template.cause_subtype,
+        "title_template": template.title_template,
+        "confidence": template.confidence,
+        "requires": template.requires,
+        "requires_same_service": template.requires_same_service,
+        "requires_temporal_order": template.requires_temporal_order,
+        "confirmations": template.confirmations,
+        "false_positives": template.false_positives,
+        "manually_disabled": template.manually_disabled,
+        "status_reason": template.status_reason,
+        "status": adaptive_artifact_status(template.manually_disabled, template.confirmations, template.false_positives),
+        "review_status": template.review_status,
+        "review_reason": template.review_reason,
+        "last_reviewed_at": template.last_reviewed_at,
+        "created_from_feedback_id": template.created_from_feedback_id,
+        "updated_at": template.updated_at,
+    })
+}
+
+fn adaptive_composition_json(composition: &LearnedComposition) -> serde_json::Value {
+    serde_json::json!({
+        "composition_id": composition.composition_id,
+        "composition_name": composition.composition_name,
+        "cause_type": composition.cause_type,
+        "cause_subtype": composition.cause_subtype,
+        "title_template": composition.title_template,
+        "confidence": composition.confidence,
+        "requires": composition.requires,
+        "requires_same_service": composition.requires_same_service,
+        "requires_temporal_order": composition.requires_temporal_order,
+        "preferred_edge_types": composition.preferred_edge_types,
+        "confirmations": composition.confirmations,
+        "false_positives": composition.false_positives,
+        "manually_disabled": composition.manually_disabled,
+        "status_reason": composition.status_reason,
+        "status": adaptive_artifact_status(composition.manually_disabled, composition.confirmations, composition.false_positives),
+        "review_status": composition.review_status,
+        "review_reason": composition.review_reason,
+        "last_reviewed_at": composition.last_reviewed_at,
+        "created_from_feedback_id": composition.created_from_feedback_id,
+        "updated_at": composition.updated_at,
+    })
+}
+
+fn adaptive_edge_profile_json(profile: &LearnedEdgeProfile) -> serde_json::Value {
+    serde_json::json!({
+        "profile_id": profile.profile_id,
+        "edge_type": profile.edge_type,
+        "source_service": profile.source_service,
+        "target_service": profile.target_service,
+        "cause_type": profile.cause_type,
+        "confirmations": profile.confirmations,
+        "false_positives": profile.false_positives,
+        "average_plausibility": profile.average_plausibility,
+        "average_latency_ms": profile.average_latency_ms,
+        "manually_disabled": profile.manually_disabled,
+        "status_reason": profile.status_reason,
+        "status": adaptive_artifact_status(profile.manually_disabled, profile.confirmations, profile.false_positives),
+        "review_status": profile.review_status,
+        "review_reason": profile.review_reason,
+        "last_reviewed_at": profile.last_reviewed_at,
+        "created_from_feedback_id": profile.created_from_feedback_id,
+        "updated_at": profile.updated_at,
+    })
+}
+
+fn adaptive_artifact_status(
+    manually_disabled: bool,
+    confirmations: u64,
+    false_positives: u64,
+) -> &'static str {
+    if manually_disabled {
+        "manually_disabled"
+    } else if confirmations > false_positives {
+        "active"
+    } else {
+        "suppressed"
+    }
+}
+
+fn normalize_adaptive_artifact_kind(value: &str) -> Result<&'static str> {
+    match value.trim().to_ascii_lowercase().as_str() {
+        "detector" | "detectors" => Ok("detector"),
+        "template" | "templates" => Ok("template"),
+        "composition" | "compositions" => Ok("composition"),
+        "edge_profile" | "edge-profile" | "edge_profiles" | "edge-profiles" => Ok("edge_profile"),
+        other => Err(anyhow::anyhow!(
+            "unsupported artifact kind '{other}', expected detector, template, composition, or edge_profile"
+        )),
+    }
+}
+
+fn default_review_status() -> String {
+    "unreviewed".into()
+}
+
+trait ReviewableAdaptiveArtifact {
+    fn manually_disabled(&self) -> bool;
+    fn manually_disabled_mut(&mut self) -> &mut bool;
+    fn status_reason_mut(&mut self) -> &mut Option<String>;
+    fn confirmations(&self) -> u64;
+    fn false_positives(&self) -> u64;
+    fn review_status(&self) -> &str;
+    fn review_status_mut(&mut self) -> &mut String;
+    fn review_reason_mut(&mut self) -> &mut Option<String>;
+    fn last_reviewed_at_mut(&mut self) -> &mut Option<String>;
+    fn updated_at_mut(&mut self) -> &mut String;
+}
+
+impl ReviewableAdaptiveArtifact for LearnedDetector {
+    fn manually_disabled(&self) -> bool { self.manually_disabled }
+    fn manually_disabled_mut(&mut self) -> &mut bool { &mut self.manually_disabled }
+    fn status_reason_mut(&mut self) -> &mut Option<String> { &mut self.status_reason }
+    fn confirmations(&self) -> u64 { self.confirmations }
+    fn false_positives(&self) -> u64 { self.false_positives }
+    fn review_status(&self) -> &str { &self.review_status }
+    fn review_status_mut(&mut self) -> &mut String { &mut self.review_status }
+    fn review_reason_mut(&mut self) -> &mut Option<String> { &mut self.review_reason }
+    fn last_reviewed_at_mut(&mut self) -> &mut Option<String> { &mut self.last_reviewed_at }
+    fn updated_at_mut(&mut self) -> &mut String { &mut self.updated_at }
+}
+
+impl ReviewableAdaptiveArtifact for LearnedTemplate {
+    fn manually_disabled(&self) -> bool { self.manually_disabled }
+    fn manually_disabled_mut(&mut self) -> &mut bool { &mut self.manually_disabled }
+    fn status_reason_mut(&mut self) -> &mut Option<String> { &mut self.status_reason }
+    fn confirmations(&self) -> u64 { self.confirmations }
+    fn false_positives(&self) -> u64 { self.false_positives }
+    fn review_status(&self) -> &str { &self.review_status }
+    fn review_status_mut(&mut self) -> &mut String { &mut self.review_status }
+    fn review_reason_mut(&mut self) -> &mut Option<String> { &mut self.review_reason }
+    fn last_reviewed_at_mut(&mut self) -> &mut Option<String> { &mut self.last_reviewed_at }
+    fn updated_at_mut(&mut self) -> &mut String { &mut self.updated_at }
+}
+
+impl ReviewableAdaptiveArtifact for LearnedComposition {
+    fn manually_disabled(&self) -> bool { self.manually_disabled }
+    fn manually_disabled_mut(&mut self) -> &mut bool { &mut self.manually_disabled }
+    fn status_reason_mut(&mut self) -> &mut Option<String> { &mut self.status_reason }
+    fn confirmations(&self) -> u64 { self.confirmations }
+    fn false_positives(&self) -> u64 { self.false_positives }
+    fn review_status(&self) -> &str { &self.review_status }
+    fn review_status_mut(&mut self) -> &mut String { &mut self.review_status }
+    fn review_reason_mut(&mut self) -> &mut Option<String> { &mut self.review_reason }
+    fn last_reviewed_at_mut(&mut self) -> &mut Option<String> { &mut self.last_reviewed_at }
+    fn updated_at_mut(&mut self) -> &mut String { &mut self.updated_at }
+}
+
+impl ReviewableAdaptiveArtifact for LearnedEdgeProfile {
+    fn manually_disabled(&self) -> bool { self.manually_disabled }
+    fn manually_disabled_mut(&mut self) -> &mut bool { &mut self.manually_disabled }
+    fn status_reason_mut(&mut self) -> &mut Option<String> { &mut self.status_reason }
+    fn confirmations(&self) -> u64 { self.confirmations }
+    fn false_positives(&self) -> u64 { self.false_positives }
+    fn review_status(&self) -> &str { &self.review_status }
+    fn review_status_mut(&mut self) -> &mut String { &mut self.review_status }
+    fn review_reason_mut(&mut self) -> &mut Option<String> { &mut self.review_reason }
+    fn last_reviewed_at_mut(&mut self) -> &mut Option<String> { &mut self.last_reviewed_at }
+    fn updated_at_mut(&mut self) -> &mut String { &mut self.updated_at }
+}
+
+fn apply_review_decision_to_artifact<T: ReviewableAdaptiveArtifact>(
+    item: &mut T,
+    decision: &str,
+    reason: &Option<String>,
+    reviewed_at: &str,
+    previous_status: &mut Option<String>,
+    new_status: &mut Option<String>,
+    review_status_before: &mut Option<String>,
+    review_status_after: &mut Option<String>,
+    runtime_effect: &mut Option<String>,
+    refresh_reasoning: &mut bool,
+) -> Result<()> {
+    *previous_status = Some(adaptive_artifact_status(
+        item.manually_disabled(),
+        item.confirmations(),
+        item.false_positives(),
+    ).to_string());
+    *review_status_before = Some(item.review_status().to_string());
+    match decision {
+        "approve" => {
+            *item.review_status_mut() = "approved".into();
+            *item.review_reason_mut() = reason.clone();
+            *item.last_reviewed_at_mut() = Some(reviewed_at.to_string());
+            *item.updated_at_mut() = reviewed_at.to_string();
+            *new_status = previous_status.clone();
+            *runtime_effect = Some("review approved; runtime state unchanged".into());
+        }
+        "watch" => {
+            *item.review_status_mut() = "watch".into();
+            *item.review_reason_mut() = reason.clone();
+            *item.last_reviewed_at_mut() = Some(reviewed_at.to_string());
+            *item.updated_at_mut() = reviewed_at.to_string();
+            *new_status = previous_status.clone();
+            *runtime_effect = Some("artifact placed under watch; runtime state unchanged".into());
+        }
+        "reject" => {
+            *item.review_status_mut() = "rejected".into();
+            *item.review_reason_mut() = reason.clone();
+            *item.last_reviewed_at_mut() = Some(reviewed_at.to_string());
+            *item.updated_at_mut() = reviewed_at.to_string();
+            if !item.manually_disabled() {
+                *item.manually_disabled_mut() = true;
+                if item.status_reason_mut().is_none() {
+                    *item.status_reason_mut() = reason.clone();
+                }
+                *refresh_reasoning = true;
+                *runtime_effect = Some("artifact rejected, disabled, and reasoning refreshed".into());
+            } else {
+                *runtime_effect = Some("artifact rejected; already disabled".into());
+            }
+            *new_status = Some(adaptive_artifact_status(
+                item.manually_disabled(),
+                item.confirmations(),
+                item.false_positives(),
+            ).to_string());
+        }
+        "reset" => {
+            *item.review_status_mut() = default_review_status();
+            *item.review_reason_mut() = None;
+            *item.last_reviewed_at_mut() = None;
+            *item.updated_at_mut() = reviewed_at.to_string();
+            *new_status = previous_status.clone();
+            *runtime_effect = Some("review state reset; runtime state unchanged".into());
+        }
+        other => {
+            return Err(anyhow::anyhow!(
+                "unsupported review decision '{other}', expected approve, watch, reject, or reset"
+            ))
+        }
+    }
+    *review_status_after = Some(item.review_status().to_string());
+    Ok(())
+}
+
+fn apply_runtime_action_to_selected_artifact(
+    adaptive: &mut AdaptiveLearningModel,
+    artifact_kind: &str,
+    artifact_id: &str,
+    disable: bool,
+    status_reason: &Option<String>,
+    updated_at: &str,
+) -> Result<Option<AdaptiveArtifactMutationRecord>> {
+    let normalized_kind = normalize_adaptive_artifact_kind(artifact_kind)?;
+    let update = match normalized_kind {
+        "detector" => adaptive
+            .learned_detectors
+            .iter_mut()
+            .find(|item| item.detector_id == artifact_id || item.requirement_name == artifact_id)
+            .map(|item| {
+                let previous_status = adaptive_artifact_status(
+                    item.manually_disabled,
+                    item.confirmations,
+                    item.false_positives,
+                )
+                .to_string();
+                item.manually_disabled = disable;
+                item.status_reason = status_reason.clone();
+                item.updated_at = updated_at.to_string();
+                AdaptiveArtifactMutationRecord {
+                    artifact_kind: "detector".into(),
+                    artifact_id: artifact_id.to_string(),
+                    label: item.requirement_name.clone(),
+                    previous_status,
+                    new_status: adaptive_artifact_status(
+                        item.manually_disabled,
+                        item.confirmations,
+                        item.false_positives,
+                    )
+                    .to_string(),
+                    review_status_before: None,
+                    review_status_after: None,
+                    runtime_effect: Some(if disable {
+                        "artifact disabled and reasoning refreshed".into()
+                    } else {
+                        "artifact enabled and reasoning refreshed".into()
+                    }),
+                    updated_at: updated_at.to_string(),
+                    refresh_reasoning: true,
+                }
+            }),
+        "template" => adaptive
+            .learned_templates
+            .iter_mut()
+            .find(|item| item.template_id == artifact_id || item.template_name == artifact_id)
+            .map(|item| {
+                let previous_status = adaptive_artifact_status(
+                    item.manually_disabled,
+                    item.confirmations,
+                    item.false_positives,
+                )
+                .to_string();
+                item.manually_disabled = disable;
+                item.status_reason = status_reason.clone();
+                item.updated_at = updated_at.to_string();
+                AdaptiveArtifactMutationRecord {
+                    artifact_kind: "template".into(),
+                    artifact_id: artifact_id.to_string(),
+                    label: item.template_name.clone(),
+                    previous_status,
+                    new_status: adaptive_artifact_status(
+                        item.manually_disabled,
+                        item.confirmations,
+                        item.false_positives,
+                    )
+                    .to_string(),
+                    review_status_before: None,
+                    review_status_after: None,
+                    runtime_effect: Some(if disable {
+                        "artifact disabled and reasoning refreshed".into()
+                    } else {
+                        "artifact enabled and reasoning refreshed".into()
+                    }),
+                    updated_at: updated_at.to_string(),
+                    refresh_reasoning: true,
+                }
+            }),
+        "composition" => adaptive
+            .learned_compositions
+            .iter_mut()
+            .find(|item| item.composition_id == artifact_id || item.composition_name == artifact_id)
+            .map(|item| {
+                let previous_status = adaptive_artifact_status(
+                    item.manually_disabled,
+                    item.confirmations,
+                    item.false_positives,
+                )
+                .to_string();
+                item.manually_disabled = disable;
+                item.status_reason = status_reason.clone();
+                item.updated_at = updated_at.to_string();
+                AdaptiveArtifactMutationRecord {
+                    artifact_kind: "composition".into(),
+                    artifact_id: artifact_id.to_string(),
+                    label: item.composition_name.clone(),
+                    previous_status,
+                    new_status: adaptive_artifact_status(
+                        item.manually_disabled,
+                        item.confirmations,
+                        item.false_positives,
+                    )
+                    .to_string(),
+                    review_status_before: None,
+                    review_status_after: None,
+                    runtime_effect: Some(if disable {
+                        "artifact disabled and reasoning refreshed".into()
+                    } else {
+                        "artifact enabled and reasoning refreshed".into()
+                    }),
+                    updated_at: updated_at.to_string(),
+                    refresh_reasoning: true,
+                }
+            }),
+        "edge_profile" => adaptive
+            .learned_edge_profiles
+            .iter_mut()
+            .find(|item| item.profile_id == artifact_id)
+            .map(|item| {
+                let previous_status = adaptive_artifact_status(
+                    item.manually_disabled,
+                    item.confirmations,
+                    item.false_positives,
+                )
+                .to_string();
+                item.manually_disabled = disable;
+                item.status_reason = status_reason.clone();
+                item.updated_at = updated_at.to_string();
+                AdaptiveArtifactMutationRecord {
+                    artifact_kind: "edge_profile".into(),
+                    artifact_id: artifact_id.to_string(),
+                    label: item.profile_id.clone(),
+                    previous_status,
+                    new_status: adaptive_artifact_status(
+                        item.manually_disabled,
+                        item.confirmations,
+                        item.false_positives,
+                    )
+                    .to_string(),
+                    review_status_before: None,
+                    review_status_after: None,
+                    runtime_effect: Some(if disable {
+                        "artifact disabled and reasoning refreshed".into()
+                    } else {
+                        "artifact enabled and reasoning refreshed".into()
+                    }),
+                    updated_at: updated_at.to_string(),
+                    refresh_reasoning: true,
+                }
+            }),
+        _ => None,
+    };
+    Ok(update)
+}
+
+fn apply_review_decision_to_selected_artifact(
+    adaptive: &mut AdaptiveLearningModel,
+    artifact_kind: &str,
+    artifact_id: &str,
+    decision: &str,
+    review_reason: &Option<String>,
+    reviewed_at: &str,
+) -> Result<Option<AdaptiveArtifactMutationRecord>> {
+    let normalized_kind = normalize_adaptive_artifact_kind(artifact_kind)?;
+    let update = match normalized_kind {
+        "detector" => adaptive
+            .learned_detectors
+            .iter_mut()
+            .find(|item| item.detector_id == artifact_id || item.requirement_name == artifact_id)
+            .map(|item| {
+                let mut previous_status = None::<String>;
+                let mut new_status = None::<String>;
+                let mut review_status_before = None::<String>;
+                let mut review_status_after = None::<String>;
+                let mut runtime_effect = Some("review recorded without runtime state change".to_string());
+                let mut refresh_reasoning = false;
+                apply_review_decision_to_artifact(
+                    item,
+                    decision,
+                    review_reason,
+                    reviewed_at,
+                    &mut previous_status,
+                    &mut new_status,
+                    &mut review_status_before,
+                    &mut review_status_after,
+                    &mut runtime_effect,
+                    &mut refresh_reasoning,
+                )?;
+                Ok::<AdaptiveArtifactMutationRecord, anyhow::Error>(AdaptiveArtifactMutationRecord {
+                    artifact_kind: "detector".into(),
+                    artifact_id: artifact_id.to_string(),
+                    label: item.requirement_name.clone(),
+                    previous_status: previous_status.unwrap_or_else(|| "unknown".into()),
+                    new_status: new_status.unwrap_or_else(|| "unknown".into()),
+                    review_status_before,
+                    review_status_after,
+                    runtime_effect,
+                    updated_at: reviewed_at.to_string(),
+                    refresh_reasoning,
+                })
+            })
+            .transpose()?,
+        "template" => adaptive
+            .learned_templates
+            .iter_mut()
+            .find(|item| item.template_id == artifact_id || item.template_name == artifact_id)
+            .map(|item| {
+                let mut previous_status = None::<String>;
+                let mut new_status = None::<String>;
+                let mut review_status_before = None::<String>;
+                let mut review_status_after = None::<String>;
+                let mut runtime_effect = Some("review recorded without runtime state change".to_string());
+                let mut refresh_reasoning = false;
+                apply_review_decision_to_artifact(
+                    item,
+                    decision,
+                    review_reason,
+                    reviewed_at,
+                    &mut previous_status,
+                    &mut new_status,
+                    &mut review_status_before,
+                    &mut review_status_after,
+                    &mut runtime_effect,
+                    &mut refresh_reasoning,
+                )?;
+                Ok::<AdaptiveArtifactMutationRecord, anyhow::Error>(AdaptiveArtifactMutationRecord {
+                    artifact_kind: "template".into(),
+                    artifact_id: artifact_id.to_string(),
+                    label: item.template_name.clone(),
+                    previous_status: previous_status.unwrap_or_else(|| "unknown".into()),
+                    new_status: new_status.unwrap_or_else(|| "unknown".into()),
+                    review_status_before,
+                    review_status_after,
+                    runtime_effect,
+                    updated_at: reviewed_at.to_string(),
+                    refresh_reasoning,
+                })
+            })
+            .transpose()?,
+        "composition" => adaptive
+            .learned_compositions
+            .iter_mut()
+            .find(|item| item.composition_id == artifact_id || item.composition_name == artifact_id)
+            .map(|item| {
+                let mut previous_status = None::<String>;
+                let mut new_status = None::<String>;
+                let mut review_status_before = None::<String>;
+                let mut review_status_after = None::<String>;
+                let mut runtime_effect = Some("review recorded without runtime state change".to_string());
+                let mut refresh_reasoning = false;
+                apply_review_decision_to_artifact(
+                    item,
+                    decision,
+                    review_reason,
+                    reviewed_at,
+                    &mut previous_status,
+                    &mut new_status,
+                    &mut review_status_before,
+                    &mut review_status_after,
+                    &mut runtime_effect,
+                    &mut refresh_reasoning,
+                )?;
+                Ok::<AdaptiveArtifactMutationRecord, anyhow::Error>(AdaptiveArtifactMutationRecord {
+                    artifact_kind: "composition".into(),
+                    artifact_id: artifact_id.to_string(),
+                    label: item.composition_name.clone(),
+                    previous_status: previous_status.unwrap_or_else(|| "unknown".into()),
+                    new_status: new_status.unwrap_or_else(|| "unknown".into()),
+                    review_status_before,
+                    review_status_after,
+                    runtime_effect,
+                    updated_at: reviewed_at.to_string(),
+                    refresh_reasoning,
+                })
+            })
+            .transpose()?,
+        "edge_profile" => adaptive
+            .learned_edge_profiles
+            .iter_mut()
+            .find(|item| item.profile_id == artifact_id)
+            .map(|item| {
+                let mut previous_status = None::<String>;
+                let mut new_status = None::<String>;
+                let mut review_status_before = None::<String>;
+                let mut review_status_after = None::<String>;
+                let mut runtime_effect = Some("review recorded without runtime state change".to_string());
+                let mut refresh_reasoning = false;
+                apply_review_decision_to_artifact(
+                    item,
+                    decision,
+                    review_reason,
+                    reviewed_at,
+                    &mut previous_status,
+                    &mut new_status,
+                    &mut review_status_before,
+                    &mut review_status_after,
+                    &mut runtime_effect,
+                    &mut refresh_reasoning,
+                )?;
+                Ok::<AdaptiveArtifactMutationRecord, anyhow::Error>(AdaptiveArtifactMutationRecord {
+                    artifact_kind: "edge_profile".into(),
+                    artifact_id: artifact_id.to_string(),
+                    label: item.profile_id.clone(),
+                    previous_status: previous_status.unwrap_or_else(|| "unknown".into()),
+                    new_status: new_status.unwrap_or_else(|| "unknown".into()),
+                    review_status_before,
+                    review_status_after,
+                    runtime_effect,
+                    updated_at: reviewed_at.to_string(),
+                    refresh_reasoning,
+                })
+            })
+            .transpose()?,
+        _ => None,
+    };
+    Ok(update)
+}
+
+fn adaptive_review_counts(adaptive: &AdaptiveLearningModel) -> serde_json::Value {
+    let mut counts = std::collections::BTreeMap::<String, u64>::new();
+    for status in adaptive
+        .learned_detectors
+        .iter()
+        .map(|item| item.review_status.as_str())
+        .chain(adaptive.learned_templates.iter().map(|item| item.review_status.as_str()))
+        .chain(adaptive.learned_compositions.iter().map(|item| item.review_status.as_str()))
+        .chain(adaptive.learned_edge_profiles.iter().map(|item| item.review_status.as_str()))
+    {
+        *counts.entry(status.to_string()).or_default() += 1;
+    }
+    serde_json::json!(counts)
+}
+
+fn adaptive_review_queue(adaptive: &AdaptiveLearningModel) -> Vec<serde_json::Value> {
+    let mut queue = adaptive
+        .learned_detectors
+        .iter()
+        .filter(|item| !item.manually_disabled && item.review_status == "unreviewed")
+        .map(|item| {
+            serde_json::json!({
+                "artifact_kind": "detector",
+                "artifact_id": item.detector_id,
+                "label": item.requirement_name,
+                "status": adaptive_artifact_status(item.manually_disabled, item.confirmations, item.false_positives),
+                "review_status": item.review_status,
+                "confirmations": item.confirmations,
+                "false_positives": item.false_positives,
+                "updated_at": item.updated_at,
+            })
+        })
+        .chain(adaptive.learned_templates.iter().filter(|item| !item.manually_disabled && item.review_status == "unreviewed").map(|item| {
+            serde_json::json!({
+                "artifact_kind": "template",
+                "artifact_id": item.template_id,
+                "label": item.template_name,
+                "status": adaptive_artifact_status(item.manually_disabled, item.confirmations, item.false_positives),
+                "review_status": item.review_status,
+                "confirmations": item.confirmations,
+                "false_positives": item.false_positives,
+                "updated_at": item.updated_at,
+            })
+        }))
+        .chain(adaptive.learned_compositions.iter().filter(|item| !item.manually_disabled && item.review_status == "unreviewed").map(|item| {
+            serde_json::json!({
+                "artifact_kind": "composition",
+                "artifact_id": item.composition_id,
+                "label": item.composition_name,
+                "status": adaptive_artifact_status(item.manually_disabled, item.confirmations, item.false_positives),
+                "review_status": item.review_status,
+                "confirmations": item.confirmations,
+                "false_positives": item.false_positives,
+                "updated_at": item.updated_at,
+            })
+        }))
+        .chain(adaptive.learned_edge_profiles.iter().filter(|item| !item.manually_disabled && item.review_status == "unreviewed").map(|item| {
+            serde_json::json!({
+                "artifact_kind": "edge_profile",
+                "artifact_id": item.profile_id,
+                "label": item.profile_id,
+                "status": adaptive_artifact_status(item.manually_disabled, item.confirmations, item.false_positives),
+                "review_status": item.review_status,
+                "confirmations": item.confirmations,
+                "false_positives": item.false_positives,
+                "updated_at": item.updated_at,
+            })
+        }))
+        .collect::<Vec<_>>();
+    queue.sort_by(|left, right| {
+        let left_false_positives = left
+            .get("false_positives")
+            .and_then(serde_json::Value::as_u64)
+            .unwrap_or(0);
+        let right_false_positives = right
+            .get("false_positives")
+            .and_then(serde_json::Value::as_u64)
+            .unwrap_or(0);
+        right_false_positives
+            .cmp(&left_false_positives)
+            .then_with(|| {
+                let left_confirmations = left
+                    .get("confirmations")
+                    .and_then(serde_json::Value::as_u64)
+                    .unwrap_or(0);
+                let right_confirmations = right
+                    .get("confirmations")
+                    .and_then(serde_json::Value::as_u64)
+                    .unwrap_or(0);
+                right_confirmations.cmp(&left_confirmations)
+            })
+            .then_with(|| {
+                let left_label = left
+                    .get("label")
+                    .and_then(serde_json::Value::as_str)
+                    .unwrap_or("");
+                let right_label = right
+                    .get("label")
+                    .and_then(serde_json::Value::as_str)
+                    .unwrap_or("");
+                left_label.cmp(right_label)
+            })
+    });
+    queue
+}
+
+fn recent_review_activity(audit: &[AdaptiveLearningAuditEntry], limit: usize) -> Vec<serde_json::Value> {
+    audit
+        .iter()
+        .filter(|entry| entry.review_status_after.is_some())
+        .take(limit)
+        .map(adaptive_learning_audit_entry_json)
+        .collect()
+}
+
+fn adaptive_review_comparison_rows(
+    adaptive: &AdaptiveLearningModel,
+    history_summary: &serde_json::Value,
+    active_incident_influence: &[serde_json::Value],
+) -> Vec<serde_json::Value> {
+    let mut history_index = std::collections::BTreeMap::<(String, String), serde_json::Value>::new();
+    for item in history_summary
+        .get("artifacts")
+        .and_then(serde_json::Value::as_array)
+        .into_iter()
+        .flatten()
+    {
+        let Some(kind) = item.get("artifact_kind").and_then(serde_json::Value::as_str) else {
+            continue;
+        };
+        let Some(artifact_id) = item.get("artifact_id").and_then(serde_json::Value::as_str) else {
+            continue;
+        };
+        history_index.insert((kind.to_string(), artifact_id.to_string()), item.clone());
+    }
+    let mut influence_index = std::collections::BTreeMap::<(String, String), (u64, f64, Vec<String>)>::new();
+    for incident in active_incident_influence {
+        let incident_id = incident
+            .get("incident_id")
+            .and_then(serde_json::Value::as_str)
+            .unwrap_or("unknown-incident")
+            .to_string();
+        for artifact in incident
+            .get("learning")
+            .and_then(|value| value.get("artifacts"))
+            .and_then(serde_json::Value::as_array)
+            .into_iter()
+            .flatten()
+        {
+            let Some(kind) = artifact.get("kind").and_then(serde_json::Value::as_str) else {
+                continue;
+            };
+            let Some(artifact_id) = artifact.get("artifact_id").and_then(serde_json::Value::as_str) else {
+                continue;
+            };
+            let cumulative_impact = artifact
+                .get("cumulative_impact")
+                .and_then(serde_json::Value::as_f64)
+                .unwrap_or_default();
+            let entry = influence_index
+                .entry((kind.to_string(), artifact_id.to_string()))
+                .or_insert_with(|| (0, 0.0, Vec::new()));
+            entry.0 += 1;
+            entry.1 += cumulative_impact;
+            if !entry.2.iter().any(|value| value == &incident_id) {
+                entry.2.push(incident_id.clone());
+            }
+        }
+    }
+    let attention_keys = artifacts_requiring_attention(adaptive)
+        .into_iter()
+        .filter_map(|item| {
+            Some((
+                item.get("kind")?.as_str()?.to_string(),
+                item.get("detector_id")
+                    .or_else(|| item.get("template_id"))
+                    .or_else(|| item.get("composition_id"))
+                    .or_else(|| item.get("profile_id"))?
+                    .as_str()?
+                    .to_string(),
+            ))
+        })
+        .collect::<std::collections::BTreeSet<_>>();
+
+    let mut rows = Vec::new();
+    for detector in &adaptive.learned_detectors {
+        rows.push(adaptive_review_comparison_row(
+            "detector",
+            &detector.detector_id,
+            &detector.requirement_name,
+            adaptive_artifact_status(detector.manually_disabled, detector.confirmations, detector.false_positives),
+            &detector.review_status,
+            detector.confirmations,
+            detector.false_positives,
+            detector.manually_disabled,
+            detector.updated_at.as_str(),
+            detector.last_reviewed_at.as_deref(),
+            history_index.get(&("detector".into(), detector.detector_id.clone())),
+            influence_index.get(&("detector".into(), detector.detector_id.clone())),
+            attention_keys.contains(&("detector".into(), detector.detector_id.clone())),
+        ));
+    }
+    for template in &adaptive.learned_templates {
+        rows.push(adaptive_review_comparison_row(
+            "template",
+            &template.template_id,
+            &template.template_name,
+            adaptive_artifact_status(template.manually_disabled, template.confirmations, template.false_positives),
+            &template.review_status,
+            template.confirmations,
+            template.false_positives,
+            template.manually_disabled,
+            template.updated_at.as_str(),
+            template.last_reviewed_at.as_deref(),
+            history_index.get(&("template".into(), template.template_id.clone())),
+            influence_index.get(&("template".into(), template.template_id.clone())),
+            attention_keys.contains(&("template".into(), template.template_id.clone())),
+        ));
+    }
+    for composition in &adaptive.learned_compositions {
+        rows.push(adaptive_review_comparison_row(
+            "composition",
+            &composition.composition_id,
+            &composition.composition_name,
+            adaptive_artifact_status(
+                composition.manually_disabled,
+                composition.confirmations,
+                composition.false_positives,
+            ),
+            &composition.review_status,
+            composition.confirmations,
+            composition.false_positives,
+            composition.manually_disabled,
+            composition.updated_at.as_str(),
+            composition.last_reviewed_at.as_deref(),
+            history_index.get(&("composition".into(), composition.composition_id.clone())),
+            influence_index.get(&("composition".into(), composition.composition_id.clone())),
+            attention_keys.contains(&("composition".into(), composition.composition_id.clone())),
+        ));
+    }
+    for profile in &adaptive.learned_edge_profiles {
+        rows.push(adaptive_review_comparison_row(
+            "edge_profile",
+            &profile.profile_id,
+            &profile.profile_id,
+            adaptive_artifact_status(profile.manually_disabled, profile.confirmations, profile.false_positives),
+            &profile.review_status,
+            profile.confirmations,
+            profile.false_positives,
+            profile.manually_disabled,
+            profile.updated_at.as_str(),
+            profile.last_reviewed_at.as_deref(),
+            history_index.get(&("edge_profile".into(), profile.profile_id.clone())),
+            influence_index.get(&("edge_profile".into(), profile.profile_id.clone())),
+            attention_keys.contains(&("edge_profile".into(), profile.profile_id.clone())),
+        ));
+    }
+    rows.sort_by(|left, right| {
+        let left_impact = left
+            .get("active_incident_count")
+            .and_then(serde_json::Value::as_u64)
+            .unwrap_or(0);
+        let right_impact = right
+            .get("active_incident_count")
+            .and_then(serde_json::Value::as_u64)
+            .unwrap_or(0);
+        right_impact
+            .cmp(&left_impact)
+            .then_with(|| {
+                let left_confirmations = left
+                    .get("confirmations")
+                    .and_then(serde_json::Value::as_u64)
+                    .unwrap_or(0);
+                let right_confirmations = right
+                    .get("confirmations")
+                    .and_then(serde_json::Value::as_u64)
+                    .unwrap_or(0);
+                right_confirmations.cmp(&left_confirmations)
+            })
+            .then_with(|| {
+                let left_label = left.get("label").and_then(serde_json::Value::as_str).unwrap_or("");
+                let right_label = right.get("label").and_then(serde_json::Value::as_str).unwrap_or("");
+                left_label.cmp(right_label)
+            })
+    });
+    rows
+}
+
+fn adaptive_review_comparison_row(
+    artifact_kind: &str,
+    artifact_id: &str,
+    label: &str,
+    status: &str,
+    review_status: &str,
+    confirmations: u64,
+    false_positives: u64,
+    manually_disabled: bool,
+    updated_at: &str,
+    last_reviewed_at: Option<&str>,
+    history: Option<&serde_json::Value>,
+    influence: Option<&(u64, f64, Vec<String>)>,
+    attention: bool,
+) -> serde_json::Value {
+    let noise_ratio = if confirmations + false_positives == 0 {
+        0.0
+    } else {
+        false_positives as f64 / (confirmations + false_positives) as f64
+    };
+    let (active_incident_count, active_cumulative_impact, incident_ids) = influence
+        .map(|value| (value.0, value.1, value.2.clone()))
+        .unwrap_or((0, 0.0, Vec::new()));
+    let pending_review_age_hours = if review_status == "unreviewed" {
+        hours_since_iso(updated_at)
+    } else {
+        None
+    };
+    let watch_age_hours = if review_status == "watch" {
+        last_reviewed_at.and_then(hours_since_iso)
+    } else {
+        None
+    };
+    serde_json::json!({
+        "artifact_kind": artifact_kind,
+        "artifact_id": artifact_id,
+        "label": label,
+        "status": status,
+        "review_status": review_status,
+        "confirmations": confirmations,
+        "false_positives": false_positives,
+        "noise_ratio": noise_ratio,
+        "manually_disabled": manually_disabled,
+        "attention": attention,
+        "updated_at": updated_at,
+        "last_reviewed_at": last_reviewed_at,
+        "pending_review_age_hours": pending_review_age_hours,
+        "watch_age_hours": watch_age_hours,
+        "aging_bucket": review_aging_bucket(review_status, pending_review_age_hours, watch_age_hours),
+        "history_observations": history
+            .and_then(|value| value.get("observations"))
+            .and_then(serde_json::Value::as_u64)
+            .unwrap_or(0),
+        "latest_estimated_impact": history
+            .and_then(|value| value.get("latest_estimated_impact"))
+            .and_then(serde_json::Value::as_f64),
+        "latest_score": history
+            .and_then(|value| value.get("latest_score"))
+            .and_then(serde_json::Value::as_f64),
+        "best_rank": history
+            .and_then(|value| value.get("best_rank"))
+            .and_then(serde_json::Value::as_i64),
+        "cumulative_score_delta": history
+            .and_then(|value| value.get("cumulative_score_delta"))
+            .and_then(serde_json::Value::as_f64),
+        "cumulative_edge_delta": history
+            .and_then(|value| value.get("cumulative_edge_delta"))
+            .and_then(serde_json::Value::as_f64),
+        "active_incident_count": active_incident_count,
+        "active_cumulative_impact": active_cumulative_impact,
+        "incident_ids": incident_ids,
+    })
+}
+
+fn adaptive_review_analytics(comparison_rows: &[serde_json::Value]) -> serde_json::Value {
+    let mut by_kind = std::collections::BTreeMap::<String, (u64, u64, u64, u64)>::new();
+    for row in comparison_rows {
+        let Some(kind) = row.get("artifact_kind").and_then(serde_json::Value::as_str) else {
+            continue;
+        };
+        let entry = by_kind.entry(kind.to_string()).or_default();
+        entry.0 += 1;
+        if row.get("review_status").and_then(serde_json::Value::as_str) == Some("unreviewed") {
+            entry.1 += 1;
+        }
+        if row.get("attention").and_then(serde_json::Value::as_bool).unwrap_or(false) {
+            entry.2 += 1;
+        }
+        if row.get("manually_disabled").and_then(serde_json::Value::as_bool).unwrap_or(false) {
+            entry.3 += 1;
+        }
+    }
+    let kind_breakdown = by_kind
+        .into_iter()
+        .map(|(artifact_kind, (total, unreviewed, attention, manually_disabled))| {
+            serde_json::json!({
+                "artifact_kind": artifact_kind,
+                "total": total,
+                "unreviewed": unreviewed,
+                "attention": attention,
+                "manually_disabled": manually_disabled,
+            })
+        })
+        .collect::<Vec<_>>();
+    serde_json::json!({
+        "kind_breakdown": kind_breakdown,
+        "top_confirmed": top_adaptive_rows_by(comparison_rows, |row| {
+            row.get("confirmations").and_then(serde_json::Value::as_u64).unwrap_or(0) as f64
+        }),
+        "top_noisy": top_adaptive_rows_by(comparison_rows, |row| {
+            row.get("false_positives").and_then(serde_json::Value::as_u64).unwrap_or(0) as f64
+                + row.get("noise_ratio").and_then(serde_json::Value::as_f64).unwrap_or(0.0)
+        }),
+        "top_impact": top_adaptive_rows_by(comparison_rows, |row| {
+            row.get("active_cumulative_impact").and_then(serde_json::Value::as_f64).unwrap_or(0.0)
+                + row.get("latest_estimated_impact").and_then(serde_json::Value::as_f64).unwrap_or(0.0)
+        }),
+        "recently_changed": top_adaptive_rows_by(comparison_rows, |row| {
+            row.get("updated_at")
+                .and_then(serde_json::Value::as_str)
+                .and_then(parse_rfc3339)
+                .map(|value| value.unix_timestamp_nanos() as f64)
+                .unwrap_or(0.0)
+        }),
+    })
+}
+
+fn top_adaptive_rows_by<F>(rows: &[serde_json::Value], score: F) -> Vec<serde_json::Value>
+where
+    F: Fn(&serde_json::Value) -> f64,
+{
+    let mut ranked = rows.to_vec();
+    ranked.sort_by(|left, right| {
+        score(right)
+            .partial_cmp(&score(left))
+            .unwrap_or(std::cmp::Ordering::Equal)
+    });
+    ranked.into_iter().take(5).collect()
+}
+
+fn adaptive_review_saved_views(
+    incidents: &IncidentsStore,
+    comparison_rows: &[serde_json::Value],
+) -> Vec<serde_json::Value> {
+    let Ok(views) = incidents.list_adaptive_review_views() else {
+        return Vec::new();
+    };
+    views.into_iter()
+        .map(|view| adaptive_review_saved_view_json(&view, comparison_rows))
+        .collect()
+}
+
+fn adaptive_review_saved_view_json(
+    view: &StoredAdaptiveReviewView,
+    comparison_rows: &[serde_json::Value],
+) -> serde_json::Value {
+    let matches = comparison_rows
+        .iter()
+        .filter(|row| adaptive_row_matches_saved_view(row, view))
+        .cloned()
+        .collect::<Vec<_>>();
+    let pending_review_count = matches
+        .iter()
+        .filter(|row| row.get("review_status").and_then(serde_json::Value::as_str) == Some("unreviewed"))
+        .count();
+    let attention_count = matches
+        .iter()
+        .filter(|row| row.get("attention").and_then(serde_json::Value::as_bool).unwrap_or(false))
+        .count();
+    let active_incident_count = matches
+        .iter()
+        .map(|row| row.get("active_incident_count").and_then(serde_json::Value::as_u64).unwrap_or(0))
+        .sum::<u64>();
+    let active_cumulative_impact = matches
+        .iter()
+        .map(|row| row.get("active_cumulative_impact").and_then(serde_json::Value::as_f64).unwrap_or(0.0))
+        .sum::<f64>();
+    let oldest_pending = matches
+        .iter()
+        .filter_map(|row| {
+            Some((
+                row.get("pending_review_age_hours")?.as_f64()?,
+                row.get("label").and_then(serde_json::Value::as_str).unwrap_or("unknown artifact"),
+            ))
+        })
+        .max_by(|left, right| left.0.partial_cmp(&right.0).unwrap_or(std::cmp::Ordering::Equal));
+    serde_json::json!({
+        "view_id": view.view_id,
+        "name": view.name,
+        "description": view.description,
+        "search_text": view.search_text,
+        "assigned_reviewer": view.assigned_reviewer,
+        "created_at": view.created_at,
+        "updated_at": view.updated_at,
+        "last_used_at": view.last_used_at,
+        "artifact_selections": view.artifact_selections.iter().map(|selection| serde_json::json!({
+            "artifact_kind": selection.artifact_kind,
+            "artifact_id": selection.artifact_id,
+        })).collect::<Vec<_>>(),
+        "match_count": matches.len(),
+        "pending_review_count": pending_review_count,
+        "attention_count": attention_count,
+        "active_incident_count": active_incident_count,
+        "active_cumulative_impact": active_cumulative_impact,
+        "oldest_pending_age_hours": oldest_pending.map(|value| value.0),
+        "oldest_pending_label": oldest_pending.map(|value| value.1.to_string()),
+        "aging_bucket": oldest_pending
+            .map(|value| saved_view_aging_bucket(value.0))
+            .unwrap_or("fresh"),
+        "stale_pending": oldest_pending.map(|value| value.0 >= 72.0).unwrap_or(false),
+    })
+}
+
+fn adaptive_row_matches_saved_view(row: &serde_json::Value, view: &StoredAdaptiveReviewView) -> bool {
+    let key_matches = if view.artifact_selections.is_empty() {
+        true
+    } else {
+        let row_kind = row.get("artifact_kind").and_then(serde_json::Value::as_str).unwrap_or("");
+        let row_id = row.get("artifact_id").and_then(serde_json::Value::as_str).unwrap_or("");
+        view.artifact_selections
+            .iter()
+            .any(|selection| selection.artifact_kind == row_kind && selection.artifact_id == row_id)
+    };
+    if !key_matches {
+        return false;
+    }
+    let Some(search) = view.search_text.as_ref().map(|value| value.trim()).filter(|value| !value.is_empty()) else {
+        return true;
+    };
+    let needle = search.to_ascii_lowercase();
+    [
+        row.get("label").and_then(serde_json::Value::as_str).unwrap_or(""),
+        row.get("artifact_id").and_then(serde_json::Value::as_str).unwrap_or(""),
+        row.get("artifact_kind").and_then(serde_json::Value::as_str).unwrap_or(""),
+        row.get("status").and_then(serde_json::Value::as_str).unwrap_or(""),
+        row.get("review_status").and_then(serde_json::Value::as_str).unwrap_or(""),
+    ]
+    .join(" ")
+    .to_ascii_lowercase()
+    .contains(&needle)
+}
+
+fn adaptive_learning_trend_drilldowns(
+    incidents: &IncidentsStore,
+    limit: usize,
+    per_artifact_limit: usize,
+) -> Result<Vec<serde_json::Value>> {
+    let mut by_artifact = std::collections::BTreeMap::<(String, String), Vec<AdaptiveLearningHistoryEntry>>::new();
+    for entry in read_adaptive_learning_history(incidents, limit)? {
+        by_artifact
+            .entry((entry.artifact_kind.clone(), entry.artifact_id.clone()))
+            .or_default()
+            .push(entry);
+    }
+    let mut drilldowns = by_artifact
+        .into_iter()
+        .map(|((artifact_kind, artifact_id), entries)| {
+            let label = entries
+                .last()
+                .map(|entry| entry.artifact_label.clone())
+                .unwrap_or_else(|| artifact_id.clone());
+            let observations = entries
+                .iter()
+                .rev()
+                .take(per_artifact_limit.max(1))
+                .collect::<Vec<_>>()
+                .into_iter()
+                .rev()
+                .map(|entry| serde_json::json!({
+                    "observed_at": entry.observed_at,
+                    "incident_id": entry.incident_id,
+                    "hypothesis_id": entry.hypothesis_id,
+                    "score": entry.score,
+                    "rank": entry.rank,
+                    "estimated_impact": entry.estimated_impact,
+                    "impact_metric": entry.impact_metric,
+                    "score_delta": entry.score_delta,
+                    "rank_delta": entry.rank_delta,
+                    "edge_delta": entry.edge_delta,
+                }))
+                .collect::<Vec<_>>();
+            let total_abs_delta = entries
+                .iter()
+                .map(|entry| entry.score_delta.unwrap_or_default().abs() + entry.edge_delta.unwrap_or_default().abs())
+                .sum::<f64>();
+            serde_json::json!({
+                "artifact_kind": artifact_kind,
+                "artifact_id": artifact_id,
+                "artifact_label": label,
+                "observation_count": entries.len(),
+                "total_abs_delta": total_abs_delta,
+                "observations": observations,
+            })
+        })
+        .collect::<Vec<_>>();
+    drilldowns.sort_by(|left, right| {
+        right.get("total_abs_delta")
+            .and_then(serde_json::Value::as_f64)
+            .unwrap_or_default()
+            .partial_cmp(
+                &left.get("total_abs_delta")
+                    .and_then(serde_json::Value::as_f64)
+                    .unwrap_or_default(),
+            )
+            .unwrap_or(std::cmp::Ordering::Equal)
+    });
+    Ok(drilldowns)
+}
+
+fn review_aging_bucket(
+    review_status: &str,
+    pending_review_age_hours: Option<f64>,
+    watch_age_hours: Option<f64>,
+) -> &'static str {
+    match review_status {
+        "unreviewed" => pending_review_age_hours
+            .map(saved_view_aging_bucket)
+            .unwrap_or("fresh"),
+        "watch" => match watch_age_hours.unwrap_or_default() {
+            age if age >= 168.0 => "aged",
+            age if age >= 72.0 => "stale",
+            _ => "fresh",
+        },
+        _ => "fresh",
+    }
+}
+
+fn saved_view_aging_bucket(age_hours: f64) -> &'static str {
+    if age_hours >= 168.0 {
+        "aged"
+    } else if age_hours >= 72.0 {
+        "stale"
+    } else if age_hours >= 24.0 {
+        "warm"
+    } else {
+        "fresh"
+    }
+}
+
+fn hours_since_iso(raw: &str) -> Option<f64> {
+    let parsed = parse_rfc3339(raw)?;
+    let now = time::OffsetDateTime::now_utc();
+    Some((now - parsed).whole_seconds().max(0) as f64 / 3600.0)
+}
+
+fn resolve_runtime_sidecar_path(raw: &str, incidents_db: &Path) -> PathBuf {
+    let candidate = PathBuf::from(raw);
+    if candidate.is_absolute() {
+        return candidate;
+    }
+    let data_dir = incidents_db.parent().unwrap_or_else(|| Path::new("."));
+    let normalized = raw.trim().replace('\\', "/");
+    let trimmed = normalized.trim_start_matches("./");
+    if let Some(relative_to_data) = trimmed.strip_prefix("data/") {
+        return data_dir.join(relative_to_data);
+    }
+    data_dir.join(candidate)
+}
+
+fn archive_db_path(incidents_db: &Path, archived_at: &str) -> PathBuf {
+    let stamp = archived_at
+        .split('T')
+        .next()
+        .unwrap_or("1970-01-01")
+        .replace('-', "");
+    incidents_db
+        .parent()
+        .unwrap_or_else(|| Path::new("."))
+        .join("archive")
+        .join(format!("incidents_{stamp}.db"))
+}
+
+fn iso_time_before_seconds(seconds: i64) -> String {
+    let target = time::OffsetDateTime::now_utc() - time::Duration::seconds(seconds.max(0));
+    target
+        .format(&time::format_description::well_known::Rfc3339)
+        .unwrap_or_else(|_| "1970-01-01T00:00:00Z".into())
+}
+
+fn load_json_file<T>(path: &Path) -> Result<Option<T>>
+where
+    T: for<'de> Deserialize<'de>,
+{
+    if !path.exists() {
+        return Ok(None);
+    }
+    let raw = std::fs::read_to_string(path)
+        .map_err(|error| anyhow::anyhow!("read {}: {error}", path.display()))?;
+    let parsed = serde_json::from_str::<T>(&raw)
+        .map_err(|error| anyhow::anyhow!("parse {}: {error}", path.display()))?;
+    Ok(Some(parsed))
+}
+
+fn write_json_file<T>(path: &Path, value: &T) -> Result<()>
+where
+    T: Serialize,
+{
+    if let Some(parent) = path.parent() {
+        std::fs::create_dir_all(parent)
+            .map_err(|error| anyhow::anyhow!("create {}: {error}", parent.display()))?;
+    }
+    let raw = serde_json::to_string_pretty(value)?;
+    std::fs::write(path, raw)
+        .map_err(|error| anyhow::anyhow!("write {}: {error}", path.display()))?;
+    Ok(())
+}
+
+fn apply_feedback_to_calibration(
+    config: &TomlValue,
+    calibration: &mut CalibrationModel,
+    feedback: &inferra_storage::StoredFeedback,
+    hypotheses: &[serde_json::Value],
+) {
+    if calibration
+        .processed_feedback_ids
+        .iter()
+        .any(|item| item == &feedback.feedback_id)
+    {
+        return;
+    }
+    calibration
+        .processed_feedback_ids
+        .push(feedback.feedback_id.clone());
+    if feedback.feedback_type == "skipped" {
+        return;
+    }
+    calibration.total_feedback_count += 1;
+    let min_samples = calibration_min_samples(config);
+    for hypothesis in hypotheses {
+        let score = hypothesis
+            .get("total_score")
+            .and_then(serde_json::Value::as_f64)
+            .unwrap_or_default();
+        let bucket_index = calibration_bucket_index(&calibration.buckets, score);
+        if let Some(bucket) = calibration.buckets.get_mut(bucket_index) {
+            bucket.total_predictions += 1;
+            if feedback.feedback_type == "confirmed"
+                && hypothesis
+                    .get("hypothesis_id")
+                    .and_then(serde_json::Value::as_str)
+                    == feedback.correct_hypothesis_id.as_deref()
+            {
+                bucket.correct_predictions += 1;
+            }
+            bucket.accuracy = bucket.correct_predictions as f64
+                / bucket.total_predictions.max(1) as f64;
+            bucket.sample_confidence = if bucket.total_predictions >= min_samples {
+                "sufficient"
+            } else {
+                "insufficient"
+            }
+            .into();
+        }
+    }
+    let total_correct: u64 = calibration
+        .buckets
+        .iter()
+        .map(|bucket| bucket.correct_predictions)
+        .sum();
+    let total_predictions: u64 = calibration
+        .buckets
+        .iter()
+        .map(|bucket| bucket.total_predictions)
+        .sum();
+    calibration.overall_accuracy = total_correct as f64 / total_predictions.max(1) as f64;
+    calibration.last_updated = Some(
+        feedback
+            .created_at
+            .clone()
+            .unwrap_or_else(|| feedback.resolved_at.clone()),
+    );
+}
+
+fn apply_feedback_to_weights(
+    config: &TomlValue,
+    weights: &mut LearnedScoringWeights,
+    feedback: &inferra_storage::StoredFeedback,
+    hypotheses: &[serde_json::Value],
+) {
+    if weights
+        .processed_feedback_ids
+        .iter()
+        .any(|item| item == &feedback.feedback_id)
+    {
+        return;
+    }
+    weights.processed_feedback_ids.push(feedback.feedback_id.clone());
+    if hypotheses.is_empty() || feedback.feedback_type == "skipped" {
+        return;
+    }
+    let learning_rate = scoring_learning_rate(config);
+    let max_drift = scoring_max_drift(config);
+    let min_weight = scoring_min_weight(config);
+    let defaults = if weights.default_weights.is_empty() {
+        scoring_weight_defaults()
+    } else {
+        weights.default_weights.clone()
+    };
+    if weights.effective_weights.is_empty() {
+        weights.effective_weights = defaults.clone();
+    }
+    let mut adjustments = std::collections::BTreeMap::new();
+    match feedback.feedback_type.as_str() {
+        "confirmed" => {
+            let Some(correct) = hypotheses.iter().find(|item| {
+                item.get("hypothesis_id").and_then(serde_json::Value::as_str)
+                    == feedback.correct_hypothesis_id.as_deref()
+            }) else {
+                return;
+            };
+            let competitors = hypotheses
+                .iter()
+                .filter(|item| {
+                    item.get("hypothesis_id").and_then(serde_json::Value::as_str)
+                        != feedback.correct_hypothesis_id.as_deref()
+                })
+                .collect::<Vec<_>>();
+            for component in scoring_component_names() {
+                let correct_value = score_breakdown_component(correct, component);
+                let competitor_average = if competitors.is_empty() {
+                    0.0
+                } else {
+                    competitors
+                        .iter()
+                        .map(|item| score_breakdown_component(item, component))
+                        .sum::<f64>()
+                        / competitors.len() as f64
+                };
+                let delta = (correct_value - competitor_average) * learning_rate;
+                *weights
+                    .effective_weights
+                    .entry(component.to_string())
+                    .or_insert(*defaults.get(component).unwrap_or(&min_weight)) += delta;
+                adjustments.insert(component.to_string(), delta);
+            }
+        }
+        "none_correct" => {
+            let top = &hypotheses[0];
+            for component in scoring_component_names() {
+                let delta = -score_breakdown_component(top, component) * learning_rate * 0.5;
+                *weights
+                    .effective_weights
+                    .entry(component.to_string())
+                    .or_insert(*defaults.get(component).unwrap_or(&min_weight)) += delta;
+                adjustments.insert(component.to_string(), delta);
+            }
+        }
+        _ => {}
+    }
+    clamp_learned_weights(&mut weights.effective_weights, &defaults, max_drift, min_weight);
+    renormalize_weights(&mut weights.effective_weights, defaults.values().sum());
+    weights.last_updated = Some(
+        feedback
+            .created_at
+            .clone()
+            .unwrap_or_else(|| feedback.resolved_at.clone()),
+    );
+    if !adjustments.is_empty() {
+        weights.audit.push(WeightAdjustmentAudit {
+            feedback_id: feedback.feedback_id.clone(),
+            incident_id: feedback.incident_id.clone(),
+            applied_at: feedback
+                .created_at
+                .clone()
+                .unwrap_or_else(|| feedback.resolved_at.clone()),
+            adjustments,
+        });
+    }
+}
+
+fn apply_feedback_to_adaptive_learning(
+    adaptive: &mut AdaptiveLearningModel,
+    feedback: &inferra_storage::StoredFeedback,
+    hypotheses: &[serde_json::Value],
+    incidents: &IncidentsStore,
+    events: Option<&EventsStore>,
+) -> Result<()> {
+    if adaptive
+        .processed_feedback_ids
+        .iter()
+        .any(|item| item == &feedback.feedback_id)
+    {
+        return Ok(());
+    }
+    adaptive
+        .processed_feedback_ids
+        .push(feedback.feedback_id.clone());
+    let Some(events) = events else {
+        return Ok(());
+    };
+    let incident_event_ids = incidents
+        .incident_event_ids(&feedback.incident_id)
+        .unwrap_or_default();
+    let incident_events = events.get_events(&incident_event_ids).unwrap_or_default();
+    let incident_graph = incidents
+        .inference_graph_snapshot(&feedback.incident_id)
+        .ok()
+        .flatten()
+        .and_then(|value| value.get("graph_data").cloned())
+        .and_then(|value| serde_json::from_value::<InferenceGraph>(value).ok())
+        .unwrap_or_default();
+    match feedback.feedback_type.as_str() {
+        "confirmed" => {
+            let Some(correct) = hypotheses.iter().find(|item| {
+                item.get("hypothesis_id").and_then(serde_json::Value::as_str)
+                    == feedback.correct_hypothesis_id.as_deref()
+            }) else {
+                return Ok(());
+            };
+            let supporting_event_ids = parse_json_string_array_value(correct.get("supporting_events"));
+            let supporting_events = if supporting_event_ids.is_empty() {
+                incident_events.clone()
+            } else {
+                events.get_events(&supporting_event_ids).unwrap_or_else(|_| incident_events.clone())
+            };
+            if supporting_events.is_empty() {
+                return Ok(());
+            }
+            let profile = learned_pattern_profile(correct, &supporting_events);
+            if profile.positive_terms.is_empty() && profile.tags.is_empty() {
+                return Ok(());
+            }
+            upsert_learned_detector(adaptive, &profile, feedback);
+            upsert_learned_template(adaptive, &profile, feedback);
+            if let Some(composition) = learned_composition_profile(
+                adaptive,
+                correct,
+                &profile,
+                &supporting_events,
+                &incident_graph,
+            ) {
+                upsert_learned_composition(adaptive, &composition, feedback);
+            }
+            upsert_learned_edge_profiles(
+                adaptive,
+                &incident_graph,
+                &profile.cause_type,
+                &supporting_event_ids,
+                feedback,
+            );
+            adaptive.last_updated = Some(
+                feedback
+                    .created_at
+                    .clone()
+                    .unwrap_or_else(|| feedback.resolved_at.clone()),
+            );
+        }
+        "none_correct" => {
+            if incident_events.is_empty() {
+                return Ok(());
+            }
+            mark_learned_false_positives(adaptive, &incident_events, &incident_graph);
+            adaptive.last_updated = Some(
+                feedback
+                    .created_at
+                    .clone()
+                    .unwrap_or_else(|| feedback.resolved_at.clone()),
+            );
+        }
+        _ => {}
+    }
+    Ok(())
+}
+
+#[derive(Debug, Clone)]
+struct LearnedPatternProfile {
+    requirement_name: String,
+    detector_id: String,
+    template_id: String,
+    template_name: String,
+    cause_type: String,
+    cause_subtype: Option<String>,
+    title_template: String,
+    confidence: f64,
+    positive_terms: Vec<String>,
+    tags: Vec<String>,
+    source_types: Vec<String>,
+    min_severity: Option<i64>,
+    requires: Vec<String>,
+    requires_same_service: bool,
+    requires_temporal_order: bool,
+}
+
+fn learned_pattern_profile(
+    hypothesis: &serde_json::Value,
+    supporting_events: &[EventRow],
+) -> LearnedPatternProfile {
+    let cause_type = hypothesis
+        .get("cause_type")
+        .and_then(serde_json::Value::as_str)
+        .unwrap_or("unknown")
+        .to_string();
+    let description = hypothesis
+        .get("description")
+        .and_then(serde_json::Value::as_str)
+        .unwrap_or("Learned hypothesis pattern")
+        .trim()
+        .to_string();
+    let confidence = hypothesis
+        .get("total_score")
+        .and_then(serde_json::Value::as_f64)
+        .unwrap_or(0.65)
+        .clamp(0.1, 0.95);
+    let positive_terms = stable_learning_terms(supporting_events);
+    let tags = stable_learning_tags(supporting_events);
+    let source_types = stable_learning_source_types(supporting_events);
+    let primary_term = positive_terms
+        .first()
+        .cloned()
+        .or_else(|| tags.first().cloned())
+        .or_else(|| source_types.first().cloned())
+        .unwrap_or_else(|| slug(&cause_type));
+    let detector_key = format!("{}-{}", cause_type, primary_term);
+    let requirement_name = format!("learned_{}", slug(&detector_key));
+    let builtin_requirement = built_in_requirement_for_cause(&cause_type, supporting_events);
+    let mut requires = vec![requirement_name.clone()];
+    if let Some(builtin) = builtin_requirement {
+        requires.push(builtin);
+    }
+    requires.sort();
+    requires.dedup();
+    LearnedPatternProfile {
+        detector_id: requirement_name.clone(),
+        requirement_name: requirement_name.clone(),
+        template_id: format!("template_{}", requirement_name),
+        template_name: format!("learned_{}", slug(&detector_key)),
+        cause_type,
+        cause_subtype: Some(slug(&primary_term)),
+        title_template: description,
+        confidence,
+        positive_terms,
+        tags,
+        source_types,
+        min_severity: supporting_events.iter().filter_map(event_severity).min(),
+        requires,
+        requires_same_service: services_in_events(supporting_events).len() <= 1,
+        requires_temporal_order: supporting_events.len() > 1,
+    }
+}
+
+fn learned_composition_profile(
+    adaptive: &AdaptiveLearningModel,
+    hypothesis: &serde_json::Value,
+    profile: &LearnedPatternProfile,
+    supporting_events: &[EventRow],
+    incident_graph: &InferenceGraph,
+) -> Option<LearnedComposition> {
+    let mut requires = matched_requirement_names(supporting_events, adaptive);
+    merge_unique(&mut requires, &profile.requires, 6);
+    requires.sort();
+    requires.dedup();
+    if requires.len() < 2 {
+        return None;
+    }
+    let preferred_edge_types = preferred_edge_types_for_support(incident_graph, supporting_events);
+    let composition_key = format!("{}-{}", profile.cause_type, requires.join("-"));
+    Some(LearnedComposition {
+        composition_id: format!("composition_{}", slug(&composition_key)),
+        composition_name: format!("learned_{}", slug(&composition_key)),
+        cause_type: profile.cause_type.clone(),
+        cause_subtype: profile.cause_subtype.clone(),
+        title_template: hypothesis
+            .get("description")
+            .and_then(serde_json::Value::as_str)
+            .unwrap_or(&profile.title_template)
+            .trim()
+            .to_string(),
+        confidence: hypothesis
+            .get("total_score")
+            .and_then(serde_json::Value::as_f64)
+            .unwrap_or(profile.confidence)
+            .clamp(0.1, 0.95),
+        requires,
+        requires_same_service: services_in_events(supporting_events).len() <= 1,
+        requires_temporal_order: supporting_events.len() > 1,
+        preferred_edge_types,
+        confirmations: 0,
+        false_positives: 0,
+        created_from_feedback_id: String::new(),
+        updated_at: String::new(),
+        manually_disabled: false,
+        status_reason: None,
+        review_status: default_review_status(),
+        review_reason: None,
+        last_reviewed_at: None,
+    })
+}
+
+fn matched_requirement_names(
+    events: &[EventRow],
+    adaptive: &AdaptiveLearningModel,
+) -> Vec<String> {
+    let learning = LearningArtifacts {
+        adaptive: adaptive.clone(),
+        ..LearningArtifacts::default()
+    };
+    let mut names = built_in_requirement_names()
+        .into_iter()
+        .filter(|requirement| !event_ids_for_requirement(events, requirement, &learning).is_empty())
+        .map(str::to_string)
+        .collect::<Vec<_>>();
+    for detector in adaptive
+        .learned_detectors
+        .iter()
+        .filter(|detector| detector_is_active(detector))
+    {
+        if !event_ids_for_requirement(events, &detector.requirement_name, &learning).is_empty() {
+            names.push(detector.requirement_name.clone());
+        }
+    }
+    names.sort();
+    names.dedup();
+    names
+}
+
+fn built_in_requirement_names() -> [&'static str; 6] {
+    [
+        "connection_failures_outbound",
+        "error_spike",
+        "resource_pressure",
+        "restart_loop",
+        "deployment_event",
+        "config_change_event",
+    ]
+}
+
+fn preferred_edge_types_for_support(
+    incident_graph: &InferenceGraph,
+    supporting_events: &[EventRow],
+) -> Vec<String> {
+    let support_ids = supporting_events
+        .iter()
+        .filter_map(|event| event.event_id.clone())
+        .collect::<std::collections::BTreeSet<_>>();
+    let mut types = incident_graph
+        .edges
+        .iter()
+        .filter(|edge| {
+            support_ids.contains(&edge.source_event_id) || support_ids.contains(&edge.target_event_id)
+        })
+        .map(|edge| edge.edge_type.clone())
+        .collect::<Vec<_>>();
+    types.sort();
+    types.dedup();
+    types.truncate(4);
+    types
+}
+
+fn stable_learning_terms(events: &[EventRow]) -> Vec<String> {
+    let min_occurrences = (events.len() / 2).max(1);
+    let mut counts = std::collections::BTreeMap::<String, usize>::new();
+    for event in events {
+        let tokens = tokenize_learning_text(&event_signal_text(event));
+        for token in tokens {
+            *counts.entry(token).or_default() += 1;
+        }
+    }
+    let mut stable = counts
+        .into_iter()
+        .filter(|(_, count)| *count >= min_occurrences)
+        .collect::<Vec<_>>();
+    stable.sort_by(|left, right| right.1.cmp(&left.1).then_with(|| left.0.cmp(&right.0)));
+    stable
+        .into_iter()
+        .map(|(token, _)| token)
+        .take(6)
+        .collect()
+}
+
+fn stable_learning_tags(events: &[EventRow]) -> Vec<String> {
+    let min_occurrences = (events.len() / 2).max(1);
+    let mut counts = std::collections::BTreeMap::<String, usize>::new();
+    for event in events {
+        for tag in event.tags.clone().unwrap_or_default() {
+            *counts.entry(tag.to_ascii_lowercase()).or_default() += 1;
+        }
+    }
+    counts
+        .into_iter()
+        .filter(|(_, count)| *count >= min_occurrences)
+        .map(|(tag, _)| tag)
+        .take(6)
+        .collect()
+}
+
+fn stable_learning_source_types(events: &[EventRow]) -> Vec<String> {
+    let min_occurrences = (events.len() / 2).max(1);
+    let mut counts = std::collections::BTreeMap::<String, usize>::new();
+    for event in events {
+        if let Some(source_type) = event
+            .source_ref
+            .as_ref()
+            .and_then(|source| source.source_type.clone())
+        {
+            *counts.entry(source_type.to_ascii_lowercase()).or_default() += 1;
+        }
+    }
+    counts
+        .into_iter()
+        .filter(|(_, count)| *count >= min_occurrences)
+        .map(|(source_type, _)| source_type)
+        .take(4)
+        .collect()
+}
+
+fn tokenize_learning_text(text: &str) -> std::collections::BTreeSet<String> {
+    text.split(|ch: char| !ch.is_ascii_alphanumeric())
+        .map(|token| token.trim().to_ascii_lowercase())
+        .filter(|token| token.len() >= 4)
+        .filter(|token| !token.chars().all(|ch| ch.is_ascii_digit()))
+        .filter(|token| !learning_stopwords().contains(&token.as_str()))
+        .collect()
+}
+
+fn learning_stopwords() -> &'static std::collections::BTreeSet<&'static str> {
+    static STOPWORDS: std::sync::OnceLock<std::collections::BTreeSet<&'static str>> =
+        std::sync::OnceLock::new();
+    STOPWORDS.get_or_init(|| {
+        std::collections::BTreeSet::from([
+            "after", "before", "calling", "critical", "error", "failed", "from", "host",
+            "into", "local", "process", "runtime", "service", "started", "state", "then",
+            "with", "worker",
+        ])
+    })
+}
+
+fn built_in_requirement_for_cause(cause_type: &str, events: &[EventRow]) -> Option<String> {
+    match cause_type {
+        "dependency_failure" => Some("connection_failures_outbound".into()),
+        "resource_pressure" => Some("resource_pressure".into()),
+        "service_instability" => Some("restart_loop".into()),
+        "configuration_change" => {
+            if events.iter().any(|event| {
+                has_any_term(
+                    &event_signal_text(event),
+                    &["deploy", "deployment", "rollout", "release"],
+                )
+            }) {
+                Some("deployment_event".into())
+            } else {
+                Some("config_change_event".into())
+            }
+        }
+        _ => None,
+    }
+}
+
+fn upsert_learned_detector(
+    adaptive: &mut AdaptiveLearningModel,
+    profile: &LearnedPatternProfile,
+    feedback: &inferra_storage::StoredFeedback,
+) {
+    if let Some(existing) = adaptive
+        .learned_detectors
+        .iter_mut()
+        .find(|detector| detector.requirement_name == profile.requirement_name)
+    {
+        merge_unique(&mut existing.positive_terms, &profile.positive_terms, 8);
+        merge_unique(&mut existing.tags, &profile.tags, 8);
+        merge_unique(&mut existing.source_types, &profile.source_types, 6);
+        existing.min_severity = match (existing.min_severity, profile.min_severity) {
+            (Some(left), Some(right)) => Some(left.min(right)),
+            (left, right) => left.or(right),
+        };
+        existing.confirmations += 1;
+        existing.updated_at = feedback
+            .created_at
+            .clone()
+            .unwrap_or_else(|| feedback.resolved_at.clone());
+    } else {
+        adaptive.learned_detectors.push(LearnedDetector {
+            detector_id: profile.detector_id.clone(),
+            requirement_name: profile.requirement_name.clone(),
+            cause_type: profile.cause_type.clone(),
+            positive_terms: profile.positive_terms.clone(),
+            tags: profile.tags.clone(),
+            source_types: profile.source_types.clone(),
+            min_severity: profile.min_severity,
+            confirmations: 1,
+            false_positives: 0,
+            created_from_feedback_id: feedback.feedback_id.clone(),
+            updated_at: feedback
+                .created_at
+                .clone()
+                .unwrap_or_else(|| feedback.resolved_at.clone()),
+            manually_disabled: false,
+            status_reason: None,
+            review_status: default_review_status(),
+            review_reason: None,
+            last_reviewed_at: None,
+        });
+    }
+}
+
+fn upsert_learned_template(
+    adaptive: &mut AdaptiveLearningModel,
+    profile: &LearnedPatternProfile,
+    feedback: &inferra_storage::StoredFeedback,
+) {
+    if let Some(existing) = adaptive
+        .learned_templates
+        .iter_mut()
+        .find(|template| template.template_id == profile.template_id)
+    {
+        merge_unique(&mut existing.requires, &profile.requires, 4);
+        existing.confidence = ((existing.confidence + profile.confidence) / 2.0).clamp(0.1, 0.95);
+        existing.confirmations += 1;
+        existing.updated_at = feedback
+            .created_at
+            .clone()
+            .unwrap_or_else(|| feedback.resolved_at.clone());
+    } else {
+        adaptive.learned_templates.push(LearnedTemplate {
+            template_id: profile.template_id.clone(),
+            template_name: profile.template_name.clone(),
+            cause_type: profile.cause_type.clone(),
+            cause_subtype: profile.cause_subtype.clone(),
+            title_template: profile.title_template.clone(),
+            confidence: profile.confidence,
+            requires: profile.requires.clone(),
+            requires_same_service: profile.requires_same_service,
+            requires_temporal_order: profile.requires_temporal_order,
+            confirmations: 1,
+            false_positives: 0,
+            created_from_feedback_id: feedback.feedback_id.clone(),
+            updated_at: feedback
+                .created_at
+                .clone()
+                .unwrap_or_else(|| feedback.resolved_at.clone()),
+            manually_disabled: false,
+            status_reason: None,
+            review_status: default_review_status(),
+            review_reason: None,
+            last_reviewed_at: None,
+        });
+    }
+}
+
+fn upsert_learned_composition(
+    adaptive: &mut AdaptiveLearningModel,
+    composition: &LearnedComposition,
+    feedback: &inferra_storage::StoredFeedback,
+) {
+    if let Some(existing) = adaptive
+        .learned_compositions
+        .iter_mut()
+        .find(|item| item.composition_id == composition.composition_id)
+    {
+        merge_unique(&mut existing.requires, &composition.requires, 6);
+        merge_unique(
+            &mut existing.preferred_edge_types,
+            &composition.preferred_edge_types,
+            6,
+        );
+        existing.confidence =
+            ((existing.confidence + composition.confidence) / 2.0).clamp(0.1, 0.95);
+        existing.confirmations += 1;
+        existing.updated_at = feedback
+            .created_at
+            .clone()
+            .unwrap_or_else(|| feedback.resolved_at.clone());
+    } else {
+        adaptive.learned_compositions.push(LearnedComposition {
+            confirmations: 1,
+            created_from_feedback_id: feedback.feedback_id.clone(),
+            updated_at: feedback
+                .created_at
+                .clone()
+                .unwrap_or_else(|| feedback.resolved_at.clone()),
+            manually_disabled: false,
+            status_reason: None,
+            review_status: default_review_status(),
+            review_reason: None,
+            last_reviewed_at: None,
+            ..composition.clone()
+        });
+    }
+}
+
+fn upsert_learned_edge_profiles(
+    adaptive: &mut AdaptiveLearningModel,
+    incident_graph: &InferenceGraph,
+    cause_type: &str,
+    supporting_event_ids: &[String],
+    feedback: &inferra_storage::StoredFeedback,
+) {
+    let support_ids = supporting_event_ids
+        .iter()
+        .cloned()
+        .collect::<std::collections::BTreeSet<_>>();
+    let candidate_edges = incident_graph
+        .edges
+        .iter()
+        .filter(|edge| {
+            support_ids.is_empty()
+                || support_ids.contains(&edge.source_event_id)
+                || support_ids.contains(&edge.target_event_id)
+                || cause_type_for_edge(&edge.edge_type) == cause_type
+        })
+        .take(12)
+        .cloned()
+        .collect::<Vec<_>>();
+    for edge in candidate_edges {
+        let source_service = graph_node(incident_graph, &edge.source_event_id).map(|node| node.service_id.clone());
+        let target_service = graph_node(incident_graph, &edge.target_event_id).map(|node| node.service_id.clone());
+        let profile_id = format!(
+            "edge_{}_{}_{}_{}",
+            edge.edge_type,
+            source_service.as_deref().unwrap_or("any"),
+            target_service.as_deref().unwrap_or("any"),
+            cause_type
+        );
+        if let Some(existing) = adaptive.learned_edge_profiles.iter_mut().find(|profile| {
+            profile.edge_type == edge.edge_type
+                && profile.source_service == source_service
+                && profile.target_service == target_service
+                && profile.cause_type.as_deref() == Some(cause_type)
+        }) {
+            existing.confirmations += 1;
+            let count = existing.confirmations as f64;
+            existing.average_plausibility =
+                ((existing.average_plausibility * (count - 1.0)) + edge.plausibility) / count;
+            existing.average_latency_ms =
+                ((existing.average_latency_ms * (count - 1.0)) + edge.latency_ms) / count;
+            existing.updated_at = feedback
+                .created_at
+                .clone()
+                .unwrap_or_else(|| feedback.resolved_at.clone());
+        } else {
+            adaptive.learned_edge_profiles.push(LearnedEdgeProfile {
+                profile_id: slug(&profile_id),
+                edge_type: edge.edge_type.clone(),
+                source_service,
+                target_service,
+                cause_type: Some(cause_type.to_string()),
+                confirmations: 1,
+                false_positives: 0,
+                average_plausibility: edge.plausibility,
+                average_latency_ms: edge.latency_ms,
+                created_from_feedback_id: feedback.feedback_id.clone(),
+                updated_at: feedback
+                    .created_at
+                    .clone()
+                    .unwrap_or_else(|| feedback.resolved_at.clone()),
+                manually_disabled: false,
+                status_reason: None,
+                review_status: default_review_status(),
+                review_reason: None,
+                last_reviewed_at: None,
+            });
+        }
+    }
+}
+
+fn mark_learned_false_positives(
+    adaptive: &mut AdaptiveLearningModel,
+    incident_events: &[EventRow],
+    incident_graph: &InferenceGraph,
+) {
+    let learning = LearningArtifacts {
+        adaptive: adaptive.clone(),
+        ..LearningArtifacts::default()
+    };
+    for template in adaptive.learned_templates.iter_mut() {
+        if template.requires.is_empty() || !template_is_active(template) {
+            continue;
+        }
+        let all_requirements_match = template.requires.iter().all(|requirement| {
+            !event_ids_for_requirement(incident_events, requirement, &learning).is_empty()
+        });
+        if all_requirements_match {
+            template.false_positives += 1;
+            template.updated_at = now_iso();
+            for requirement in &template.requires {
+                if let Some(detector) = adaptive
+                    .learned_detectors
+                    .iter_mut()
+                    .find(|detector| detector.requirement_name == *requirement)
+                {
+                    detector.false_positives += 1;
+                    detector.updated_at = now_iso();
+                }
+            }
+        }
+    }
+    let incident_event_ids = incident_events
+        .iter()
+        .filter_map(|event| event.event_id.clone())
+        .collect::<Vec<_>>();
+    for composition in adaptive.learned_compositions.iter_mut() {
+        if composition.requires.is_empty() || !composition_is_active(composition) {
+            continue;
+        }
+        let all_requirements_match = composition.requires.iter().all(|requirement| {
+            !event_ids_for_requirement(incident_events, requirement, &learning).is_empty()
+        });
+        let graph_support = learned_rule_graph_support(
+            incident_graph,
+            &incident_event_ids,
+            &composition.preferred_edge_types,
+        );
+        if all_requirements_match && (composition.preferred_edge_types.is_empty() || graph_support > 0.0) {
+            composition.false_positives += 1;
+            composition.updated_at = now_iso();
+        }
+    }
+    for profile in adaptive.learned_edge_profiles.iter_mut() {
+        if edge_profile_is_active(profile) && edge_profile_matches_graph(profile, incident_graph) {
+            profile.false_positives += 1;
+            profile.updated_at = now_iso();
+        }
+    }
+}
+
+fn merge_unique(target: &mut Vec<String>, additions: &[String], limit: usize) {
+    for value in additions {
+        if !target.iter().any(|existing| existing == value) {
+            target.push(value.clone());
+        }
+        if target.len() >= limit {
+            break;
+        }
+    }
+}
+
+fn parse_json_string_array_value(value: Option<&serde_json::Value>) -> Vec<String> {
+    value
+        .and_then(serde_json::Value::as_array)
+        .map(|items| {
+            items.iter()
+                .filter_map(serde_json::Value::as_str)
+                .map(str::to_string)
+                .collect::<Vec<_>>()
+        })
+        .unwrap_or_default()
+}
+
+fn learned_rule_graph_support(
+    inference_graph: &InferenceGraph,
+    supporting_event_ids: &[String],
+    preferred_edge_types: &[String],
+) -> f64 {
+    if preferred_edge_types.is_empty() {
+        return 0.0;
+    }
+    let support_ids = supporting_event_ids
+        .iter()
+        .cloned()
+        .collect::<std::collections::BTreeSet<_>>();
+    let matching = inference_graph
+        .edges
+        .iter()
+        .filter(|edge| preferred_edge_types.iter().any(|item| item == &edge.edge_type))
+        .filter(|edge| {
+            support_ids.is_empty()
+                || support_ids.contains(&edge.source_event_id)
+                || support_ids.contains(&edge.target_event_id)
+        })
+        .collect::<Vec<_>>();
+    if matching.is_empty() {
+        0.0
+    } else {
+        matching.iter().map(|edge| edge.plausibility).sum::<f64>() / matching.len() as f64
+    }
+}
+
+fn detector_artifact_refs_for_requirements(
+    requirements: &[String],
+    learning: &LearningArtifacts,
+) -> Vec<LearningArtifactRef> {
+    let requirement_set = requirements.iter().collect::<std::collections::BTreeSet<_>>();
+    learning
+        .adaptive
+        .learned_detectors
+        .iter()
+        .filter(|detector| detector_is_active(detector))
+        .filter(|detector| requirement_set.contains(&detector.requirement_name))
+        .map(|detector| LearningArtifactRef {
+            kind: "detector".into(),
+            artifact_id: detector.detector_id.clone(),
+            label: detector.requirement_name.clone(),
+            reason: "matched learned detector requirement".into(),
+            impact_metric: None,
+            impact_value: None,
+        })
+        .collect()
+}
+
+fn candidate_learning_provenance(
+    candidate: &Candidate,
+    events: &[EventRow],
+    inference_graph: &InferenceGraph,
+    learning: &LearningArtifacts,
+) -> serde_json::Value {
+    let support_ids = candidate
+        .supporting_events
+        .iter()
+        .cloned()
+        .collect::<std::collections::BTreeSet<_>>();
+    let mut refs = candidate.provenance_refs.clone();
+    for detector in learning
+        .adaptive
+        .learned_detectors
+        .iter()
+        .filter(|detector| detector_is_active(detector))
+    {
+        let matched = event_ids_for_requirement(events, &detector.requirement_name, learning);
+        if matched.iter().any(|event_id| support_ids.contains(event_id)) {
+            refs.push(LearningArtifactRef {
+                kind: "detector".into(),
+                artifact_id: detector.detector_id.clone(),
+                label: detector.requirement_name.clone(),
+                reason: "supporting evidence matched learned detector".into(),
+                impact_metric: Some("matched_events".into()),
+                impact_value: Some(matched.iter().filter(|event_id| support_ids.contains(*event_id)).count() as f64),
+            });
+        }
+    }
+    refs.extend(edge_profile_refs_for_candidate(
+        candidate,
+        inference_graph,
+        learning,
+    ));
+    let refs = dedup_learning_artifact_refs(refs);
+    let edge_types = candidate_relevant_edge_types(candidate, inference_graph);
+    let estimated_total_impact = refs
+        .iter()
+        .filter(|artifact| {
+            matches!(
+                artifact.impact_metric.as_deref(),
+                Some("prior_contribution" | "plausibility_delta")
+            )
+        })
+        .filter_map(|artifact| artifact.impact_value)
+        .sum::<f64>();
+    serde_json::json!({
+        "has_learned_influence": !refs.is_empty(),
+        "estimated_total_impact": estimated_total_impact,
+        "artifacts": refs.iter().map(|artifact| serde_json::json!({
+            "kind": artifact.kind,
+            "artifact_id": artifact.artifact_id,
+            "label": artifact.label,
+            "reason": artifact.reason,
+            "impact_metric": artifact.impact_metric,
+            "impact_value": artifact.impact_value,
+        })).collect::<Vec<_>>(),
+        "matched_edge_types": edge_types,
+    })
+}
+
+fn edge_profile_refs_for_candidate(
+    candidate: &Candidate,
+    inference_graph: &InferenceGraph,
+    learning: &LearningArtifacts,
+) -> Vec<LearningArtifactRef> {
+    let support_ids = candidate
+        .supporting_events
+        .iter()
+        .cloned()
+        .collect::<std::collections::BTreeSet<_>>();
+    let relevant_edges = inference_graph
+        .edges
+        .iter()
+        .filter(|edge| {
+            support_ids.contains(&edge.source_event_id)
+                || support_ids.contains(&edge.target_event_id)
+                || candidate
+                    .root_cause_event_id
+                    .as_ref()
+                    .map(|event_id| event_id == &edge.source_event_id || event_id == &edge.target_event_id)
+                    .unwrap_or(false)
+        })
+        .collect::<Vec<_>>();
+    learning
+        .adaptive
+        .learned_edge_profiles
+        .iter()
+        .filter(|profile| edge_profile_is_active(profile))
+        .filter(|profile| {
+            profile
+                .cause_type
+                .as_deref()
+                .map(|cause_type| cause_type == candidate.cause_type)
+                .unwrap_or(true)
+        })
+        .filter(|profile| {
+            relevant_edges.iter().any(|edge| {
+                edge.edge_type == profile.edge_type
+                    && profile
+                        .source_service
+                        .as_deref()
+                        .map(|service| {
+                            graph_node(inference_graph, &edge.source_event_id)
+                                .map(|node| node.service_id.as_str() == service)
+                                .unwrap_or(false)
+                        })
+                        .unwrap_or(true)
+                    && profile
+                        .target_service
+                        .as_deref()
+                        .map(|service| {
+                            graph_node(inference_graph, &edge.target_event_id)
+                                .map(|node| node.service_id.as_str() == service)
+                                .unwrap_or(false)
+                        })
+                        .unwrap_or(true)
+            })
+        })
+        .map(|profile| {
+            let delta = relevant_edges
+                .iter()
+                .flat_map(|edge| edge.learned_adjustments.iter())
+                .filter(|adjustment| adjustment.artifact_id == profile.profile_id)
+                .map(|adjustment| adjustment.delta)
+                .sum::<f64>();
+            LearningArtifactRef {
+                kind: "edge_profile".into(),
+                artifact_id: profile.profile_id.clone(),
+                label: profile.edge_type.clone(),
+                reason: "inference graph plausibility adjusted by learned edge profile".into(),
+                impact_metric: Some("plausibility_delta".into()),
+                impact_value: Some(delta),
+            }
+        })
+        .collect()
+}
+
+fn candidate_relevant_edge_types(candidate: &Candidate, inference_graph: &InferenceGraph) -> Vec<String> {
+    let support_ids = candidate
+        .supporting_events
+        .iter()
+        .cloned()
+        .collect::<std::collections::BTreeSet<_>>();
+    let mut edge_types = inference_graph
+        .edges
+        .iter()
+        .filter(|edge| {
+            support_ids.contains(&edge.source_event_id)
+                || support_ids.contains(&edge.target_event_id)
+                || candidate
+                    .root_cause_event_id
+                    .as_ref()
+                    .map(|event_id| event_id == &edge.source_event_id || event_id == &edge.target_event_id)
+                    .unwrap_or(false)
+        })
+        .map(|edge| edge.edge_type.clone())
+        .collect::<Vec<_>>();
+    edge_types.sort();
+    edge_types.dedup();
+    edge_types
+}
+
+fn dedup_learning_artifact_refs(
+    refs: Vec<LearningArtifactRef>,
+) -> Vec<LearningArtifactRef> {
+    let mut by_key = std::collections::BTreeMap::<(String, String), LearningArtifactRef>::new();
+    for item in refs {
+        let key = (item.kind.clone(), item.artifact_id.clone());
+        if let Some(existing) = by_key.get_mut(&key) {
+            existing.impact_value = match (existing.impact_value, item.impact_value) {
+                (Some(left), Some(right)) => Some(left + right),
+                (left @ Some(_), None) => left,
+                (None, right) => right,
+            };
+        } else {
+            by_key.insert(key, item);
+        }
+    }
+    by_key.into_values().collect()
+}
+
+fn detector_is_active(detector: &LearnedDetector) -> bool {
+    !detector.manually_disabled && detector.confirmations > detector.false_positives
+}
+
+fn template_is_active(template: &LearnedTemplate) -> bool {
+    !template.manually_disabled && template.confirmations > template.false_positives
+}
+
+fn composition_is_active(composition: &LearnedComposition) -> bool {
+    !composition.manually_disabled && composition.confirmations > composition.false_positives
+}
+
+fn edge_profile_is_active(profile: &LearnedEdgeProfile) -> bool {
+    !profile.manually_disabled && profile.confirmations > profile.false_positives
+}
+
+fn edge_profile_matches_graph(profile: &LearnedEdgeProfile, graph: &InferenceGraph) -> bool {
+    graph.edges.iter().any(|edge| {
+        edge.edge_type == profile.edge_type
+            && profile
+                .cause_type
+                .as_deref()
+                .map(|cause_type| cause_type_for_edge(&edge.edge_type) == cause_type)
+                .unwrap_or(true)
+            && profile
+                .source_service
+                .as_deref()
+                .map(|service| {
+                    graph_node(graph, &edge.source_event_id)
+                        .map(|node| node.service_id.as_str() == service)
+                        .unwrap_or(false)
+                })
+                .unwrap_or(true)
+            && profile
+                .target_service
+                .as_deref()
+                .map(|service| {
+                    graph_node(graph, &edge.target_event_id)
+                        .map(|node| node.service_id.as_str() == service)
+                        .unwrap_or(false)
+                })
+                .unwrap_or(true)
+    })
+}
+
+fn apply_learned_edge_adjustment(
+    edge: &mut InferenceEdge,
+    graph_events: &[GraphEvent],
+    learning: &LearningArtifacts,
+) {
+    let source = graph_events.iter().find(|event| event.event_id == edge.source_event_id);
+    let target = graph_events.iter().find(|event| event.event_id == edge.target_event_id);
+    let cause_type = cause_type_for_edge(&edge.edge_type);
+    let profiles = learning
+        .adaptive
+        .learned_edge_profiles
+        .iter()
+        .filter(|profile| edge_profile_is_active(profile))
+        .filter(|profile| profile.edge_type == edge.edge_type)
+        .filter(|profile| {
+            profile
+                .cause_type
+                .as_deref()
+                .map(|value| value == cause_type)
+                .unwrap_or(true)
+        })
+        .filter(|profile| {
+            profile
+                .source_service
+                .as_deref()
+                .map(|value| source.map(|event| event.service_id.as_str()) == Some(value))
+                .unwrap_or(true)
+        })
+        .filter(|profile| {
+            profile
+                .target_service
+                .as_deref()
+                .map(|value| target.map(|event| event.service_id.as_str()) == Some(value))
+                .unwrap_or(true)
+        })
+        .collect::<Vec<_>>();
+    if profiles.is_empty() {
+        return;
+    }
+    let success_ratio = profiles
+        .iter()
+        .map(|profile| {
+            profile.confirmations as f64
+                / (profile.confirmations + profile.false_positives).max(1) as f64
+        })
+        .sum::<f64>()
+        / profiles.len() as f64;
+    let average_plausibility = profiles
+        .iter()
+        .map(|profile| profile.average_plausibility)
+        .sum::<f64>()
+        / profiles.len() as f64;
+    let average_latency = profiles
+        .iter()
+        .map(|profile| profile.average_latency_ms)
+        .sum::<f64>()
+        / profiles.len() as f64;
+    let baseline = edge.plausibility;
+    let latency_alignment = if average_latency <= 0.0 {
+        1.0
+    } else {
+        let drift = ((edge.latency_ms - average_latency).abs() / average_latency.max(1.0)).min(1.0);
+        1.0 - (drift * 0.15)
+    };
+    let anchored = (edge.plausibility * 0.7) + (average_plausibility * 0.3);
+    let multiplier = 0.9 + (success_ratio * 0.2);
+    edge.plausibility = (anchored * multiplier * latency_alignment).clamp(0.0, 1.0);
+    let total_delta = edge.plausibility - baseline;
+    let delta_share = if profiles.is_empty() {
+        0.0
+    } else {
+        total_delta / profiles.len() as f64
+    };
+    edge.learned_adjustments = profiles
+        .iter()
+        .map(|profile| InferenceEdgeAdjustment {
+            artifact_id: profile.profile_id.clone(),
+            artifact_label: profile.edge_type.clone(),
+            baseline_plausibility: baseline,
+            adjusted_plausibility: edge.plausibility,
+            delta: delta_share,
+        })
+        .collect();
+}
+
+fn learned_detector_matches_event(
+    detector: &LearnedDetector,
+    event: &EventRow,
+    text: &str,
+) -> bool {
+    if detector
+        .min_severity
+        .is_some_and(|minimum| event_severity(event).unwrap_or(SEVERITY_INFO) < minimum)
+    {
+        return false;
+    }
+    if !detector.source_types.is_empty() {
+        let event_source = event
+            .source_ref
+            .as_ref()
+            .and_then(|source| source.source_type.as_ref())
+            .map(|value| value.to_ascii_lowercase());
+        if !event_source
+            .as_deref()
+            .is_some_and(|source_type| detector.source_types.iter().any(|item| item == source_type))
+        {
+            return false;
+        }
+    }
+    let term_matches = detector
+        .positive_terms
+        .iter()
+        .filter(|term| text.contains(term.as_str()))
+        .count();
+    let tag_matches = detector
+        .tags
+        .iter()
+        .filter(|tag| {
+            event.tags
+                .as_ref()
+                .map(|items| items.iter().any(|item| item.eq_ignore_ascii_case(tag)))
+                .unwrap_or(false)
+        })
+        .count();
+    if detector.positive_terms.is_empty() {
+        return tag_matches > 0;
+    }
+    let needed_terms = detector.positive_terms.len().min(2);
+    term_matches >= needed_terms || (term_matches >= 1 && tag_matches >= 1)
+}
+
+fn clamp_learned_weights(
+    weights: &mut std::collections::BTreeMap<String, f64>,
+    defaults: &std::collections::BTreeMap<String, f64>,
+    max_drift: f64,
+    min_weight: f64,
+) {
+    for component in scoring_component_names() {
+        let default = *defaults.get(component).unwrap_or(&min_weight);
+        let lower = (default * (1.0 - max_drift)).max(min_weight);
+        let upper = (default * (1.0 + max_drift)).max(lower);
+        let slot = weights.entry(component.to_string()).or_insert(default);
+        *slot = slot.clamp(lower, upper);
+    }
+}
+
+fn renormalize_weights(
+    weights: &mut std::collections::BTreeMap<String, f64>,
+    target_total: f64,
+) {
+    let current_total = weights.values().sum::<f64>().max(0.0001);
+    for value in weights.values_mut() {
+        *value = (*value / current_total) * target_total;
+    }
+}
+
+fn scoring_component_names() -> [&'static str; 6] {
+    [
+        "temporal_alignment",
+        "correlation_strength",
+        "frequency_weight",
+        "dependency_proximity",
+        "evidence_coverage",
+        "anomaly_severity",
+    ]
+}
+
+fn score_breakdown_component(hypothesis: &serde_json::Value, component: &str) -> f64 {
+    hypothesis
+        .get("score_breakdown")
+        .and_then(|value| value.get(component))
+        .and_then(serde_json::Value::as_f64)
+        .unwrap_or_default()
+}
+
+fn calibration_enabled(config: &TomlValue) -> bool {
+    config
+        .get("calibration")
+        .and_then(|value| value.get("enabled"))
+        .and_then(TomlValue::as_bool)
+        .unwrap_or(true)
+}
+
+fn calibration_bucket_count(config: &TomlValue) -> usize {
+    config
+        .get("calibration")
+        .and_then(|value| value.get("bucket_count"))
+        .and_then(TomlValue::as_integer)
+        .unwrap_or(5)
+        .clamp(2, 20) as usize
+}
+
+fn calibration_min_samples(config: &TomlValue) -> u64 {
+    config
+        .get("calibration")
+        .and_then(|value| value.get("min_samples_per_bucket"))
+        .and_then(TomlValue::as_integer)
+        .unwrap_or(10)
+        .max(1) as u64
+}
+
+fn default_calibration_buckets(bucket_count: usize) -> Vec<CalibrationBucket> {
+    let bucket_count = bucket_count.max(1);
+    let size = 1.0 / bucket_count as f64;
+    (0..bucket_count)
+        .map(|index| CalibrationBucket {
+            score_lower: index as f64 * size,
+            score_upper: if index + 1 == bucket_count {
+                1.0
+            } else {
+                (index + 1) as f64 * size
+            },
+            total_predictions: 0,
+            correct_predictions: 0,
+            accuracy: 0.0,
+            sample_confidence: "insufficient".into(),
+        })
+        .collect()
+}
+
+fn calibration_bucket_index(buckets: &[CalibrationBucket], score: f64) -> usize {
+    buckets
+        .iter()
+        .position(|bucket| score >= bucket.score_lower && score < bucket.score_upper)
+        .unwrap_or_else(|| buckets.len().saturating_sub(1))
+}
+
+fn calibration_bucket_accuracy(calibration: &CalibrationModel, score: f64) -> f64 {
+    calibration
+        .buckets
+        .get(calibration_bucket_index(&calibration.buckets, score))
+        .map(|bucket| bucket.accuracy)
+        .unwrap_or_default()
+}
+
+fn calibration_bucket_is_sufficient(calibration: &CalibrationModel, score: f64) -> bool {
+    calibration
+        .buckets
+        .get(calibration_bucket_index(&calibration.buckets, score))
+        .map(|bucket| bucket.sample_confidence == "sufficient")
+        .unwrap_or(false)
+}
+
+fn calibration_staleness_status(config: &TomlValue, calibration: &CalibrationModel) -> String {
+    if calibration.total_feedback_count < 20 {
+        return "insufficient_data".into();
+    }
+    let stale_days = config
+        .get("calibration")
+        .and_then(|value| value.get("staleness_threshold_days"))
+        .and_then(TomlValue::as_integer)
+        .unwrap_or(30)
+        .max(1);
+    let Some(last_updated) = calibration
+        .last_updated
+        .as_deref()
+        .and_then(parse_rfc3339)
+    else {
+        return "insufficient_data".into();
+    };
+    let age = time::OffsetDateTime::now_utc() - last_updated;
+    if age.whole_days() >= stale_days {
+        "stale".into()
+    } else {
+        "current".into()
+    }
+}
+
+fn scoring_weight_defaults() -> std::collections::BTreeMap<String, f64> {
+    std::collections::BTreeMap::from([
+        ("temporal_alignment".into(), 0.25),
+        ("correlation_strength".into(), 0.20),
+        ("frequency_weight".into(), 0.15),
+        ("dependency_proximity".into(), 0.15),
+        ("evidence_coverage".into(), 0.15),
+        ("anomaly_severity".into(), 0.10),
+    ])
+}
+
+fn scoring_learning_rate(config: &TomlValue) -> f64 {
+    table_f64(config, &["scoring", "tuning", "learning_rate"], 0.05).clamp(0.0, 1.0)
+}
+
+fn scoring_max_drift(config: &TomlValue) -> f64 {
+    table_f64(config, &["scoring", "tuning", "max_drift_from_default"], 0.5)
+        .clamp(0.0, 1.0)
+}
+
+fn scoring_min_weight(config: &TomlValue) -> f64 {
+    table_f64(config, &["scoring", "tuning", "min_weight"], 0.03).clamp(0.0, 1.0)
+}
+
+fn effective_scoring_weights(
+    config: &TomlValue,
+    learned_weights: &LearnedScoringWeights,
+) -> ScoringWeights {
+    let defaults = scoring_weights(config);
+    let lookup = |key: &str, fallback: f64| {
+        learned_weights
+            .effective_weights
+            .get(key)
+            .copied()
+            .unwrap_or(fallback)
+    };
+    let temporal_alignment = lookup("temporal_alignment", defaults.temporal_alignment);
+    let correlation_strength = lookup("correlation_strength", defaults.correlation_strength);
+    let frequency_weight = lookup("frequency_weight", defaults.frequency_weight);
+    let dependency_proximity = lookup("dependency_proximity", defaults.dependency_proximity);
+    let evidence_coverage = lookup("evidence_coverage", defaults.evidence_coverage);
+    let anomaly_severity = lookup("anomaly_severity", defaults.anomaly_severity);
+    let total = temporal_alignment
+        + correlation_strength
+        + frequency_weight
+        + dependency_proximity
+        + evidence_coverage
+        + anomaly_severity;
+    ScoringWeights {
+        temporal_alignment,
+        correlation_strength,
+        frequency_weight,
+        dependency_proximity,
+        evidence_coverage,
+        anomaly_severity,
+        total,
+    }
+}
+
+fn candidate_scoring_components(
+    events: &[EventRow],
+    candidate: &Candidate,
+    domain_metrics: &DomainMetrics,
+    inference_graph: &InferenceGraph,
+) -> CandidateScoring {
+    let support_count = candidate.supporting_events.len().max(1);
+    let coverage = (support_count as f64 / domain_metrics.event_count.max(1) as f64).clamp(0.0, 1.0);
+    let related_services = candidate.affected_services.len().max(1);
+    let source_types = distinct_source_types(events).len().max(1);
+    let base_correlation = (((related_services.saturating_sub(1)).min(4) as f64) / 4.0
+        + ((source_types.saturating_sub(1)).min(4) as f64) / 4.0)
+        / 2.0;
+    let frequency_weight = (domain_metrics.warn_count.max(domain_metrics.error_count) as f64
+        / domain_metrics.event_count.max(1) as f64)
+        .clamp(0.0, 1.0);
+    let graph_impact = candidate
+        .root_cause_event_id
+        .as_deref()
+        .map(|event_id| graph_origin_impact(inference_graph, event_id))
+        .unwrap_or_default();
+    let graph_plausibility = candidate
+        .root_cause_event_id
+        .as_deref()
+        .map(|event_id| average_outgoing_plausibility(inference_graph, event_id))
+        .unwrap_or_default();
+    CandidateScoring {
+        temporal_alignment: domain_metrics.temporal_alignment.max(graph_plausibility),
+        correlation_strength: base_correlation.max(graph_impact * 0.8),
+        frequency_weight,
+        dependency_proximity: candidate.dependency_proximity.max(graph_plausibility),
+        evidence_coverage: coverage,
+        anomaly_severity: domain_metrics.anomaly_score,
+        graph_impact,
+    }
+}
+
+fn candidate_tiebreak_ordering(
+    config: &TomlValue,
+    left: &Candidate,
+    right: &Candidate,
+) -> std::cmp::Ordering {
+    let order = config
+        .get("scoring")
+        .and_then(|value| value.get("tuning"))
+        .and_then(|value| value.get("tiebreak_order"))
+        .and_then(TomlValue::as_array)
+        .map(|items| {
+            items.iter()
+                .filter_map(TomlValue::as_str)
+                .map(str::to_string)
+                .collect::<Vec<_>>()
+        })
+        .unwrap_or_else(|| {
+            vec![
+                "evidence_coverage".into(),
+                "contradicting_events_asc".into(),
+                "root_cause_timestamp_asc".into(),
+            ]
+        });
+    for key in order {
+        let ordering = match key.as_str() {
+            "evidence_coverage" => cmp_f64_desc(left.scoring.evidence_coverage, right.scoring.evidence_coverage),
+            "contradicting_events_asc" => left
+                .contradicting_events
+                .len()
+                .cmp(&right.contradicting_events.len()),
+            "root_cause_timestamp_asc" => left
+                .root_cause_timestamp
+                .cmp(&right.root_cause_timestamp),
+            "graph_impact" => cmp_f64_desc(left.scoring.graph_impact, right.scoring.graph_impact),
+            _ => std::cmp::Ordering::Equal,
+        };
+        if ordering != std::cmp::Ordering::Equal {
+            return ordering;
+        }
+    }
+    left.description.cmp(&right.description)
+}
+
+fn cmp_f64_desc(left: f64, right: f64) -> std::cmp::Ordering {
+    right
+        .partial_cmp(&left)
+        .unwrap_or(std::cmp::Ordering::Equal)
+}
+
+fn graph_root_candidates(
+    events: &[EventRow],
+    all_services: &[String],
+    _source_types: &[String],
+    domain_metrics: &DomainMetrics,
+    inference_graph: &InferenceGraph,
+) -> Vec<Candidate> {
+    inference_graph
+        .root_candidates
+        .iter()
+        .take(3)
+        .filter_map(|event_id| {
+            let node = graph_node(inference_graph, event_id)?;
+            let support_ids = support_ids_from_root(inference_graph, event_id);
+            let edge_type = dominant_outgoing_edge_type(inference_graph, event_id)
+                .unwrap_or_else(|| "same_service_escalation".into());
+            let cause_type = cause_type_for_edge(&edge_type);
+            let graph_impact = graph_origin_impact(inference_graph, event_id);
+            let average_plausibility = average_outgoing_plausibility(inference_graph, event_id);
+            Some(Candidate {
+                cause_type,
+                description: format!(
+                    "Inference graph origin candidate '{}' reaches {:.0}% of symptom leaves.",
+                    node.summary,
+                    graph_impact * 100.0
+                ),
+                prior: (0.45 + graph_impact * 0.35 + average_plausibility * 0.2)
+                    .max(domain_metrics.anomaly_score * 0.5)
+                    .clamp(0.0, 0.95),
+                score: 0.0,
+                suggested_checks: assumptions_for_origin(inference_graph, event_id)
+                    .into_iter()
+                    .take(3)
+                    .chain(std::iter::once(
+                        "Validate whether the inferred origin event is a real trigger or just the first visible symptom.".into(),
+                    ))
+                    .collect(),
+                supporting_events: support_ids.clone(),
+                affected_services: services_for_event_ids(events, &support_ids)
+                    .into_iter()
+                    .chain(all_services.iter().cloned())
+                    .collect::<std::collections::BTreeSet<_>>()
+                    .into_iter()
+                    .collect(),
+                contradicting_events: Vec::new(),
+                dependency_proximity: average_plausibility,
+                is_valid: true,
+                invalidation_reasons: Vec::new(),
+                root_cause_event_id: Some(event_id.clone()),
+                root_cause_timestamp: Some(node.timestamp.clone()),
+                scoring: CandidateScoring::default(),
+                provenance_refs: Vec::new(),
+            })
+        })
+        .collect()
+}
+
+fn graph_root_for_cause(inference_graph: &InferenceGraph, cause_type: &str) -> Option<String> {
+    inference_graph.root_candidates.iter().find_map(|event_id| {
+        let edge_type = dominant_outgoing_edge_type(inference_graph, event_id)?;
+        (cause_type_for_edge(&edge_type) == cause_type).then(|| event_id.clone())
+    })
+}
+
+fn graph_node<'a>(graph: &'a InferenceGraph, event_id: &str) -> Option<&'a InferenceNode> {
+    graph.nodes.iter().find(|node| node.event_id == event_id)
+}
+
+fn support_ids_from_root(graph: &InferenceGraph, root_event_id: &str) -> Vec<String> {
+    let mut seen = std::collections::BTreeSet::from([root_event_id.to_string()]);
+    let mut stack = vec![root_event_id.to_string()];
+    while let Some(current) = stack.pop() {
+        for edge in graph.edges.iter().filter(|edge| edge.source_event_id == current) {
+            if seen.insert(edge.target_event_id.clone()) {
+                stack.push(edge.target_event_id.clone());
+            }
+        }
+    }
+    seen.into_iter().collect()
+}
+
+fn graph_origin_impact(graph: &InferenceGraph, root_event_id: &str) -> f64 {
+    let reachable = support_ids_from_root(graph, root_event_id)
+        .into_iter()
+        .filter(|event_id| graph.leaf_nodes.iter().any(|leaf| leaf == event_id))
+        .count();
+    reachable as f64 / graph.leaf_nodes.len().max(1) as f64
+}
+
+fn dominant_outgoing_edge_type(graph: &InferenceGraph, root_event_id: &str) -> Option<String> {
+    let mut counts = std::collections::BTreeMap::<String, usize>::new();
+    for edge in graph.edges.iter().filter(|edge| edge.source_event_id == root_event_id) {
+        *counts.entry(edge.edge_type.clone()).or_default() += 1;
+    }
+    counts
+        .into_iter()
+        .max_by(|left, right| left.1.cmp(&right.1).then_with(|| left.0.cmp(&right.0)))
+        .map(|item| item.0)
+}
+
+fn average_outgoing_plausibility(graph: &InferenceGraph, event_id: &str) -> f64 {
+    let outgoing = graph
+        .edges
+        .iter()
+        .filter(|edge| edge.source_event_id == event_id)
+        .collect::<Vec<_>>();
+    if outgoing.is_empty() {
+        return 0.0;
+    }
+    outgoing.iter().map(|edge| edge.plausibility).sum::<f64>() / outgoing.len() as f64
+}
+
+fn assumptions_for_origin(graph: &InferenceGraph, event_id: &str) -> Vec<String> {
+    graph.edges
+        .iter()
+        .filter(|edge| edge.source_event_id == event_id)
+        .flat_map(|edge| edge.requires.iter().cloned())
+        .collect::<std::collections::BTreeSet<_>>()
+        .into_iter()
+        .collect()
+}
+
+fn cause_type_for_edge(edge_type: &str) -> String {
+    match edge_type {
+        "dependency_propagation" | "timeout_chain" => "dependency_failure",
+        "resource_preceded_error" => "resource_pressure",
+        "restart_preceded_disconnection" | "same_service_escalation" => "service_instability",
+        "config_preceded_error" => "configuration_change",
+        "shared_fate" => "shared_fate",
+        _ => "unknown",
+    }
+    .into()
+}
+
+#[cfg(test)]
+fn build_inference_graph(config: &TomlValue, events: &[EventRow]) -> InferenceGraph {
+    build_inference_graph_with_learning(config, events, &LearningArtifacts::default())
+}
+
+fn build_inference_graph_with_learning(
+    config: &TomlValue,
+    events: &[EventRow],
+    learning: &LearningArtifacts,
+) -> InferenceGraph {
+    let max_events = config
+        .get("inference_graph")
+        .and_then(|value| value.get("max_events_for_graph"))
+        .and_then(TomlValue::as_integer)
+        .unwrap_or(500)
+        .clamp(10, 5_000) as usize;
+    let plausibility_threshold = table_f64(config, &["inference_graph", "plausibility_threshold"], 0.15)
+        .clamp(0.0, 1.0);
+    let max_edges_per_node = config
+        .get("inference_graph")
+        .and_then(|value| value.get("max_edges_per_node"))
+        .and_then(TomlValue::as_integer)
+        .unwrap_or(10)
+        .clamp(1, 100) as usize;
+    let mut graph_events = events
+        .iter()
+        .filter_map(graph_event_from_row)
+        .collect::<Vec<_>>();
+    graph_events.sort_by(|left, right| {
+        left.timestamp
+            .cmp(&right.timestamp)
+            .then_with(|| left.event_id.cmp(&right.event_id))
+    });
+    let truncated = graph_events.len() > max_events;
+    if truncated {
+        graph_events = graph_events[graph_events.len().saturating_sub(max_events)..].to_vec();
+    }
+    if graph_events.is_empty() {
+        return InferenceGraph {
+            nodes: Vec::new(),
+            edges: Vec::new(),
+            root_candidates: Vec::new(),
+            leaf_nodes: Vec::new(),
+            truncated,
+        };
+    }
+    let by_service = group_graph_events_by_service(&graph_events);
+    let topology = topology_edges(config);
+    let mut candidate_edges = Vec::<InferenceEdge>::new();
+    if inference_strategy_enabled(config, "dependency_propagation") {
+        candidate_edges.extend(dependency_propagation_edges(&topology, &by_service));
+    }
+    if inference_strategy_enabled(config, "same_service_escalation") {
+        candidate_edges.extend(same_service_escalation_edges(&by_service));
+    }
+    if inference_strategy_enabled(config, "resource_preceded_error") {
+        candidate_edges.extend(resource_preceded_error_edges(&by_service));
+    }
+    if inference_strategy_enabled(config, "config_preceded_error") {
+        candidate_edges.extend(config_preceded_error_edges(&topology, &by_service));
+    }
+    if inference_strategy_enabled(config, "restart_preceded_disconnection") {
+        candidate_edges.extend(restart_preceded_disconnection_edges(&topology, &by_service));
+    }
+    if inference_strategy_enabled(config, "shared_fate") {
+        candidate_edges.extend(shared_fate_edges(&graph_events));
+    }
+    if inference_strategy_enabled(config, "timeout_chain") {
+        candidate_edges.extend(timeout_chain_edges(&topology, &by_service));
+    }
+    for edge in &mut candidate_edges {
+        apply_learned_edge_adjustment(edge, &graph_events, learning);
+    }
+    candidate_edges.retain(|edge| edge.plausibility >= plausibility_threshold);
+    candidate_edges.sort_by(|left, right| {
+        right
+            .plausibility
+            .partial_cmp(&left.plausibility)
+            .unwrap_or(std::cmp::Ordering::Equal)
+            .then_with(|| left.source_event_id.cmp(&right.source_event_id))
+            .then_with(|| left.target_event_id.cmp(&right.target_event_id))
+            .then_with(|| left.edge_type.cmp(&right.edge_type))
+    });
+    let mut accepted = Vec::<InferenceEdge>::new();
+    let mut outgoing = std::collections::BTreeMap::<String, usize>::new();
+    let mut incoming = std::collections::BTreeMap::<String, usize>::new();
+    let mut seen = std::collections::BTreeSet::<(String, String, String)>::new();
+    for edge in candidate_edges {
+        let key = (
+            edge.source_event_id.clone(),
+            edge.target_event_id.clone(),
+            edge.edge_type.clone(),
+        );
+        if !seen.insert(key) {
+            continue;
+        }
+        if outgoing
+            .get(&edge.source_event_id)
+            .copied()
+            .unwrap_or_default()
+            >= max_edges_per_node
+        {
+            continue;
+        }
+        if incoming
+            .get(&edge.target_event_id)
+            .copied()
+            .unwrap_or_default()
+            >= max_edges_per_node
+        {
+            continue;
+        }
+        *outgoing.entry(edge.source_event_id.clone()).or_default() += 1;
+        *incoming.entry(edge.target_event_id.clone()).or_default() += 1;
+        accepted.push(edge);
+    }
+    let nodes = graph_events
+        .iter()
+        .map(|event| {
+            let in_degree = incoming.get(&event.event_id).copied().unwrap_or_default();
+            let out_degree = outgoing.get(&event.event_id).copied().unwrap_or_default();
+            InferenceNode {
+                event_id: event.event_id.clone(),
+                service_id: event.service_id.clone(),
+                timestamp: event.timestamp_raw.clone(),
+                severity: event.severity,
+                summary: event.summary.clone(),
+                node_type: if in_degree == 0 && out_degree > 0 {
+                    "origin_candidate"
+                } else if out_degree == 0 && in_degree > 0 {
+                    "symptom"
+                } else {
+                    "intermediate"
+                }
+                .into(),
+                in_degree,
+                out_degree,
+            }
+        })
+        .collect::<Vec<_>>();
+    let mut root_candidates = nodes
+        .iter()
+        .filter(|node| node.in_degree == 0)
+        .map(|node| node.event_id.clone())
+        .collect::<Vec<_>>();
+    let leaf_nodes = nodes
+        .iter()
+        .filter(|node| node.out_degree == 0)
+        .map(|node| node.event_id.clone())
+        .collect::<Vec<_>>();
+    let graph = InferenceGraph {
+        nodes,
+        edges: accepted,
+        root_candidates: Vec::new(),
+        leaf_nodes,
+        truncated,
+    };
+    root_candidates.sort_by(|left, right| {
+        graph_origin_impact(&graph, right)
+            .partial_cmp(&graph_origin_impact(&graph, left))
+            .unwrap_or(std::cmp::Ordering::Equal)
+            .then_with(|| left.cmp(right))
+    });
+    InferenceGraph {
+        root_candidates,
+        ..graph
+    }
+}
+
+fn graph_event_from_row(event: &EventRow) -> Option<GraphEvent> {
+    Some(GraphEvent {
+        event_id: event.event_id.clone()?,
+        service_id: event.service_id.clone().unwrap_or_else(|| "runtime".into()),
+        timestamp: parse_rfc3339(event.timestamp.as_deref()?)?,
+        timestamp_raw: event.timestamp.clone()?,
+        severity: event_severity(event).unwrap_or(SEVERITY_INFO),
+        summary: event
+            .message
+            .clone()
+            .or_else(|| event.summary.clone())
+            .unwrap_or_default(),
+        source_type: event
+            .source_ref
+            .as_ref()
+            .and_then(|source| source.source_type.clone())
+            .unwrap_or_else(|| "runtime".into()),
+        tags: event.tags.clone().unwrap_or_default(),
+    })
+}
+
+fn group_graph_events_by_service(
+    events: &[GraphEvent],
+) -> std::collections::BTreeMap<String, Vec<GraphEvent>> {
+    let mut grouped = std::collections::BTreeMap::<String, Vec<GraphEvent>>::new();
+    for event in events {
+        grouped
+            .entry(event.service_id.clone())
+            .or_default()
+            .push(event.clone());
+    }
+    grouped
+}
+
+fn topology_edges(config: &TomlValue) -> Vec<(String, String)> {
+    config
+        .get("topology")
+        .and_then(|value| value.get("edges"))
+        .and_then(TomlValue::as_array)
+        .map(|items| {
+            items
+                .iter()
+                .filter_map(TomlValue::as_table)
+                .filter_map(|edge| {
+                    let source = edge.get("source").and_then(TomlValue::as_str)?;
+                    let target = edge.get("target").and_then(TomlValue::as_str)?;
+                    (!source.is_empty() && !target.is_empty())
+                        .then(|| (source.to_string(), target.to_string()))
+                })
+                .collect()
+        })
+        .unwrap_or_default()
+}
+
+fn inference_strategy_enabled(config: &TomlValue, strategy: &str) -> bool {
+    config
+        .get("inference_graph")
+        .and_then(|value| value.get("strategies"))
+        .and_then(|value| value.get(strategy))
+        .and_then(TomlValue::as_bool)
+        .unwrap_or(true)
+}
+
+fn dependency_propagation_edges(
+    topology: &[(String, String)],
+    by_service: &std::collections::BTreeMap<String, Vec<GraphEvent>>,
+) -> Vec<InferenceEdge> {
+    let mut edges = Vec::new();
+    for (source, target) in topology {
+        let Some(source_events) = by_service.get(source) else {
+            continue;
+        };
+        let Some(target_events) = by_service.get(target) else {
+            continue;
+        };
+        for source_event in source_events
+            .iter()
+            .filter(|event| event.severity >= SEVERITY_ERROR)
+        {
+            for target_event in target_events
+                .iter()
+                .filter(|event| event.severity >= SEVERITY_WARN)
+            {
+                if let Some(edge) = make_graph_edge(
+                    source_event,
+                    target_event,
+                    "dependency_propagation",
+                    10.0,
+                    60.0,
+                    format!("{source} errored before dependent {target}"),
+                    vec![
+                        format!("service graph edge {source}->{target} is correct"),
+                        "temporal proximity implies contribution".into(),
+                    ],
+                ) {
+                    edges.push(edge);
+                }
+            }
+        }
+    }
+    edges
+}
+
+fn same_service_escalation_edges(
+    by_service: &std::collections::BTreeMap<String, Vec<GraphEvent>>,
+) -> Vec<InferenceEdge> {
+    let mut edges = Vec::new();
+    for (service_id, events) in by_service {
+        for window in events.windows(2) {
+            let [left, right] = window else { continue };
+            if right.severity > left.severity {
+                if let Some(edge) = make_graph_edge(
+                    left,
+                    right,
+                    "same_service_escalation",
+                    10.0,
+                    30.0,
+                    format!("{service_id} severity escalated"),
+                    vec!["severity escalation is progressive, not coincidental".into()],
+                ) {
+                    edges.push(edge);
+                }
+            }
+        }
+    }
+    edges
+}
+
+fn resource_preceded_error_edges(
+    by_service: &std::collections::BTreeMap<String, Vec<GraphEvent>>,
+) -> Vec<InferenceEdge> {
+    let mut edges = Vec::new();
+    for (service_id, events) in by_service {
+        let resource_events = events.iter().filter(|event| {
+            event.source_type == "host_metrics"
+                || event.source_type == "process_snapshot"
+                || has_any_term(
+                    &format!("{} {}", event.summary, event.tags.join(" ")).to_ascii_lowercase(),
+                    &["cpu", "memory", "disk", "oom", "saturation", "resource"],
+                )
+        });
+        let error_events = events.iter().filter(|event| event.severity >= SEVERITY_ERROR);
+        for resource_event in resource_events {
+            for error_event in error_events.clone() {
+                if let Some(edge) = make_graph_edge(
+                    resource_event,
+                    error_event,
+                    "resource_preceded_error",
+                    12.0,
+                    60.0,
+                    format!("resource pressure on {service_id} preceded error"),
+                    vec!["resource metric is related to the error".into()],
+                ) {
+                    edges.push(edge);
+                }
+            }
+        }
+    }
+    edges
+}
+
+fn config_preceded_error_edges(
+    topology: &[(String, String)],
+    by_service: &std::collections::BTreeMap<String, Vec<GraphEvent>>,
+) -> Vec<InferenceEdge> {
+    let mut edges = Vec::new();
+    for (service_id, events) in by_service {
+        let config_events = events.iter().filter(|event| {
+            has_any_term(
+                &format!("{} {}", event.summary, event.tags.join(" ")).to_ascii_lowercase(),
+                &["config", "deploy", "deployment", "rollout", "release"],
+            )
+        });
+        for config_event in config_events {
+            for candidate_service in std::iter::once(service_id)
+                .chain(topology.iter().filter_map(|(source, target)| {
+                    (source == service_id).then_some(target)
+                }))
+            {
+                if let Some(related_events) = by_service.get(candidate_service.as_str()) {
+                    for error_event in related_events
+                        .iter()
+                        .filter(|event| event.severity >= SEVERITY_ERROR)
+                    {
+                        if let Some(edge) = make_graph_edge(
+                            config_event,
+                            error_event,
+                            "config_preceded_error",
+                            60.0,
+                            300.0,
+                            format!(
+                                "configuration change on {} preceded error on {}",
+                                service_id, candidate_service
+                            ),
+                            vec![
+                                "config change is relevant to the error".into(),
+                                "temporal proximity implies contribution (weak)".into(),
+                            ],
+                        ) {
+                            edges.push(edge);
+                        }
+                    }
+                }
+            }
+        }
+    }
+    edges
+}
+
+fn restart_preceded_disconnection_edges(
+    topology: &[(String, String)],
+    by_service: &std::collections::BTreeMap<String, Vec<GraphEvent>>,
+) -> Vec<InferenceEdge> {
+    let mut edges = Vec::new();
+    for (service_id, events) in by_service {
+        let restarts = events.iter().filter(|event| {
+            has_any_term(
+                &format!("{} {}", event.summary, event.tags.join(" ")).to_ascii_lowercase(),
+                &["restart", "crash", "restarted", "panic"],
+            )
+        });
+        let dependents = topology
+            .iter()
+            .filter_map(|(source, target)| (target == service_id).then_some(source))
+            .collect::<Vec<_>>();
+        for restart_event in restarts {
+            for dependent in &dependents {
+                if let Some(dep_events) = by_service.get(*dependent) {
+                    for dep_event in dep_events.iter().filter(|event| {
+                        has_any_term(
+                            &format!("{} {}", event.summary, event.tags.join(" ")).to_ascii_lowercase(),
+                            &["connection refused", "timeout", "unavailable"],
+                        )
+                    }) {
+                        if let Some(edge) = make_graph_edge(
+                            restart_event,
+                            dep_event,
+                            "restart_preceded_disconnection",
+                            8.0,
+                            30.0,
+                            format!("{service_id} restart preceded dependent failure on {dependent}"),
+                            vec!["restart caused brief unavailability".into()],
+                        ) {
+                            edges.push(edge);
+                        }
+                    }
+                }
+            }
+        }
+    }
+    edges
+}
+
+fn shared_fate_edges(events: &[GraphEvent]) -> Vec<InferenceEdge> {
+    let mut edges = Vec::new();
+    for window in events.windows(2) {
+        let [left, right] = window else { continue };
+        if left.service_id != right.service_id
+            && left.severity >= SEVERITY_WARN
+            && right.severity >= SEVERITY_WARN
+        {
+            let latency = (right.timestamp - left.timestamp).whole_seconds().abs() as f64;
+            if latency <= 10.0 {
+                edges.push(InferenceEdge {
+                    source_event_id: left.event_id.clone(),
+                    target_event_id: right.event_id.clone(),
+                    edge_type: "shared_fate".into(),
+                    plausibility: temporal_plausibility_seconds(latency, 5.0) * 0.6,
+                    latency_ms: latency * 1000.0,
+                    evidence: format!(
+                        "{} and {} degraded within {:.1}s",
+                        left.service_id, right.service_id, latency
+                    ),
+                    requires: vec!["shared timing implies common fault domain".into()],
+                    learned_adjustments: Vec::new(),
+                });
+            }
+        }
+    }
+    edges
+}
+
+fn timeout_chain_edges(
+    topology: &[(String, String)],
+    by_service: &std::collections::BTreeMap<String, Vec<GraphEvent>>,
+) -> Vec<InferenceEdge> {
+    let mut edges = Vec::new();
+    for (caller, callee) in topology {
+        let Some(caller_events) = by_service.get(caller) else {
+            continue;
+        };
+        let Some(callee_events) = by_service.get(callee) else {
+            continue;
+        };
+        for callee_event in callee_events.iter().filter(|event| {
+            has_any_term(
+                &format!("{} {}", event.summary, event.tags.join(" ")).to_ascii_lowercase(),
+                &["timeout", "connection refused", "upstream", "unavailable"],
+            )
+        }) {
+            for caller_event in caller_events.iter().filter(|event| {
+                has_any_term(
+                    &format!("{} {}", event.summary, event.tags.join(" ")).to_ascii_lowercase(),
+                    &["timeout", "connection refused", "upstream", "unavailable"],
+                )
+            }) {
+                if let Some(edge) = make_graph_edge(
+                    callee_event,
+                    caller_event,
+                    "timeout_chain",
+                    8.0,
+                    60.0,
+                    format!("{callee} timeout plausibly propagated to caller {caller}"),
+                    vec![format!("service graph edge {caller}->{callee} is correct")],
+                ) {
+                    edges.push(edge);
+                }
+            }
+        }
+    }
+    edges
+}
+
+fn make_graph_edge(
+    source: &GraphEvent,
+    target: &GraphEvent,
+    edge_type: &str,
+    halflife_seconds: f64,
+    max_latency_seconds: f64,
+    evidence: String,
+    requires: Vec<String>,
+) -> Option<InferenceEdge> {
+    let latency = (target.timestamp - source.timestamp).whole_seconds() as f64;
+    if !(0.0 < latency && latency <= max_latency_seconds) {
+        return None;
+    }
+    Some(InferenceEdge {
+        source_event_id: source.event_id.clone(),
+        target_event_id: target.event_id.clone(),
+        edge_type: edge_type.into(),
+        plausibility: temporal_plausibility_seconds(latency, halflife_seconds).clamp(0.0, 1.0),
+        latency_ms: latency * 1000.0,
+        evidence,
+        requires,
+        learned_adjustments: Vec::new(),
+    })
+}
+
+fn temporal_plausibility_seconds(latency_seconds: f64, halflife_seconds: f64) -> f64 {
+    if latency_seconds <= 0.0 {
+        return 0.0;
+    }
+    let decay = (-0.693_f64 * latency_seconds / halflife_seconds.max(0.1)).exp();
+    decay.clamp(0.0, 1.0)
+}
+
+fn services_for_event_ids(events: &[EventRow], event_ids: &[String]) -> Vec<String> {
+    let wanted = event_ids.iter().collect::<std::collections::BTreeSet<_>>();
+    events
+        .iter()
+        .filter(|event| event.event_id.as_ref().map(|id| wanted.contains(id)).unwrap_or(false))
+        .filter_map(|event| event.service_id.clone())
+        .collect::<std::collections::BTreeSet<_>>()
+        .into_iter()
+        .collect()
+}
+
+fn discover_runtime_containers() -> Option<Vec<RuntimeContainer>> {
+    for binary in ["docker", "podman"] {
+        let output = std::process::Command::new(binary)
+            .args(["ps", "--format", "{{.Names}}\t{{.Image}}\t{{.Status}}"])
+            .output();
+        let Ok(output) = output else {
+            continue;
+        };
+        if !output.status.success() {
+            continue;
+        }
+        let containers = String::from_utf8_lossy(&output.stdout)
+            .lines()
+            .filter_map(parse_container_line)
+            .take(30)
+            .collect::<Vec<_>>();
+        if !containers.is_empty() {
+            return Some(containers);
+        }
+    }
+    None
+}
+
+fn parse_container_line(raw: &str) -> Option<RuntimeContainer> {
+    let mut parts = raw.splitn(3, '\t');
+    let name = parts.next()?.trim();
+    let image = parts.next()?.trim();
+    let status = parts.next()?.trim();
+    if name.is_empty() || image.is_empty() || status.is_empty() {
+        return None;
+    }
+    let state = status
+        .split_whitespace()
+        .next()
+        .unwrap_or(status)
+        .trim_matches(|ch: char| !ch.is_ascii_alphanumeric())
+        .to_ascii_lowercase();
+    Some(RuntimeContainer {
+        name: name.into(),
+        image: image.into(),
+        state: if state.is_empty() {
+            "unknown".into()
+        } else {
+            state
+        },
+    })
+}
+
+fn custom_rule_candidates(
+    config: &TomlValue,
+    events: &[EventRow],
+    all_services: &[String],
+    source_types: &[String],
+    domain_metrics: &DomainMetrics,
+    inference_graph: &InferenceGraph,
+    learning: &LearningArtifacts,
+) -> Vec<Candidate> {
+    #[derive(Debug, Clone)]
+    struct RuleSpec {
+        cause_type: String,
+        cause_subtype: Option<String>,
+        title_template: String,
+        confidence: f64,
+        requires: Vec<String>,
+        requires_same_service: bool,
+        requires_temporal_order: bool,
+        preferred_edge_types: Vec<String>,
+        artifact_kind: Option<String>,
+        artifact_id: Option<String>,
+        artifact_label: Option<String>,
+        learned: bool,
+    }
+
+    let mut rules = Vec::<RuleSpec>::new();
+    if let Some(config_rules) = config
+        .get("hypothesis_engine")
+        .and_then(|value| value.get("custom_rules"))
+        .and_then(TomlValue::as_array)
+    {
+        for rule in config_rules.iter().filter_map(TomlValue::as_table) {
+            let requires = rule
+                .get("requires")
+                .and_then(TomlValue::as_array)
+                .map(|items| {
+                    items.iter()
+                        .filter_map(TomlValue::as_str)
+                        .map(str::to_string)
+                        .collect::<Vec<_>>()
+                })
+                .unwrap_or_default();
+            if requires.is_empty() {
+                continue;
+            }
+            rules.push(RuleSpec {
+                cause_type: rule
+                    .get("cause_type")
+                    .and_then(TomlValue::as_str)
+                    .unwrap_or("custom_rule")
+                    .to_string(),
+                cause_subtype: rule
+                    .get("cause_subtype")
+                    .and_then(TomlValue::as_str)
+                    .map(str::to_string),
+                title_template: rule
+                    .get("title_template")
+                    .and_then(TomlValue::as_str)
+                    .unwrap_or("Custom hypothesis rule matched the observed evidence")
+                    .to_string(),
+                confidence: rule
+                    .get("confidence")
+                    .and_then(TomlValue::as_float)
+                    .or_else(|| {
+                        rule.get("confidence")
+                            .and_then(TomlValue::as_integer)
+                            .map(|value| value as f64)
+                    })
+                    .unwrap_or(0.6)
+                    .clamp(0.0, 1.0),
+                requires,
+                requires_same_service: rule
+                    .get("requires_same_service")
+                    .and_then(TomlValue::as_bool)
+                    .unwrap_or(false),
+                requires_temporal_order: rule
+                    .get("requires_temporal_order")
+                    .and_then(TomlValue::as_bool)
+                    .unwrap_or(false),
+                preferred_edge_types: Vec::new(),
+                artifact_kind: None,
+                artifact_id: None,
+                artifact_label: None,
+                learned: false,
+            });
+        }
+    }
+    for template in learning
+        .adaptive
+        .learned_templates
+        .iter()
+        .filter(|template| template_is_active(template))
+    {
+        if template.requires.is_empty() {
+            continue;
+        }
+        rules.push(RuleSpec {
+            cause_type: template.cause_type.clone(),
+            cause_subtype: template.cause_subtype.clone(),
+            title_template: template.title_template.clone(),
+            confidence: template.confidence,
+            requires: template.requires.clone(),
+            requires_same_service: template.requires_same_service,
+            requires_temporal_order: template.requires_temporal_order,
+            preferred_edge_types: Vec::new(),
+            artifact_kind: Some("template".into()),
+            artifact_id: Some(template.template_id.clone()),
+            artifact_label: Some(template.template_name.clone()),
+            learned: true,
+        });
+    }
+    for composition in learning
+        .adaptive
+        .learned_compositions
+        .iter()
+        .filter(|composition| composition_is_active(composition))
+    {
+        if composition.requires.is_empty() {
+            continue;
+        }
+        rules.push(RuleSpec {
+            cause_type: composition.cause_type.clone(),
+            cause_subtype: composition.cause_subtype.clone(),
+            title_template: composition.title_template.clone(),
+            confidence: composition.confidence,
+            requires: composition.requires.clone(),
+            requires_same_service: composition.requires_same_service,
+            requires_temporal_order: composition.requires_temporal_order,
+            preferred_edge_types: composition.preferred_edge_types.clone(),
+            artifact_kind: Some("composition".into()),
+            artifact_id: Some(composition.composition_id.clone()),
+            artifact_label: Some(composition.composition_name.clone()),
+            learned: true,
+        });
+    }
+    if rules.is_empty() {
+        return Vec::new();
+    }
+    let mut candidates = Vec::new();
+    for rule in rules {
+        let requires = rule.requires.clone();
+        let mut supporting = Vec::new();
+        let mut matched_terms = Vec::new();
+        for requirement in &requires {
+            let matches = event_ids_for_requirement(events, requirement, learning);
+            if matches.is_empty() {
+                supporting.clear();
+                break;
+            }
+            matched_terms.push(requirement.clone());
+            supporting.extend(matches);
+        }
+        if supporting.is_empty() {
+            continue;
+        }
+        supporting.sort();
+        supporting.dedup();
+        if rule.requires_same_service && services_in_events(events).len() > 1
+        {
+            continue;
+        }
+        if rule.requires_temporal_order
+            && !requirements_have_temporal_order(events, &requires, learning)
+        {
+            continue;
+        }
+        let graph_support = learned_rule_graph_support(inference_graph, &supporting, &rule.preferred_edge_types);
+        let mut provenance_refs = detector_artifact_refs_for_requirements(&requires, learning);
+        if let (Some(kind), Some(artifact_id)) = (rule.artifact_kind.as_deref(), rule.artifact_id.as_deref()) {
+            provenance_refs.push(LearningArtifactRef {
+                kind: kind.to_string(),
+                artifact_id: artifact_id.to_string(),
+                label: rule
+                    .artifact_label
+                    .clone()
+                    .unwrap_or_else(|| artifact_id.to_string()),
+                reason: if kind == "composition" {
+                    "matched learned composition rule".into()
+                } else {
+                    "matched learned hypothesis template".into()
+                },
+                impact_metric: None,
+                impact_value: None,
+            });
+        }
+        let description = rule.title_template;
+        let confidence = if rule.preferred_edge_types.is_empty() {
+            rule.confidence
+        } else if graph_support > 0.0 {
+            (rule.confidence + graph_support * 0.15).clamp(0.0, 1.0)
+        } else {
+            (rule.confidence * 0.8).clamp(0.0, 1.0)
+        };
+        let rule_prior_contribution =
+            (confidence.max(domain_metrics.anomaly_score * 0.5) - (domain_metrics.anomaly_score * 0.5))
+                .max(0.0);
+        for item in provenance_refs.iter_mut().filter(|item| {
+            matches!(item.kind.as_str(), "template" | "composition")
+        }) {
+            item.impact_metric = Some("prior_contribution".into());
+            item.impact_value = Some(rule_prior_contribution);
+        }
+        let root_cause_event_id = supporting.first().cloned();
+        let root_cause_timestamp = root_cause_event_id.as_ref().and_then(|event_id| {
+            events
+                .iter()
+                .find(|event| event.event_id.as_deref() == Some(event_id))
+                .and_then(|event| event.timestamp.clone())
+        });
+        candidates.push(Candidate {
+            cause_type: rule.cause_type,
+            description: if let Some(subtype) = rule.cause_subtype {
+                format!("{description} ({subtype})")
+            } else {
+                description
+            },
+            prior: confidence.max(domain_metrics.anomaly_score * 0.5),
+            score: 0.0,
+            suggested_checks: if rule.learned {
+                vec![
+                    format!("Validate learned evidence: {}", matched_terms.join(", ")),
+                    "Confirm the new learned pattern still reflects the same failure mode.".into(),
+                ]
+            } else {
+                vec![
+                    format!("Verify custom rule evidence: {}", matched_terms.join(", ")),
+                    "Inspect the event timeline for missing or contradictory context".into(),
+                ]
+            },
+            supporting_events: supporting,
+            affected_services: all_services.to_vec(),
+            contradicting_events: Vec::new(),
+            dependency_proximity: ((source_types.len() > 1) as usize as f64 * 0.2 + 0.5).clamp(0.0, 1.0),
+            is_valid: true,
+            invalidation_reasons: Vec::new(),
+            root_cause_event_id,
+            root_cause_timestamp,
+            scoring: CandidateScoring::default(),
+            provenance_refs,
+        });
+    }
+    candidates
+}
+
+fn event_ids_for_requirement(
+    events: &[EventRow],
+    requirement: &str,
+    learning: &LearningArtifacts,
+) -> Vec<String> {
+    events
+        .iter()
+        .filter(|event| requirement_matches_event(requirement, event, learning))
+        .filter_map(|event| event.event_id.clone())
+        .collect()
+}
+
+fn requirement_matches_event(
+    requirement: &str,
+    event: &EventRow,
+    learning: &LearningArtifacts,
+) -> bool {
+    let text = event_signal_text(event);
+    let normalized = requirement.trim().to_ascii_lowercase();
+    if let Some(detector) = learning
+        .adaptive
+        .learned_detectors
+        .iter()
+        .find(|detector| detector.requirement_name == normalized && detector_is_active(detector))
+    {
+        return learned_detector_matches_event(detector, event, &text);
+    }
+    match normalized.as_str() {
+        "connection_failures_outbound" => has_any_term(
+            &text,
+            &["timeout", "connection refused", "upstream", "dependency", "dns"],
+        ),
+        "error_spike" => event_severity(event).unwrap_or(SEVERITY_INFO) >= SEVERITY_ERROR
+            || has_any_term(&text, &["spike", "burst", "error rate"]),
+        "resource_pressure" => has_any_term(
+            &text,
+            &["cpu", "memory", "disk", "oom", "resource pressure", "saturation"],
+        ),
+        "restart_loop" => has_any_term(&text, &["restart", "crash", "panic", "backoff"]),
+        "deployment_event" => has_any_term(
+            &text,
+            &["deploy", "deployment", "rollout", "release"],
+        ),
+        "config_change_event" => has_any_term(
+            &text,
+            &["config change", "configuration", "feature flag", "setting updated"],
+        ),
+        other => text.contains(other),
+    }
+}
+
+fn requirements_have_temporal_order(
+    events: &[EventRow],
+    requirements: &[String],
+    learning: &LearningArtifacts,
+) -> bool {
+    let mut last_index = None;
+    for requirement in requirements {
+        let Some(index) = events
+            .iter()
+            .position(|event| requirement_matches_event(requirement, event, learning))
+        else {
+            return false;
+        };
+        if last_index.map(|previous| index < previous).unwrap_or(false) {
+            return false;
+        }
+        last_index = Some(index);
+    }
+    true
+}
+
+fn contradiction_events_for_candidate(
+    config: &TomlValue,
+    events: &[EventRow],
+    cause_type: &str,
+) -> Vec<String> {
+    if !contradictions_enabled(config) {
+        return Vec::new();
+    }
+    let generic_terms = ["healthy", "recovered", "restored", "back to normal", "stable"];
+    let resource_terms = ["cpu normal", "memory normal", "disk normal", "resource recovered"];
+    let dependency_terms = ["connection restored", "dependency healthy", "upstream healthy"];
+    let instability_terms = ["started successfully", "steady state", "running normally"];
+    let terms: &[&str] = match cause_type {
+        "resource_pressure" => &resource_terms,
+        "dependency_failure" => &dependency_terms,
+        "service_instability" => &instability_terms,
+        _ => &generic_terms,
+    };
+    events
+        .iter()
+        .filter(|event| has_any_term(&event_signal_text(event), terms))
+        .filter_map(|event| event.event_id.clone())
+        .collect()
+}
+
+fn contradiction_penalty(config: &TomlValue, contradiction_ratio: f64) -> f64 {
+    if !contradictions_enabled(config) {
+        return 0.0;
+    }
+    if contradiction_ratio <= 0.0 {
+        return 0.0;
+    }
+    let strong = config
+        .get("contradiction_handling")
+        .and_then(|value| value.get("strong_penalty_per_contradiction"))
+        .and_then(TomlValue::as_float)
+        .or_else(|| {
+            config
+                .get("contradiction_handling")
+                .and_then(|value| value.get("strong_penalty_per_contradiction"))
+                .and_then(TomlValue::as_integer)
+                .map(|value| value as f64)
+        })
+        .unwrap_or(0.15);
+    let weak = config
+        .get("contradiction_handling")
+        .and_then(|value| value.get("weak_penalty_per_contradiction"))
+        .and_then(TomlValue::as_float)
+        .or_else(|| {
+            config
+                .get("contradiction_handling")
+                .and_then(|value| value.get("weak_penalty_per_contradiction"))
+                .and_then(TomlValue::as_integer)
+                .map(|value| value as f64)
+        })
+        .unwrap_or(0.05);
+    let multiplier = config
+        .get("contradiction_handling")
+        .and_then(|value| value.get("min_penalty_multiplier"))
+        .and_then(TomlValue::as_float)
+        .or_else(|| {
+            config
+                .get("contradiction_handling")
+                .and_then(|value| value.get("min_penalty_multiplier"))
+                .and_then(TomlValue::as_integer)
+                .map(|value| value as f64)
+        })
+        .unwrap_or(0.5)
+        .clamp(0.0, 1.0);
+    let per_ratio = if contradiction_ratio >= contradiction_fail_threshold(config) {
+        strong
+    } else {
+        weak
+    };
+    (contradiction_ratio * per_ratio).max(multiplier * weak).clamp(0.0, 0.6)
+}
+
+fn contradictions_enabled(config: &TomlValue) -> bool {
+    config
+        .get("contradiction_handling")
+        .and_then(|value| value.get("enabled"))
+        .and_then(TomlValue::as_bool)
+        .unwrap_or(true)
+}
+
+fn contradiction_fail_threshold(config: &TomlValue) -> f64 {
+    config
+        .get("hypothesis_validation")
+        .and_then(|value| value.get("contradiction_ratio_fail"))
+        .and_then(TomlValue::as_float)
+        .or_else(|| {
+            config
+                .get("hypothesis_validation")
+                .and_then(|value| value.get("contradiction_ratio_fail"))
+                .and_then(TomlValue::as_integer)
+                .map(|value| value as f64)
+        })
+        .unwrap_or(0.6)
+        .clamp(0.0, 1.0)
+}
+
+fn contradiction_warn_threshold(config: &TomlValue) -> f64 {
+    config
+        .get("hypothesis_validation")
+        .and_then(|value| value.get("contradiction_ratio_warn"))
+        .and_then(TomlValue::as_float)
+        .or_else(|| {
+            config
+                .get("hypothesis_validation")
+                .and_then(|value| value.get("contradiction_ratio_warn"))
+                .and_then(TomlValue::as_integer)
+                .map(|value| value as f64)
+        })
+        .unwrap_or(0.3)
+        .clamp(0.0, 1.0)
+}
+
+fn dependency_proximity_score(cause_type: &str, events: &[EventRow]) -> f64 {
+    let text = events
+        .iter()
+        .map(event_signal_text)
+        .collect::<Vec<_>>()
+        .join(" ");
+    match cause_type {
+        "dependency_failure" => {
+            if has_any_term(
+                &text,
+                &["timeout", "upstream", "database", "redis", "dns", "connection refused"],
+            ) {
+                0.95
+            } else {
+                0.55
+            }
+        }
+        "shared_fate" => {
+            if services_in_events(events).len() > 1 {
+                0.8
+            } else {
+                0.45
+            }
+        }
+        "orchestration_change" => {
+            if has_any_term(&text, &["docker", "kubernetes", "container", "pod", "rollout"]) {
+                0.85
+            } else {
+                0.4
+            }
+        }
+        "resource_pressure" => {
+            if has_any_term(&text, &["cpu", "memory", "disk", "oom", "saturation"]) {
+                0.8
+            } else {
+                0.35
+            }
+        }
+        _ => 0.35,
+    }
+}
+
+fn candidate_overlap_ratio(left: &Candidate, right: &Candidate) -> f64 {
+    let left_set = left
+        .supporting_events
+        .iter()
+        .collect::<std::collections::BTreeSet<_>>();
+    let right_set = right
+        .supporting_events
+        .iter()
+        .collect::<std::collections::BTreeSet<_>>();
+    let intersection = left_set.intersection(&right_set).count() as f64;
+    let smaller = left_set.len().min(right_set.len()).max(1) as f64;
+    intersection / smaller
+}
+
+fn anomaly_trigger_threshold(config: &TomlValue) -> f64 {
+    let spike_z = config
+        .get("anomaly_detection")
+        .and_then(|value| value.get("spike_z_threshold"))
+        .and_then(TomlValue::as_float)
+        .or_else(|| {
+            config
+                .get("anomaly_detection")
+                .and_then(|value| value.get("spike_z_threshold"))
+                .and_then(TomlValue::as_integer)
+                .map(|value| value as f64)
+        })
+        .unwrap_or(3.0);
+    (spike_z / 5.0).clamp(0.45, 0.9)
+}
+
+fn anomaly_weights(config: &TomlValue) -> AnomalyWeights {
+    let error_rate = table_f64(config, &["anomaly_detection", "weights", "error_rate"], 0.35);
+    let event_volume = table_f64(config, &["anomaly_detection", "weights", "event_volume"], 0.2);
+    let new_fingerprint_rate = table_f64(
+        config,
+        &["anomaly_detection", "weights", "new_fingerprint_rate"],
+        0.2,
+    );
+    let restart_count = table_f64(config, &["anomaly_detection", "weights", "restart_count"], 0.15);
+    let warn_rate = table_f64(config, &["anomaly_detection", "weights", "warn_rate"], 0.1);
+    let total = (error_rate + event_volume + new_fingerprint_rate + restart_count + warn_rate)
+        .max(0.0001);
+    AnomalyWeights {
+        error_rate: error_rate / total,
+        event_volume: event_volume / total,
+        new_fingerprint_rate: new_fingerprint_rate / total,
+        restart_count: restart_count / total,
+        warn_rate: warn_rate / total,
+    }
+}
+
+#[derive(Debug, Clone, Copy)]
+struct AnomalyWeights {
+    error_rate: f64,
+    event_volume: f64,
+    new_fingerprint_rate: f64,
+    restart_count: f64,
+    warn_rate: f64,
+}
+
+fn scoring_weights(config: &TomlValue) -> ScoringWeights {
+    let temporal_alignment = table_f64(config, &["scoring", "temporal_alignment"], 0.25);
+    let correlation_strength = table_f64(config, &["scoring", "correlation_strength"], 0.2);
+    let frequency_weight = table_f64(config, &["scoring", "frequency_weight"], 0.15);
+    let dependency_proximity = table_f64(config, &["scoring", "dependency_proximity"], 0.15);
+    let evidence_coverage = table_f64(config, &["scoring", "evidence_coverage"], 0.15);
+    let anomaly_severity = table_f64(config, &["scoring", "anomaly_severity"], 0.1);
+    let total = temporal_alignment
+        + correlation_strength
+        + frequency_weight
+        + dependency_proximity
+        + evidence_coverage
+        + anomaly_severity;
+    ScoringWeights {
+        temporal_alignment,
+        correlation_strength,
+        frequency_weight,
+        dependency_proximity,
+        evidence_coverage,
+        anomaly_severity,
+        total,
+    }
+}
+
+fn calibration_thresholds(config: &TomlValue) -> (f64, f64) {
+    let high = table_f64(config, &["calibration", "defaults", "high_threshold"], 0.75).clamp(0.0, 1.0);
+    let medium = table_f64(config, &["calibration", "defaults", "medium_threshold"], 0.4)
+        .clamp(0.0, high);
+    (high, medium)
+}
+
+fn table_f64(config: &TomlValue, path: &[&str], default: f64) -> f64 {
+    let mut current = config;
+    for segment in path {
+        let Some(next) = current.get(*segment) else {
+            return default;
+        };
+        current = next;
+    }
+    current
+        .as_float()
+        .or_else(|| current.as_integer().map(|value| value as f64))
+        .unwrap_or(default)
 }
 
 fn event_signal_text(event: &EventRow) -> String {
@@ -1335,6 +7960,10 @@ fn disk_free_near(path: &Path) -> Option<u64> {
 #[cfg(test)]
 mod tests {
     use super::*;
+    use inferra_storage::{
+        initialize_databases, EventsStore, IncidentRecord, IncidentsStore, NewEventRecord,
+        StoredFeedback, StoredHypothesis, StoredInferenceGraphSnapshot,
+    };
     use std::fs;
     use std::time::{SystemTime, UNIX_EPOCH};
 
@@ -1344,6 +7973,28 @@ mod tests {
             .expect("time after epoch")
             .as_nanos();
         std::env::temp_dir().join(format!("inferra-core-{name}-{unique}"))
+    }
+
+    fn event(
+        event_id: &str,
+        service_id: &str,
+        message: &str,
+        severity: i64,
+        source_type: &str,
+        timestamp: &str,
+    ) -> EventRow {
+        EventRow {
+            event_id: Some(event_id.into()),
+            timestamp: Some(timestamp.into()),
+            severity: Some(SeverityValue::Level(severity)),
+            service_id: Some(service_id.into()),
+            message: Some(message.into()),
+            summary: None,
+            source_ref: Some(inferra_contracts::EventSourceRef {
+                source_type: Some(source_type.into()),
+            }),
+            tags: None,
+        }
     }
 
     #[test]
@@ -1399,5 +8050,811 @@ roots = ["extra-root"]
         assert!(!projects.iter().any(|project| project.path.contains("three")));
 
         let _ = fs::remove_dir_all(&root);
+    }
+
+    #[test]
+    fn build_hypotheses_honors_custom_rules_and_calibration() {
+        let config: TomlValue = r#"
+[hypothesis_engine]
+max_hypotheses_per_incident = 5
+min_supporting_events = 1
+min_generation_confidence = 0.1
+dedup_overlap_threshold = 0.5
+
+[[hypothesis_engine.custom_rules]]
+name = "redis_timeout_cascade"
+requires = ["connection_failures_outbound", "error_spike"]
+requires_same_service = false
+requires_temporal_order = true
+cause_type = "dependency_failure"
+cause_subtype = "redis_timeout"
+title_template = "Redis timeout causing service errors"
+confidence = 0.82
+
+[calibration.defaults]
+high_threshold = 0.7
+medium_threshold = 0.45
+"#
+        .parse()
+        .expect("parse config");
+        let events = vec![
+            event(
+                "e1",
+                "api",
+                "redis timeout upstream dependency",
+                SEVERITY_ERROR,
+                "app",
+                "2026-05-08T10:00:00Z",
+            ),
+            event(
+                "e2",
+                "worker",
+                "error spike after connection refused",
+                SEVERITY_ERROR,
+                "app",
+                "2026-05-08T10:00:10Z",
+            ),
+        ];
+        let graph = build_inference_graph(&config, &events);
+        let hypotheses = build_hypotheses(
+            &config,
+            "inc-1",
+            &events,
+            "2026-05-08T10:00:15Z",
+            &graph,
+            &LearningArtifacts::default(),
+        );
+        let top = hypotheses.first().expect("top hypothesis");
+        assert_eq!(top.cause_type, "dependency_failure");
+        assert_eq!(top.confidence_label.as_deref(), Some("medium"));
+        assert!(top.description.contains("Redis timeout causing service errors"));
+    }
+
+    #[test]
+    fn build_hypotheses_marks_contradicted_candidates_invalid() {
+        let config: TomlValue = r#"
+[hypothesis_engine]
+max_hypotheses_per_incident = 5
+min_supporting_events = 1
+min_generation_confidence = 0.1
+
+[hypothesis_validation]
+contradiction_ratio_fail = 0.5
+contradiction_ratio_warn = 0.2
+
+[contradiction_handling]
+enabled = true
+strong_penalty_per_contradiction = 0.2
+weak_penalty_per_contradiction = 0.05
+min_penalty_multiplier = 0.5
+"#
+        .parse()
+        .expect("parse config");
+        let events = vec![
+            event(
+                "e1",
+                "api",
+                "cpu saturation and memory pressure",
+                SEVERITY_ERROR,
+                "host_metrics",
+                "2026-05-08T10:00:00Z",
+            ),
+            event(
+                "e2",
+                "api",
+                "memory normal and resource recovered",
+                SEVERITY_INFO,
+                "host_metrics",
+                "2026-05-08T10:00:05Z",
+            ),
+        ];
+        let graph = build_inference_graph(&config, &events);
+        let resource = build_hypotheses(
+            &config,
+            "inc-2",
+            &events,
+            "2026-05-08T10:00:10Z",
+            &graph,
+            &LearningArtifacts::default(),
+        )
+            .into_iter()
+            .find(|item| item.cause_type == "resource_pressure")
+            .expect("resource hypothesis");
+        assert!(!resource.is_valid);
+        assert!(!resource.invalidation_reasons.is_empty());
+    }
+
+    #[test]
+    fn parse_container_line_extracts_runtime_container() {
+        let container = parse_container_line("api\tghcr.io/acme/api:1.2\tUp 4 minutes")
+            .expect("container line");
+        assert_eq!(container.name, "api");
+        assert_eq!(container.image, "ghcr.io/acme/api:1.2");
+        assert_eq!(container.state, "up");
+    }
+
+    #[test]
+    fn build_inference_graph_creates_roots_and_edges() {
+        let config: TomlValue = r#"
+[inference_graph]
+max_events_for_graph = 50
+plausibility_threshold = 0.05
+max_edges_per_node = 10
+
+[inference_graph.strategies]
+dependency_propagation = true
+same_service_escalation = true
+resource_preceded_error = true
+config_preceded_error = true
+restart_preceded_disconnection = true
+shared_fate = true
+timeout_chain = true
+
+[[topology.edges]]
+source = "api"
+target = "postgres"
+"#
+        .parse()
+        .expect("parse config");
+        let events = vec![
+            event(
+                "e1",
+                "postgres",
+                "postgres restart detected",
+                SEVERITY_ERROR,
+                "app",
+                "2026-05-08T10:00:00Z",
+            ),
+            event(
+                "e2",
+                "api",
+                "connection refused to postgres",
+                SEVERITY_ERROR,
+                "app",
+                "2026-05-08T10:00:05Z",
+            ),
+        ];
+        let graph = build_inference_graph(&config, &events);
+        assert_eq!(graph.root_candidates, vec!["e1".to_string()]);
+        assert!(graph
+            .edges
+            .iter()
+            .any(|edge| edge.target_event_id == "e2" && edge.source_event_id == "e1"));
+    }
+
+    #[test]
+    fn sync_learning_artifacts_updates_calibration_and_weights() {
+        let root = temp_dir("learning");
+        let events_db = root.join("events.db");
+        let incidents_db = root.join("incidents.db");
+        initialize_databases(&events_db, &incidents_db).expect("initialize databases");
+        let mut incidents = IncidentsStore::open(&incidents_db)
+            .expect("open incidents")
+            .expect("incidents store");
+        incidents
+            .upsert_incident(
+                &IncidentRecord {
+                    incident_id: "inc-1".into(),
+                    state: "open".into(),
+                    severity: SEVERITY_ERROR,
+                    primary_service: "api".into(),
+                    affected_services: vec!["api".into()],
+                    created_at: "2026-05-08T10:00:00Z".into(),
+                    updated_at: "2026-05-08T10:00:00Z".into(),
+                    time_range_start: "2026-05-08T10:00:00Z".into(),
+                    time_range_end: "2026-05-08T10:00:00Z".into(),
+                    event_count: 2,
+                    cluster_ids: Vec::new(),
+                    runtime_context: None,
+                    resolution_info: None,
+                },
+                &[],
+            )
+            .expect("upsert incident");
+        incidents
+            .replace_hypotheses(
+                "inc-1",
+                &[
+                    StoredHypothesis {
+                        hypothesis_id: "hyp-ok".into(),
+                        rank: Some(1),
+                        cause_type: "dependency_failure".into(),
+                        description: "correct".into(),
+                        total_score: Some(0.82),
+                        score_breakdown: serde_json::json!({
+                            "temporal_alignment": 0.9,
+                            "correlation_strength": 0.6,
+                            "frequency_weight": 0.4,
+                            "dependency_proximity": 0.95,
+                            "evidence_coverage": 0.9,
+                            "anomaly_severity": 0.5
+                        }),
+                        supporting_events: vec!["e1".into()],
+                        contradicting_events: Vec::new(),
+                        affected_services: vec!["api".into()],
+                        suggested_checks: Vec::new(),
+                        confidence_label: Some("medium".into()),
+                        is_valid: true,
+                        invalidation_reasons: Vec::new(),
+                        created_at: "2026-05-08T10:00:00Z".into(),
+                        updated_at: "2026-05-08T10:00:00Z".into(),
+                    },
+                    StoredHypothesis {
+                        hypothesis_id: "hyp-bad".into(),
+                        rank: Some(2),
+                        cause_type: "unknown".into(),
+                        description: "wrong".into(),
+                        total_score: Some(0.33),
+                        score_breakdown: serde_json::json!({
+                            "temporal_alignment": 0.2,
+                            "correlation_strength": 0.2,
+                            "frequency_weight": 0.1,
+                            "dependency_proximity": 0.2,
+                            "evidence_coverage": 0.1,
+                            "anomaly_severity": 0.2
+                        }),
+                        supporting_events: vec!["e2".into()],
+                        contradicting_events: Vec::new(),
+                        affected_services: vec!["api".into()],
+                        suggested_checks: Vec::new(),
+                        confidence_label: Some("low".into()),
+                        is_valid: true,
+                        invalidation_reasons: Vec::new(),
+                        created_at: "2026-05-08T10:00:00Z".into(),
+                        updated_at: "2026-05-08T10:00:00Z".into(),
+                    },
+                ],
+            )
+            .expect("replace hypotheses");
+        incidents
+            .add_feedback(&StoredFeedback {
+                feedback_id: "fb-1".into(),
+                incident_id: "inc-1".into(),
+                correct_hypothesis_id: Some("hyp-ok".into()),
+                feedback_type: "confirmed".into(),
+                operator_notes: "matched".into(),
+                resolved_at: "2026-05-08T10:05:00Z".into(),
+                created_at: Some("2026-05-08T10:05:00Z".into()),
+            })
+            .expect("add feedback");
+        let config: TomlValue = r#"
+[calibration]
+enabled = true
+bucket_count = 5
+min_samples_per_bucket = 1
+staleness_threshold_days = 30
+persistence_file = "./data/calibration.json"
+
+[scoring.tuning]
+learning_rate = 0.1
+max_drift_from_default = 0.5
+min_weight = 0.03
+"#
+        .parse()
+        .expect("parse config");
+        let learning = sync_learning_artifacts(&config, &events_db, &incidents_db, &mut incidents)
+            .expect("sync learning artifacts");
+        assert_eq!(learning.calibration.total_feedback_count, 1);
+        assert!(learning
+            .calibration
+            .buckets
+            .iter()
+            .any(|bucket| bucket.total_predictions > 0));
+        let default_evidence = scoring_weight_defaults()["evidence_coverage"];
+        let learned_evidence = learning.weights.effective_weights["evidence_coverage"];
+        assert!(learned_evidence > default_evidence);
+        let _ = fs::remove_dir_all(&root);
+    }
+
+    #[test]
+    fn sync_learning_artifacts_learns_detector_and_template_from_feedback() {
+        let root = temp_dir("adaptive-learning");
+        let events_db = root.join("events.db");
+        let incidents_db = root.join("incidents.db");
+        initialize_databases(&events_db, &incidents_db).expect("initialize databases");
+        let mut events = EventsStore::open(&events_db)
+            .expect("open events")
+            .expect("events store");
+        events
+            .insert_batch(&[
+                NewEventRecord {
+                    tags: vec!["migration".into(), "postgres".into()],
+                    ..NewEventRecord::minimal(
+                        "e1",
+                        "2026-05-08T10:00:00Z",
+                        "api",
+                        SEVERITY_ERROR,
+                        "schema migration applied to postgres and queries started timing out",
+                        "app",
+                        "2026-05-08T10:00:00Z",
+                    )
+                },
+                NewEventRecord {
+                    tags: vec!["migration".into(), "timeout".into()],
+                    ..NewEventRecord::minimal(
+                        "e2",
+                        "2026-05-08T10:00:03Z",
+                        "api",
+                        SEVERITY_ERROR,
+                        "request timeout after schema migration on postgres",
+                        "app",
+                        "2026-05-08T10:00:03Z",
+                    )
+                },
+            ])
+            .expect("insert events");
+        let mut incidents = IncidentsStore::open(&incidents_db)
+            .expect("open incidents")
+            .expect("incidents store");
+        incidents
+            .upsert_incident(
+                &IncidentRecord {
+                    incident_id: "inc-adaptive".into(),
+                    state: "open".into(),
+                    severity: SEVERITY_ERROR,
+                    primary_service: "api".into(),
+                    affected_services: vec!["api".into()],
+                    created_at: "2026-05-08T10:00:00Z".into(),
+                    updated_at: "2026-05-08T10:00:05Z".into(),
+                    time_range_start: "2026-05-08T10:00:00Z".into(),
+                    time_range_end: "2026-05-08T10:00:05Z".into(),
+                    event_count: 2,
+                    cluster_ids: Vec::new(),
+                    runtime_context: None,
+                    resolution_info: None,
+                },
+                &["e1".into(), "e2".into()],
+            )
+            .expect("upsert incident");
+        incidents
+            .replace_hypotheses(
+                "inc-adaptive",
+                &[StoredHypothesis {
+                    hypothesis_id: "hyp-migration".into(),
+                    rank: Some(1),
+                    cause_type: "migration_regression".into(),
+                    description: "Schema migration on postgres caused request timeouts".into(),
+                    total_score: Some(0.91),
+                    score_breakdown: serde_json::json!({
+                        "temporal_alignment": 0.9,
+                        "correlation_strength": 0.8,
+                        "frequency_weight": 0.4,
+                        "dependency_proximity": 0.6,
+                        "evidence_coverage": 0.9,
+                        "anomaly_severity": 0.7
+                    }),
+                    supporting_events: vec!["e1".into(), "e2".into()],
+                    contradicting_events: Vec::new(),
+                    affected_services: vec!["api".into()],
+                    suggested_checks: vec!["Review the migration diff".into()],
+                    confidence_label: Some("high".into()),
+                    is_valid: true,
+                    invalidation_reasons: Vec::new(),
+                    created_at: "2026-05-08T10:00:05Z".into(),
+                    updated_at: "2026-05-08T10:00:05Z".into(),
+                }],
+            )
+            .expect("replace hypotheses");
+        incidents
+            .add_feedback(&StoredFeedback {
+                feedback_id: "fb-adaptive".into(),
+                incident_id: "inc-adaptive".into(),
+                correct_hypothesis_id: Some("hyp-migration".into()),
+                feedback_type: "confirmed".into(),
+                operator_notes: "the migration really broke postgres callers".into(),
+                resolved_at: "2026-05-08T10:06:00Z".into(),
+                created_at: Some("2026-05-08T10:06:00Z".into()),
+            })
+            .expect("add feedback");
+        let config: TomlValue = r#"
+[hypothesis_engine]
+max_hypotheses_per_incident = 5
+min_supporting_events = 1
+min_generation_confidence = 0.1
+
+[calibration]
+enabled = true
+bucket_count = 5
+min_samples_per_bucket = 1
+staleness_threshold_days = 30
+persistence_file = "./data/calibration.json"
+
+[scoring.tuning]
+learning_rate = 0.1
+max_drift_from_default = 0.5
+min_weight = 0.03
+"#
+        .parse()
+        .expect("parse config");
+        let learning = sync_learning_artifacts(&config, &events_db, &incidents_db, &mut incidents)
+            .expect("sync learning artifacts");
+        assert!(learning
+            .adaptive
+            .learned_detectors
+            .iter()
+            .any(|detector| detector.cause_type == "migration_regression"
+                && detector
+                    .positive_terms
+                    .iter()
+                    .any(|term| term == "migration" || term == "postgres")));
+        assert!(learning
+            .adaptive
+            .learned_templates
+            .iter()
+            .any(|template| template.cause_type == "migration_regression"));
+
+        let new_events = vec![
+            event(
+                "n1",
+                "api",
+                "postgres timeout immediately after migration",
+                SEVERITY_ERROR,
+                "app",
+                "2026-05-08T11:00:00Z",
+            ),
+            event(
+                "n2",
+                "api",
+                "schema migration triggered failing postgres queries",
+                SEVERITY_ERROR,
+                "app",
+                "2026-05-08T11:00:03Z",
+            ),
+        ];
+        let graph = build_inference_graph(&config, &new_events);
+        let hypotheses = build_hypotheses(
+            &config,
+            "inc-adaptive-2",
+            &new_events,
+            "2026-05-08T11:00:05Z",
+            &graph,
+            &learning,
+        );
+        assert!(hypotheses.iter().any(|hypothesis| {
+            hypothesis.cause_type == "migration_regression"
+                && hypothesis
+                    .description
+                    .contains("Schema migration on postgres caused request timeouts")
+        }));
+        let _ = fs::remove_dir_all(&root);
+    }
+
+    #[test]
+    fn sync_learning_artifacts_learns_compositions_and_edge_profiles() {
+        let root = temp_dir("adaptive-composition");
+        let events_db = root.join("events.db");
+        let incidents_db = root.join("incidents.db");
+        initialize_databases(&events_db, &incidents_db).expect("initialize databases");
+        let mut events = EventsStore::open(&events_db)
+            .expect("open events")
+            .expect("events store");
+        events
+            .insert_batch(&[
+                NewEventRecord {
+                    tags: vec!["restart".into(), "postgres".into()],
+                    ..NewEventRecord::minimal(
+                        "e1",
+                        "2026-05-08T10:00:00Z",
+                        "postgres",
+                        SEVERITY_ERROR,
+                        "postgres restart panic detected",
+                        "app",
+                        "2026-05-08T10:00:00Z",
+                    )
+                },
+                NewEventRecord {
+                    tags: vec!["timeout".into(), "postgres".into()],
+                    ..NewEventRecord::minimal(
+                        "e2",
+                        "2026-05-08T10:00:05Z",
+                        "api",
+                        SEVERITY_ERROR,
+                        "timeout calling postgres upstream dependency",
+                        "app",
+                        "2026-05-08T10:00:05Z",
+                    )
+                },
+                NewEventRecord {
+                    tags: vec!["error_spike".into(), "postgres".into()],
+                    ..NewEventRecord::minimal(
+                        "e3",
+                        "2026-05-08T10:00:08Z",
+                        "api",
+                        SEVERITY_ERROR,
+                        "error spike after connection refused from postgres",
+                        "app",
+                        "2026-05-08T10:00:08Z",
+                    )
+                },
+            ])
+            .expect("insert events");
+        let config: TomlValue = r#"
+[hypothesis_engine]
+max_hypotheses_per_incident = 5
+min_supporting_events = 1
+min_generation_confidence = 0.1
+
+[inference_graph]
+max_events_for_graph = 50
+plausibility_threshold = 0.05
+max_edges_per_node = 10
+
+[inference_graph.strategies]
+dependency_propagation = true
+same_service_escalation = true
+resource_preceded_error = true
+config_preceded_error = true
+restart_preceded_disconnection = true
+shared_fate = true
+timeout_chain = true
+
+[calibration]
+enabled = true
+bucket_count = 5
+min_samples_per_bucket = 1
+staleness_threshold_days = 30
+persistence_file = "./data/calibration.json"
+
+[scoring.tuning]
+learning_rate = 0.1
+max_drift_from_default = 0.5
+min_weight = 0.03
+
+[[topology.edges]]
+source = "api"
+target = "postgres"
+"#
+        .parse()
+        .expect("parse config");
+        let incident_events = vec![
+            event(
+                "e1",
+                "postgres",
+                "postgres restart panic detected",
+                SEVERITY_ERROR,
+                "app",
+                "2026-05-08T10:00:00Z",
+            ),
+            event(
+                "e2",
+                "api",
+                "timeout calling postgres upstream dependency",
+                SEVERITY_ERROR,
+                "app",
+                "2026-05-08T10:00:05Z",
+            ),
+            event(
+                "e3",
+                "api",
+                "error spike after connection refused from postgres",
+                SEVERITY_ERROR,
+                "app",
+                "2026-05-08T10:00:08Z",
+            ),
+        ];
+        let graph =
+            build_inference_graph_with_learning(&config, &incident_events, &LearningArtifacts::default());
+        let mut incidents = IncidentsStore::open(&incidents_db)
+            .expect("open incidents")
+            .expect("incidents store");
+        incidents
+            .upsert_incident(
+                &IncidentRecord {
+                    incident_id: "inc-comp".into(),
+                    state: "open".into(),
+                    severity: SEVERITY_ERROR,
+                    primary_service: "api".into(),
+                    affected_services: vec!["api".into(), "postgres".into()],
+                    created_at: "2026-05-08T10:00:00Z".into(),
+                    updated_at: "2026-05-08T10:00:08Z".into(),
+                    time_range_start: "2026-05-08T10:00:00Z".into(),
+                    time_range_end: "2026-05-08T10:00:08Z".into(),
+                    event_count: 3,
+                    cluster_ids: Vec::new(),
+                    runtime_context: None,
+                    resolution_info: None,
+                },
+                &["e1".into(), "e2".into(), "e3".into()],
+            )
+            .expect("upsert incident");
+        incidents
+            .upsert_inference_graph_snapshot(&StoredInferenceGraphSnapshot {
+                incident_id: "inc-comp".into(),
+                graph_data: serde_json::to_value(&graph).expect("serialize graph"),
+                created_at: "2026-05-08T10:00:08Z".into(),
+                event_count: 3,
+            })
+            .expect("upsert graph snapshot");
+        incidents
+            .replace_hypotheses(
+                "inc-comp",
+                &[StoredHypothesis {
+                    hypothesis_id: "hyp-comp".into(),
+                    rank: Some(1),
+                    cause_type: "dependency_failure".into(),
+                    description: "Postgres restart triggered upstream timeout cascade".into(),
+                    total_score: Some(0.89),
+                    score_breakdown: serde_json::json!({
+                        "temporal_alignment": 0.85,
+                        "correlation_strength": 0.8,
+                        "frequency_weight": 0.5,
+                        "dependency_proximity": 0.95,
+                        "evidence_coverage": 0.9,
+                        "anomaly_severity": 0.55
+                    }),
+                    supporting_events: vec!["e1".into(), "e2".into(), "e3".into()],
+                    contradicting_events: Vec::new(),
+                    affected_services: vec!["api".into(), "postgres".into()],
+                    suggested_checks: vec!["Inspect postgres restart cause".into()],
+                    confidence_label: Some("high".into()),
+                    is_valid: true,
+                    invalidation_reasons: Vec::new(),
+                    created_at: "2026-05-08T10:00:08Z".into(),
+                    updated_at: "2026-05-08T10:00:08Z".into(),
+                }],
+            )
+            .expect("replace hypotheses");
+        incidents
+            .add_feedback(&StoredFeedback {
+                feedback_id: "fb-comp".into(),
+                incident_id: "inc-comp".into(),
+                correct_hypothesis_id: Some("hyp-comp".into()),
+                feedback_type: "confirmed".into(),
+                operator_notes: "restart plus timeout chain was the real path".into(),
+                resolved_at: "2026-05-08T10:15:00Z".into(),
+                created_at: Some("2026-05-08T10:15:00Z".into()),
+            })
+            .expect("add feedback");
+        let learning = sync_learning_artifacts(&config, &events_db, &incidents_db, &mut incidents)
+            .expect("sync learning artifacts");
+        assert!(learning
+            .adaptive
+            .learned_compositions
+            .iter()
+            .any(|composition| composition.cause_type == "dependency_failure"
+                && composition.requires.len() >= 2
+                && !composition.preferred_edge_types.is_empty()));
+        assert!(learning
+            .adaptive
+            .learned_edge_profiles
+            .iter()
+            .any(|profile| profile.cause_type.as_deref() == Some("dependency_failure")));
+        let _ = fs::remove_dir_all(&root);
+    }
+
+    #[test]
+    fn build_inference_graph_with_learning_applies_edge_profile_adjustment() {
+        let config: TomlValue = r#"
+[inference_graph]
+max_events_for_graph = 50
+plausibility_threshold = 0.01
+max_edges_per_node = 10
+
+[inference_graph.strategies]
+dependency_propagation = false
+same_service_escalation = true
+resource_preceded_error = false
+config_preceded_error = false
+restart_preceded_disconnection = false
+shared_fate = false
+timeout_chain = false
+"#
+        .parse()
+        .expect("parse config");
+        let events = vec![
+            event(
+                "e1",
+                "api",
+                "warning before crash loop",
+                SEVERITY_WARN,
+                "app",
+                "2026-05-08T10:00:00Z",
+            ),
+            event(
+                "e2",
+                "api",
+                "panic and restart loop detected",
+                SEVERITY_ERROR,
+                "app",
+                "2026-05-08T10:00:05Z",
+            ),
+        ];
+        let baseline = build_inference_graph_with_learning(&config, &events, &LearningArtifacts::default());
+        let baseline_edge = baseline
+            .edges
+            .iter()
+            .find(|edge| edge.edge_type == "same_service_escalation")
+            .expect("baseline edge")
+            .plausibility;
+        let mut learning = LearningArtifacts::default();
+        learning.adaptive.learned_edge_profiles.push(LearnedEdgeProfile {
+            profile_id: "same-service-api".into(),
+            edge_type: "same_service_escalation".into(),
+            source_service: Some("api".into()),
+            target_service: Some("api".into()),
+            cause_type: Some("service_instability".into()),
+            confirmations: 4,
+            false_positives: 0,
+            average_plausibility: 0.95,
+            average_latency_ms: 5000.0,
+            created_from_feedback_id: "fb-edge".into(),
+            updated_at: "2026-05-08T10:10:00Z".into(),
+            manually_disabled: false,
+            status_reason: None,
+            review_status: default_review_status(),
+            review_reason: None,
+            last_reviewed_at: None,
+        });
+        let adapted = build_inference_graph_with_learning(&config, &events, &learning);
+        let adapted_edge = adapted
+            .edges
+            .iter()
+            .find(|edge| edge.edge_type == "same_service_escalation")
+            .expect("adapted edge")
+            .plausibility;
+        assert!(adapted_edge > baseline_edge);
+    }
+
+    #[test]
+    fn build_adaptive_learning_history_entries_tracks_score_and_rank_movement() {
+        let previous = vec![serde_json::json!({
+            "hypothesis_id": "inc-1-hyp-1",
+            "cause_type": "dependency_failure",
+            "rank": 2,
+            "total_score": 0.55,
+            "score_breakdown": {
+                "provenance": {
+                    "artifacts": [{
+                        "kind": "composition",
+                        "artifact_id": "composition_restart_timeout",
+                        "label": "restart-timeout",
+                        "impact_metric": "prior_contribution",
+                        "impact_value": 0.10
+                    }]
+                }
+            }
+        })];
+        let next = vec![StoredHypothesis {
+            hypothesis_id: "inc-1-hyp-1".into(),
+            rank: Some(1),
+            cause_type: "dependency_failure".into(),
+            description: "learned composition".into(),
+            total_score: Some(0.72),
+            score_breakdown: serde_json::json!({
+                "provenance": {
+                    "artifacts": [{
+                        "kind": "composition",
+                        "artifact_id": "composition_restart_timeout",
+                        "label": "restart-timeout",
+                        "impact_metric": "prior_contribution",
+                        "impact_value": 0.17
+                    }]
+                }
+            }),
+            supporting_events: vec!["e1".into()],
+            contradicting_events: Vec::new(),
+            affected_services: vec!["api".into()],
+            suggested_checks: Vec::new(),
+            confidence_label: Some("medium".into()),
+            is_valid: true,
+            invalidation_reasons: Vec::new(),
+            created_at: "2026-05-08T12:00:00Z".into(),
+            updated_at: "2026-05-08T12:00:00Z".into(),
+        }];
+        let entries = build_adaptive_learning_history_entries(
+            "inc-1",
+            "2026-05-08T12:00:00Z",
+            &previous,
+            &next,
+        );
+        assert_eq!(entries.len(), 1);
+        assert_eq!(entries[0].artifact_kind, "composition");
+        assert_eq!(entries[0].rank_delta, Some(1));
+        assert!(
+            entries[0]
+                .score_delta
+                .map(|value| (value - 0.17).abs() < 0.0001)
+                .unwrap_or(false)
+        );
     }
 }

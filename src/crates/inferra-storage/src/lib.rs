@@ -160,6 +160,175 @@ pub struct StoredInferenceGraphSnapshot {
 }
 
 #[derive(Debug, Clone)]
+pub struct StoredAdaptiveLearningAuditEntry {
+    pub audit_id: String,
+    pub artifact_kind: String,
+    pub artifact_id: String,
+    pub action: String,
+    pub reason: Option<String>,
+    pub previous_status: String,
+    pub new_status: String,
+    pub review_status_before: Option<String>,
+    pub review_status_after: Option<String>,
+    pub runtime_effect: Option<String>,
+    pub created_at: String,
+}
+
+#[derive(Debug, Clone, Default)]
+pub struct AdaptiveLearningAuditQuery {
+    pub artifact_kind: Option<String>,
+    pub artifact_id: Option<String>,
+    pub action: Option<String>,
+    pub review_status_after: Option<String>,
+    pub limit: usize,
+    pub offset: usize,
+}
+
+#[derive(Debug, Clone)]
+pub struct StoredAdaptiveLearningHistoryEntry {
+    pub entry_id: String,
+    pub artifact_kind: String,
+    pub artifact_id: String,
+    pub artifact_label: String,
+    pub incident_id: String,
+    pub cause_type: String,
+    pub hypothesis_id: String,
+    pub observed_at: String,
+    pub score: Option<f64>,
+    pub rank: Option<i64>,
+    pub estimated_impact: f64,
+    pub impact_metric: Option<String>,
+    pub score_delta: Option<f64>,
+    pub rank_delta: Option<i64>,
+    pub edge_delta: Option<f64>,
+}
+
+#[derive(Debug, Clone, Default)]
+pub struct AdaptiveLearningHistoryQuery {
+    pub artifact_kind: Option<String>,
+    pub artifact_id: Option<String>,
+    pub incident_id: Option<String>,
+    pub cause_type: Option<String>,
+    pub limit: usize,
+    pub offset: usize,
+}
+
+#[derive(Debug, Clone, Default)]
+pub struct StoredAdaptiveLearningModel {
+    pub schema_version: i64,
+    pub last_updated: Option<String>,
+    pub processed_feedback_ids: Vec<String>,
+    pub learned_detectors: Vec<StoredLearnedDetector>,
+    pub learned_templates: Vec<StoredLearnedTemplate>,
+    pub learned_compositions: Vec<StoredLearnedComposition>,
+    pub learned_edge_profiles: Vec<StoredLearnedEdgeProfile>,
+}
+
+#[derive(Debug, Clone)]
+pub struct StoredLearnedDetector {
+    pub detector_id: String,
+    pub requirement_name: String,
+    pub cause_type: String,
+    pub positive_terms: Vec<String>,
+    pub tags: Vec<String>,
+    pub source_types: Vec<String>,
+    pub min_severity: Option<i64>,
+    pub confirmations: i64,
+    pub false_positives: i64,
+    pub created_from_feedback_id: String,
+    pub updated_at: String,
+    pub manually_disabled: bool,
+    pub status_reason: Option<String>,
+    pub review_status: String,
+    pub review_reason: Option<String>,
+    pub last_reviewed_at: Option<String>,
+}
+
+#[derive(Debug, Clone)]
+pub struct StoredLearnedTemplate {
+    pub template_id: String,
+    pub template_name: String,
+    pub cause_type: String,
+    pub cause_subtype: Option<String>,
+    pub title_template: String,
+    pub confidence: f64,
+    pub requires: Vec<String>,
+    pub requires_same_service: bool,
+    pub requires_temporal_order: bool,
+    pub confirmations: i64,
+    pub false_positives: i64,
+    pub created_from_feedback_id: String,
+    pub updated_at: String,
+    pub manually_disabled: bool,
+    pub status_reason: Option<String>,
+    pub review_status: String,
+    pub review_reason: Option<String>,
+    pub last_reviewed_at: Option<String>,
+}
+
+#[derive(Debug, Clone)]
+pub struct StoredLearnedComposition {
+    pub composition_id: String,
+    pub composition_name: String,
+    pub cause_type: String,
+    pub cause_subtype: Option<String>,
+    pub title_template: String,
+    pub confidence: f64,
+    pub requires: Vec<String>,
+    pub requires_same_service: bool,
+    pub requires_temporal_order: bool,
+    pub preferred_edge_types: Vec<String>,
+    pub confirmations: i64,
+    pub false_positives: i64,
+    pub created_from_feedback_id: String,
+    pub updated_at: String,
+    pub manually_disabled: bool,
+    pub status_reason: Option<String>,
+    pub review_status: String,
+    pub review_reason: Option<String>,
+    pub last_reviewed_at: Option<String>,
+}
+
+#[derive(Debug, Clone)]
+pub struct StoredLearnedEdgeProfile {
+    pub profile_id: String,
+    pub edge_type: String,
+    pub source_service: Option<String>,
+    pub target_service: Option<String>,
+    pub cause_type: Option<String>,
+    pub confirmations: i64,
+    pub false_positives: i64,
+    pub average_plausibility: f64,
+    pub average_latency_ms: f64,
+    pub created_from_feedback_id: String,
+    pub updated_at: String,
+    pub manually_disabled: bool,
+    pub status_reason: Option<String>,
+    pub review_status: String,
+    pub review_reason: Option<String>,
+    pub last_reviewed_at: Option<String>,
+}
+
+#[derive(Debug, Clone)]
+pub struct StoredAdaptiveReviewViewSelection {
+    pub artifact_kind: String,
+    pub artifact_id: String,
+}
+
+#[derive(Debug, Clone)]
+pub struct StoredAdaptiveReviewView {
+    pub view_id: String,
+    pub name: String,
+    pub description: Option<String>,
+    pub search_text: Option<String>,
+    pub assigned_reviewer: Option<String>,
+    pub artifact_selections: Vec<StoredAdaptiveReviewViewSelection>,
+    pub created_at: String,
+    pub updated_at: String,
+    pub last_used_at: Option<String>,
+}
+
+#[derive(Debug, Clone)]
 pub struct StoredChatMessage {
     pub message_id: String,
     pub incident_id: String,
@@ -1172,14 +1341,18 @@ impl IncidentsStore {
         let mut stmt = self
             .conn
             .prepare(
-                "SELECT hypothesis_id, cause_type, rank, description, total_score, confidence_label, suggested_checks \
+                "SELECT hypothesis_id, cause_type, rank, description, total_score, confidence_label, suggested_checks, score_breakdown \
                  FROM hypotheses WHERE incident_id = ?1 ORDER BY rank ASC, total_score DESC",
             )
             .context("prepare hypotheses")?;
         let rows = stmt
             .query_map(rusqlite::params![incident_id], |row| {
                 let suggested_raw: String = row.get(6)?;
+                let score_breakdown_raw: String = row.get(7)?;
                 let suggested_checks = serde_json::from_str::<Vec<String>>(&suggested_raw).ok();
+                let provenance = serde_json::from_str::<Value>(&score_breakdown_raw)
+                    .ok()
+                    .and_then(|value| value.get("provenance").cloned());
                 Ok(HypothesisRow {
                     hypothesis_id: row.get(0)?,
                     cause_type: row.get(1)?,
@@ -1188,9 +1361,54 @@ impl IncidentsStore {
                     total_score: row.get(4)?,
                     confidence_label: row.get(5)?,
                     suggested_checks,
+                    provenance,
                 })
             })
             .context("query hypotheses")?;
+        let mut out = Vec::new();
+        for row in rows {
+            out.push(row?);
+        }
+        Ok(out)
+    }
+
+    pub fn hypothesis_records(&self, incident_id: &str) -> Result<Vec<Value>> {
+        let mut stmt = self
+            .conn
+            .prepare(
+                "SELECT hypothesis_id, cause_type, rank, description, total_score, score_breakdown,
+                        supporting_events, contradicting_events, affected_services, suggested_checks,
+                        confidence_label, is_valid, invalidation_reasons, created_at, updated_at
+                 FROM hypotheses WHERE incident_id = ?1 ORDER BY rank ASC, total_score DESC",
+            )
+            .context("prepare full hypotheses query")?;
+        let rows = stmt
+            .query_map(rusqlite::params![incident_id], |row| {
+                let score_breakdown_raw: String = row.get(5)?;
+                let supporting_raw: String = row.get(6)?;
+                let contradicting_raw: String = row.get(7)?;
+                let affected_raw: String = row.get(8)?;
+                let suggested_raw: String = row.get(9)?;
+                let invalidation_raw: String = row.get(12)?;
+                Ok(serde_json::json!({
+                    "hypothesis_id": row.get::<_, String>(0)?,
+                    "cause_type": row.get::<_, String>(1)?,
+                    "rank": row.get::<_, Option<i64>>(2)?,
+                    "description": row.get::<_, String>(3)?,
+                    "total_score": row.get::<_, Option<f64>>(4)?,
+                    "score_breakdown": serde_json::from_str::<Value>(&score_breakdown_raw).unwrap_or(Value::Null),
+                    "supporting_events": parse_json_array(supporting_raw),
+                    "contradicting_events": parse_json_array(contradicting_raw),
+                    "affected_services": parse_json_array(affected_raw),
+                    "suggested_checks": parse_json_array(suggested_raw),
+                    "confidence_label": row.get::<_, Option<String>>(10)?,
+                    "is_valid": row.get::<_, i64>(11)? != 0,
+                    "invalidation_reasons": parse_json_array(invalidation_raw),
+                    "created_at": row.get::<_, String>(13)?,
+                    "updated_at": row.get::<_, String>(14)?,
+                }))
+            })
+            .context("query full hypotheses")?;
         let mut out = Vec::new();
         for row in rows {
             out.push(row?);
@@ -1539,6 +1757,38 @@ impl IncidentsStore {
         Ok(())
     }
 
+    pub fn all_feedback(&self) -> Result<Vec<StoredFeedback>> {
+        let mut stmt = match self.conn.prepare(
+            "SELECT feedback_id, incident_id, correct_hypothesis_id, feedback_type,
+                    operator_notes, resolved_at, created_at
+             FROM feedback ORDER BY COALESCE(created_at, resolved_at) ASC, feedback_id ASC",
+        ) {
+            Ok(stmt) => stmt,
+            Err(error) if is_missing_table_error(&error) => return Ok(Vec::new()),
+            Err(error) => return Err(error).context("prepare feedback scan"),
+        };
+        let rows = match stmt.query_map([], |row| {
+                Ok(StoredFeedback {
+                    feedback_id: row.get(0)?,
+                    incident_id: row.get(1)?,
+                    correct_hypothesis_id: row.get(2)?,
+                    feedback_type: row.get(3)?,
+                    operator_notes: row.get(4)?,
+                    resolved_at: row.get(5)?,
+                    created_at: row.get(6)?,
+                })
+            }) {
+            Ok(rows) => rows,
+            Err(error) if is_missing_table_error(&error) => return Ok(Vec::new()),
+            Err(error) => return Err(error).context("query feedback scan"),
+        };
+        let mut out = Vec::new();
+        for row in rows {
+            out.push(row?);
+        }
+        Ok(out)
+    }
+
     pub fn list_feedback(&self, incident_id: &str) -> Result<Vec<Value>> {
         let mut stmt = self
             .conn
@@ -1564,6 +1814,825 @@ impl IncidentsStore {
             out.push(row?);
         }
         Ok(out)
+    }
+
+    pub fn add_adaptive_learning_audit_entry(
+        &self,
+        entry: &StoredAdaptiveLearningAuditEntry,
+    ) -> Result<()> {
+        match self.conn.execute(
+            "INSERT OR IGNORE INTO adaptive_learning_audit (
+                audit_id, artifact_kind, artifact_id, action, reason,
+                previous_status, new_status, review_status_before, review_status_after,
+                runtime_effect, created_at
+            ) VALUES (
+                ?1, ?2, ?3, ?4, ?5,
+                ?6, ?7, ?8, ?9,
+                ?10, ?11
+            )",
+            rusqlite::params![
+                entry.audit_id,
+                entry.artifact_kind,
+                entry.artifact_id,
+                entry.action,
+                entry.reason,
+                entry.previous_status,
+                entry.new_status,
+                entry.review_status_before,
+                entry.review_status_after,
+                entry.runtime_effect,
+                entry.created_at,
+            ],
+        ) {
+            Ok(_) => Ok(()),
+            Err(error) if is_missing_table_error(&error) => Ok(()),
+            Err(error) => Err(error).context("insert adaptive learning audit entry"),
+        }
+    }
+
+    pub fn list_adaptive_learning_audit(
+        &self,
+        query: &AdaptiveLearningAuditQuery,
+    ) -> Result<Vec<StoredAdaptiveLearningAuditEntry>> {
+        let limit = query.limit.max(1) as i64;
+        let offset = query.offset.max(0) as i64;
+        let mut stmt = match self.conn.prepare(
+            "SELECT audit_id, artifact_kind, artifact_id, action, reason,
+                    previous_status, new_status, review_status_before, review_status_after,
+                    runtime_effect, created_at
+             FROM adaptive_learning_audit
+             WHERE (?1 IS NULL OR artifact_kind = ?1)
+               AND (?2 IS NULL OR artifact_id = ?2)
+               AND (?3 IS NULL OR action = ?3)
+               AND (?4 IS NULL OR review_status_after = ?4)
+             ORDER BY created_at DESC, audit_id DESC
+             LIMIT ?5 OFFSET ?6",
+        ) {
+            Ok(stmt) => stmt,
+            Err(error) if is_missing_table_error(&error) => return Ok(Vec::new()),
+            Err(error) => return Err(error).context("prepare adaptive learning audit query"),
+        };
+        let rows = match stmt.query_map(
+            rusqlite::params![
+                query.artifact_kind,
+                query.artifact_id,
+                query.action,
+                query.review_status_after,
+                limit,
+                offset,
+            ],
+            |row| {
+                Ok(StoredAdaptiveLearningAuditEntry {
+                    audit_id: row.get(0)?,
+                    artifact_kind: row.get(1)?,
+                    artifact_id: row.get(2)?,
+                    action: row.get(3)?,
+                    reason: row.get(4)?,
+                    previous_status: row.get(5)?,
+                    new_status: row.get(6)?,
+                    review_status_before: row.get(7)?,
+                    review_status_after: row.get(8)?,
+                    runtime_effect: row.get(9)?,
+                    created_at: row.get(10)?,
+                })
+            },
+        ) {
+            Ok(rows) => rows,
+            Err(error) if is_missing_table_error(&error) => return Ok(Vec::new()),
+            Err(error) => return Err(error).context("query adaptive learning audit"),
+        };
+        let mut out = Vec::new();
+        for row in rows {
+            out.push(row?);
+        }
+        Ok(out)
+    }
+
+    pub fn add_adaptive_learning_history_entries(
+        &mut self,
+        entries: &[StoredAdaptiveLearningHistoryEntry],
+    ) -> Result<()> {
+        if entries.is_empty() {
+            return Ok(());
+        }
+        let tx = self
+            .conn
+            .unchecked_transaction()
+            .context("begin adaptive learning history transaction")?;
+        let mut stmt = match tx.prepare(
+            "INSERT OR IGNORE INTO adaptive_learning_history (
+                entry_id, artifact_kind, artifact_id, artifact_label, incident_id,
+                cause_type, hypothesis_id, observed_at, score, rank,
+                estimated_impact, impact_metric, score_delta, rank_delta, edge_delta
+            ) VALUES (
+                ?1, ?2, ?3, ?4, ?5,
+                ?6, ?7, ?8, ?9, ?10,
+                ?11, ?12, ?13, ?14, ?15
+            )",
+        ) {
+            Ok(stmt) => stmt,
+            Err(error) if is_missing_table_error(&error) => return Ok(()),
+            Err(error) => return Err(error).context("prepare adaptive learning history insert"),
+        };
+        for entry in entries {
+            stmt.execute(rusqlite::params![
+                entry.entry_id,
+                entry.artifact_kind,
+                entry.artifact_id,
+                entry.artifact_label,
+                entry.incident_id,
+                entry.cause_type,
+                entry.hypothesis_id,
+                entry.observed_at,
+                entry.score,
+                entry.rank,
+                entry.estimated_impact,
+                entry.impact_metric,
+                entry.score_delta,
+                entry.rank_delta,
+                entry.edge_delta,
+            ])
+            .context("insert adaptive learning history entry")?;
+        }
+        drop(stmt);
+        tx.commit()
+            .context("commit adaptive learning history transaction")?;
+        Ok(())
+    }
+
+    pub fn list_adaptive_learning_history(
+        &self,
+        query: &AdaptiveLearningHistoryQuery,
+    ) -> Result<Vec<StoredAdaptiveLearningHistoryEntry>> {
+        let limit = query.limit.max(1) as i64;
+        let offset = query.offset.max(0) as i64;
+        let mut stmt = match self.conn.prepare(
+            "SELECT entry_id, artifact_kind, artifact_id, artifact_label, incident_id,
+                    cause_type, hypothesis_id, observed_at, score, rank,
+                    estimated_impact, impact_metric, score_delta, rank_delta, edge_delta
+             FROM adaptive_learning_history
+             WHERE (?1 IS NULL OR artifact_kind = ?1)
+               AND (?2 IS NULL OR artifact_id = ?2)
+               AND (?3 IS NULL OR incident_id = ?3)
+               AND (?4 IS NULL OR cause_type = ?4)
+             ORDER BY observed_at DESC, entry_id DESC
+             LIMIT ?5 OFFSET ?6",
+        ) {
+            Ok(stmt) => stmt,
+            Err(error) if is_missing_table_error(&error) => return Ok(Vec::new()),
+            Err(error) => return Err(error).context("prepare adaptive learning history query"),
+        };
+        let rows = match stmt.query_map(
+            rusqlite::params![
+                query.artifact_kind,
+                query.artifact_id,
+                query.incident_id,
+                query.cause_type,
+                limit,
+                offset,
+            ],
+            |row| {
+                Ok(StoredAdaptiveLearningHistoryEntry {
+                    entry_id: row.get(0)?,
+                    artifact_kind: row.get(1)?,
+                    artifact_id: row.get(2)?,
+                    artifact_label: row.get(3)?,
+                    incident_id: row.get(4)?,
+                    cause_type: row.get(5)?,
+                    hypothesis_id: row.get(6)?,
+                    observed_at: row.get(7)?,
+                    score: row.get(8)?,
+                    rank: row.get(9)?,
+                    estimated_impact: row.get(10)?,
+                    impact_metric: row.get(11)?,
+                    score_delta: row.get(12)?,
+                    rank_delta: row.get(13)?,
+                    edge_delta: row.get(14)?,
+                })
+            },
+        ) {
+            Ok(rows) => rows,
+            Err(error) if is_missing_table_error(&error) => return Ok(Vec::new()),
+            Err(error) => return Err(error).context("query adaptive learning history"),
+        };
+        let mut out = Vec::new();
+        for row in rows {
+            out.push(row?);
+        }
+        Ok(out)
+    }
+
+    pub fn adaptive_learning_model(&self) -> Result<Option<StoredAdaptiveLearningModel>> {
+        let meta = match self
+            .conn
+            .query_row(
+                "SELECT schema_version, last_updated
+                 FROM adaptive_learning_registry_meta
+                 WHERE singleton_id = 1",
+                [],
+                |row| Ok((row.get::<_, i64>(0)?, row.get::<_, Option<String>>(1)?)),
+            )
+            .optional()
+        {
+            Ok(value) => value,
+            Err(error) if is_missing_table_error(&error) => return Ok(None),
+            Err(error) => return Err(error).context("query adaptive registry meta"),
+        };
+
+        let processed_feedback_ids = {
+            let mut stmt = match self.conn.prepare(
+                "SELECT feedback_id
+                 FROM adaptive_learning_processed_feedback
+                 ORDER BY feedback_id ASC",
+            ) {
+                Ok(stmt) => stmt,
+                Err(error) if is_missing_table_error(&error) => return Ok(None),
+                Err(error) => return Err(error).context("prepare adaptive processed feedback query"),
+            };
+            let rows = stmt
+                .query_map([], |row| row.get::<_, String>(0))
+                .context("query adaptive processed feedback")?;
+            let mut out = Vec::new();
+            for row in rows {
+                out.push(row?);
+            }
+            out
+        };
+
+        let learned_detectors = {
+            let mut stmt = match self.conn.prepare(
+                "SELECT detector_id, requirement_name, cause_type, positive_terms, tags, source_types,
+                        min_severity, confirmations, false_positives, created_from_feedback_id,
+                        updated_at, manually_disabled, status_reason, review_status, review_reason,
+                        last_reviewed_at
+                 FROM adaptive_learned_detectors
+                 ORDER BY requirement_name ASC, detector_id ASC",
+            ) {
+                Ok(stmt) => stmt,
+                Err(error) if is_missing_table_error(&error) => return Ok(None),
+                Err(error) => return Err(error).context("prepare adaptive detectors query"),
+            };
+            let rows = stmt
+                .query_map([], |row| {
+                    Ok(StoredLearnedDetector {
+                        detector_id: row.get(0)?,
+                        requirement_name: row.get(1)?,
+                        cause_type: row.get(2)?,
+                        positive_terms: parse_json_array(row.get(3)?),
+                        tags: parse_json_array(row.get(4)?),
+                        source_types: parse_json_array(row.get(5)?),
+                        min_severity: row.get(6)?,
+                        confirmations: row.get(7)?,
+                        false_positives: row.get(8)?,
+                        created_from_feedback_id: row.get(9)?,
+                        updated_at: row.get(10)?,
+                        manually_disabled: row.get::<_, i64>(11)? != 0,
+                        status_reason: row.get(12)?,
+                        review_status: row.get(13)?,
+                        review_reason: row.get(14)?,
+                        last_reviewed_at: row.get(15)?,
+                    })
+                })
+                .context("query adaptive detectors")?;
+            let mut out = Vec::new();
+            for row in rows {
+                out.push(row?);
+            }
+            out
+        };
+
+        let learned_templates = {
+            let mut stmt = match self.conn.prepare(
+                "SELECT template_id, template_name, cause_type, cause_subtype, title_template,
+                        confidence, requires_json, requires_same_service, requires_temporal_order,
+                        confirmations, false_positives, created_from_feedback_id, updated_at,
+                        manually_disabled, status_reason, review_status, review_reason,
+                        last_reviewed_at
+                 FROM adaptive_learned_templates
+                 ORDER BY template_name ASC, template_id ASC",
+            ) {
+                Ok(stmt) => stmt,
+                Err(error) if is_missing_table_error(&error) => return Ok(None),
+                Err(error) => return Err(error).context("prepare adaptive templates query"),
+            };
+            let rows = stmt
+                .query_map([], |row| {
+                    Ok(StoredLearnedTemplate {
+                        template_id: row.get(0)?,
+                        template_name: row.get(1)?,
+                        cause_type: row.get(2)?,
+                        cause_subtype: row.get(3)?,
+                        title_template: row.get(4)?,
+                        confidence: row.get(5)?,
+                        requires: parse_json_array(row.get(6)?),
+                        requires_same_service: row.get::<_, i64>(7)? != 0,
+                        requires_temporal_order: row.get::<_, i64>(8)? != 0,
+                        confirmations: row.get(9)?,
+                        false_positives: row.get(10)?,
+                        created_from_feedback_id: row.get(11)?,
+                        updated_at: row.get(12)?,
+                        manually_disabled: row.get::<_, i64>(13)? != 0,
+                        status_reason: row.get(14)?,
+                        review_status: row.get(15)?,
+                        review_reason: row.get(16)?,
+                        last_reviewed_at: row.get(17)?,
+                    })
+                })
+                .context("query adaptive templates")?;
+            let mut out = Vec::new();
+            for row in rows {
+                out.push(row?);
+            }
+            out
+        };
+
+        let learned_compositions = {
+            let mut stmt = match self.conn.prepare(
+                "SELECT composition_id, composition_name, cause_type, cause_subtype, title_template,
+                        confidence, requires_json, requires_same_service, requires_temporal_order,
+                        preferred_edge_types, confirmations, false_positives,
+                        created_from_feedback_id, updated_at, manually_disabled, status_reason,
+                        review_status, review_reason, last_reviewed_at
+                 FROM adaptive_learned_compositions
+                 ORDER BY composition_name ASC, composition_id ASC",
+            ) {
+                Ok(stmt) => stmt,
+                Err(error) if is_missing_table_error(&error) => return Ok(None),
+                Err(error) => return Err(error).context("prepare adaptive compositions query"),
+            };
+            let rows = stmt
+                .query_map([], |row| {
+                    Ok(StoredLearnedComposition {
+                        composition_id: row.get(0)?,
+                        composition_name: row.get(1)?,
+                        cause_type: row.get(2)?,
+                        cause_subtype: row.get(3)?,
+                        title_template: row.get(4)?,
+                        confidence: row.get(5)?,
+                        requires: parse_json_array(row.get(6)?),
+                        requires_same_service: row.get::<_, i64>(7)? != 0,
+                        requires_temporal_order: row.get::<_, i64>(8)? != 0,
+                        preferred_edge_types: parse_json_array(row.get(9)?),
+                        confirmations: row.get(10)?,
+                        false_positives: row.get(11)?,
+                        created_from_feedback_id: row.get(12)?,
+                        updated_at: row.get(13)?,
+                        manually_disabled: row.get::<_, i64>(14)? != 0,
+                        status_reason: row.get(15)?,
+                        review_status: row.get(16)?,
+                        review_reason: row.get(17)?,
+                        last_reviewed_at: row.get(18)?,
+                    })
+                })
+                .context("query adaptive compositions")?;
+            let mut out = Vec::new();
+            for row in rows {
+                out.push(row?);
+            }
+            out
+        };
+
+        let learned_edge_profiles = {
+            let mut stmt = match self.conn.prepare(
+                "SELECT profile_id, edge_type, source_service, target_service, cause_type,
+                        confirmations, false_positives, average_plausibility,
+                        average_latency_ms, created_from_feedback_id, updated_at,
+                        manually_disabled, status_reason, review_status, review_reason,
+                        last_reviewed_at
+                 FROM adaptive_learned_edge_profiles
+                 ORDER BY profile_id ASC",
+            ) {
+                Ok(stmt) => stmt,
+                Err(error) if is_missing_table_error(&error) => return Ok(None),
+                Err(error) => return Err(error).context("prepare adaptive edge profiles query"),
+            };
+            let rows = stmt
+                .query_map([], |row| {
+                    Ok(StoredLearnedEdgeProfile {
+                        profile_id: row.get(0)?,
+                        edge_type: row.get(1)?,
+                        source_service: row.get(2)?,
+                        target_service: row.get(3)?,
+                        cause_type: row.get(4)?,
+                        confirmations: row.get(5)?,
+                        false_positives: row.get(6)?,
+                        average_plausibility: row.get(7)?,
+                        average_latency_ms: row.get(8)?,
+                        created_from_feedback_id: row.get(9)?,
+                        updated_at: row.get(10)?,
+                        manually_disabled: row.get::<_, i64>(11)? != 0,
+                        status_reason: row.get(12)?,
+                        review_status: row.get(13)?,
+                        review_reason: row.get(14)?,
+                        last_reviewed_at: row.get(15)?,
+                    })
+                })
+                .context("query adaptive edge profiles")?;
+            let mut out = Vec::new();
+            for row in rows {
+                out.push(row?);
+            }
+            out
+        };
+
+        if meta.is_none()
+            && processed_feedback_ids.is_empty()
+            && learned_detectors.is_empty()
+            && learned_templates.is_empty()
+            && learned_compositions.is_empty()
+            && learned_edge_profiles.is_empty()
+        {
+            return Ok(None);
+        }
+
+        let (schema_version, last_updated) = meta.unwrap_or((1, None));
+        Ok(Some(StoredAdaptiveLearningModel {
+            schema_version,
+            last_updated,
+            processed_feedback_ids,
+            learned_detectors,
+            learned_templates,
+            learned_compositions,
+            learned_edge_profiles,
+        }))
+    }
+
+    pub fn replace_adaptive_learning_model(
+        &mut self,
+        model: &StoredAdaptiveLearningModel,
+    ) -> Result<()> {
+        if !table_exists(&self.conn, "adaptive_learning_registry_meta")?
+            || !table_exists(&self.conn, "adaptive_learned_detectors")?
+        {
+            return Ok(());
+        }
+        let tx = self
+            .conn
+            .unchecked_transaction()
+            .context("begin adaptive registry transaction")?;
+        tx.execute(
+            "INSERT INTO adaptive_learning_registry_meta (singleton_id, schema_version, last_updated)
+             VALUES (1, ?1, ?2)
+             ON CONFLICT(singleton_id) DO UPDATE SET
+                schema_version = excluded.schema_version,
+                last_updated = excluded.last_updated",
+            rusqlite::params![model.schema_version, model.last_updated],
+        )
+        .context("upsert adaptive registry meta")?;
+        tx.execute("DELETE FROM adaptive_learning_processed_feedback", [])
+            .context("clear adaptive processed feedback")?;
+        tx.execute("DELETE FROM adaptive_learned_detectors", [])
+            .context("clear adaptive detectors")?;
+        tx.execute("DELETE FROM adaptive_learned_templates", [])
+            .context("clear adaptive templates")?;
+        tx.execute("DELETE FROM adaptive_learned_compositions", [])
+            .context("clear adaptive compositions")?;
+        tx.execute("DELETE FROM adaptive_learned_edge_profiles", [])
+            .context("clear adaptive edge profiles")?;
+
+        {
+            let mut stmt = tx
+                .prepare(
+                    "INSERT INTO adaptive_learning_processed_feedback (
+                        feedback_id, processed_at
+                    ) VALUES (?1, strftime('%Y-%m-%dT%H:%M:%fZ', 'now'))",
+                )
+                .context("prepare adaptive processed feedback insert")?;
+            for feedback_id in &model.processed_feedback_ids {
+                stmt.execute(rusqlite::params![feedback_id])
+                    .context("insert adaptive processed feedback")?;
+            }
+        }
+
+        {
+            let mut stmt = tx
+                .prepare(
+                    "INSERT INTO adaptive_learned_detectors (
+                        detector_id, requirement_name, cause_type, positive_terms, tags, source_types,
+                        min_severity, confirmations, false_positives, created_from_feedback_id,
+                        updated_at, manually_disabled, status_reason, review_status, review_reason,
+                        last_reviewed_at
+                    ) VALUES (
+                        ?1, ?2, ?3, ?4, ?5, ?6,
+                        ?7, ?8, ?9, ?10,
+                        ?11, ?12, ?13, ?14, ?15,
+                        ?16
+                    )",
+                )
+                .context("prepare adaptive detector insert")?;
+            for item in &model.learned_detectors {
+                stmt.execute(rusqlite::params![
+                    item.detector_id,
+                    item.requirement_name,
+                    item.cause_type,
+                    serde_json::to_string(&item.positive_terms).unwrap_or_else(|_| "[]".into()),
+                    serde_json::to_string(&item.tags).unwrap_or_else(|_| "[]".into()),
+                    serde_json::to_string(&item.source_types).unwrap_or_else(|_| "[]".into()),
+                    item.min_severity,
+                    item.confirmations,
+                    item.false_positives,
+                    item.created_from_feedback_id,
+                    item.updated_at,
+                    if item.manually_disabled { 1 } else { 0 },
+                    item.status_reason,
+                    item.review_status,
+                    item.review_reason,
+                    item.last_reviewed_at,
+                ])
+                .context("insert adaptive detector")?;
+            }
+        }
+
+        {
+            let mut stmt = tx
+                .prepare(
+                    "INSERT INTO adaptive_learned_templates (
+                        template_id, template_name, cause_type, cause_subtype, title_template,
+                        confidence, requires_json, requires_same_service, requires_temporal_order,
+                        confirmations, false_positives, created_from_feedback_id, updated_at,
+                        manually_disabled, status_reason, review_status, review_reason,
+                        last_reviewed_at
+                    ) VALUES (
+                        ?1, ?2, ?3, ?4, ?5,
+                        ?6, ?7, ?8, ?9,
+                        ?10, ?11, ?12, ?13,
+                        ?14, ?15, ?16, ?17,
+                        ?18
+                    )",
+                )
+                .context("prepare adaptive template insert")?;
+            for item in &model.learned_templates {
+                stmt.execute(rusqlite::params![
+                    item.template_id,
+                    item.template_name,
+                    item.cause_type,
+                    item.cause_subtype,
+                    item.title_template,
+                    item.confidence,
+                    serde_json::to_string(&item.requires).unwrap_or_else(|_| "[]".into()),
+                    if item.requires_same_service { 1 } else { 0 },
+                    if item.requires_temporal_order { 1 } else { 0 },
+                    item.confirmations,
+                    item.false_positives,
+                    item.created_from_feedback_id,
+                    item.updated_at,
+                    if item.manually_disabled { 1 } else { 0 },
+                    item.status_reason,
+                    item.review_status,
+                    item.review_reason,
+                    item.last_reviewed_at,
+                ])
+                .context("insert adaptive template")?;
+            }
+        }
+
+        {
+            let mut stmt = tx
+                .prepare(
+                    "INSERT INTO adaptive_learned_compositions (
+                        composition_id, composition_name, cause_type, cause_subtype, title_template,
+                        confidence, requires_json, requires_same_service, requires_temporal_order,
+                        preferred_edge_types, confirmations, false_positives,
+                        created_from_feedback_id, updated_at, manually_disabled, status_reason,
+                        review_status, review_reason, last_reviewed_at
+                    ) VALUES (
+                        ?1, ?2, ?3, ?4, ?5,
+                        ?6, ?7, ?8, ?9,
+                        ?10, ?11, ?12,
+                        ?13, ?14, ?15, ?16,
+                        ?17, ?18, ?19
+                    )",
+                )
+                .context("prepare adaptive composition insert")?;
+            for item in &model.learned_compositions {
+                stmt.execute(rusqlite::params![
+                    item.composition_id,
+                    item.composition_name,
+                    item.cause_type,
+                    item.cause_subtype,
+                    item.title_template,
+                    item.confidence,
+                    serde_json::to_string(&item.requires).unwrap_or_else(|_| "[]".into()),
+                    if item.requires_same_service { 1 } else { 0 },
+                    if item.requires_temporal_order { 1 } else { 0 },
+                    serde_json::to_string(&item.preferred_edge_types).unwrap_or_else(|_| "[]".into()),
+                    item.confirmations,
+                    item.false_positives,
+                    item.created_from_feedback_id,
+                    item.updated_at,
+                    if item.manually_disabled { 1 } else { 0 },
+                    item.status_reason,
+                    item.review_status,
+                    item.review_reason,
+                    item.last_reviewed_at,
+                ])
+                .context("insert adaptive composition")?;
+            }
+        }
+
+        {
+            let mut stmt = tx
+                .prepare(
+                    "INSERT INTO adaptive_learned_edge_profiles (
+                        profile_id, edge_type, source_service, target_service, cause_type,
+                        confirmations, false_positives, average_plausibility,
+                        average_latency_ms, created_from_feedback_id, updated_at,
+                        manually_disabled, status_reason, review_status, review_reason,
+                        last_reviewed_at
+                    ) VALUES (
+                        ?1, ?2, ?3, ?4, ?5,
+                        ?6, ?7, ?8,
+                        ?9, ?10, ?11,
+                        ?12, ?13, ?14, ?15,
+                        ?16
+                    )",
+                )
+                .context("prepare adaptive edge profile insert")?;
+            for item in &model.learned_edge_profiles {
+                stmt.execute(rusqlite::params![
+                    item.profile_id,
+                    item.edge_type,
+                    item.source_service,
+                    item.target_service,
+                    item.cause_type,
+                    item.confirmations,
+                    item.false_positives,
+                    item.average_plausibility,
+                    item.average_latency_ms,
+                    item.created_from_feedback_id,
+                    item.updated_at,
+                    if item.manually_disabled { 1 } else { 0 },
+                    item.status_reason,
+                    item.review_status,
+                    item.review_reason,
+                    item.last_reviewed_at,
+                ])
+                .context("insert adaptive edge profile")?;
+            }
+        }
+
+        tx.commit()
+            .context("commit adaptive registry transaction")?;
+        Ok(())
+    }
+
+    pub fn list_adaptive_review_views(&self) -> Result<Vec<StoredAdaptiveReviewView>> {
+        let mut stmt = match self.conn.prepare(
+            "SELECT view_id, name, description, search_text, assigned_reviewer,
+                    created_at, updated_at, last_used_at
+             FROM adaptive_review_views
+             ORDER BY COALESCE(last_used_at, updated_at) DESC, name ASC",
+        ) {
+            Ok(stmt) => stmt,
+            Err(error) if is_missing_table_error(&error) => return Ok(Vec::new()),
+            Err(error) => return Err(error).context("prepare adaptive review views query"),
+        };
+        let rows = stmt
+            .query_map([], |row| {
+                Ok(StoredAdaptiveReviewView {
+                    view_id: row.get(0)?,
+                    name: row.get(1)?,
+                    description: row.get(2)?,
+                    search_text: row.get(3)?,
+                    assigned_reviewer: row.get(4)?,
+                    artifact_selections: Vec::new(),
+                    created_at: row.get(5)?,
+                    updated_at: row.get(6)?,
+                    last_used_at: row.get(7)?,
+                })
+            })
+            .context("query adaptive review views")?;
+        let mut views = Vec::new();
+        for row in rows {
+            views.push(row?);
+        }
+        if views.is_empty() {
+            return Ok(Vec::new());
+        }
+        let mut selections_by_view = HashMap::<String, Vec<StoredAdaptiveReviewViewSelection>>::new();
+        let mut selection_stmt = match self.conn.prepare(
+            "SELECT view_id, artifact_kind, artifact_id
+             FROM adaptive_review_view_artifacts
+             ORDER BY view_id ASC, artifact_kind ASC, artifact_id ASC",
+        ) {
+            Ok(stmt) => stmt,
+            Err(error) if is_missing_table_error(&error) => return Ok(views),
+            Err(error) => return Err(error).context("prepare adaptive review view artifacts query"),
+        };
+        let selection_rows = selection_stmt
+            .query_map([], |row| {
+                Ok((
+                    row.get::<_, String>(0)?,
+                    StoredAdaptiveReviewViewSelection {
+                        artifact_kind: row.get(1)?,
+                        artifact_id: row.get(2)?,
+                    },
+                ))
+            })
+            .context("query adaptive review view artifacts")?;
+        for row in selection_rows {
+            let (view_id, selection) = row?;
+            selections_by_view.entry(view_id).or_default().push(selection);
+        }
+        for view in &mut views {
+            view.artifact_selections = selections_by_view.remove(&view.view_id).unwrap_or_default();
+        }
+        Ok(views)
+    }
+
+    pub fn upsert_adaptive_review_view(&mut self, view: &StoredAdaptiveReviewView) -> Result<()> {
+        if !table_exists(&self.conn, "adaptive_review_views")? {
+            return Ok(());
+        }
+        let tx = self
+            .conn
+            .unchecked_transaction()
+            .context("begin adaptive review view transaction")?;
+        tx.execute(
+            "INSERT INTO adaptive_review_views (
+                view_id, name, description, search_text, assigned_reviewer,
+                created_at, updated_at, last_used_at
+            ) VALUES (
+                ?1, ?2, ?3, ?4, ?5,
+                ?6, ?7, ?8
+            )
+            ON CONFLICT(view_id) DO UPDATE SET
+                name = excluded.name,
+                description = excluded.description,
+                search_text = excluded.search_text,
+                assigned_reviewer = excluded.assigned_reviewer,
+                updated_at = excluded.updated_at,
+                last_used_at = excluded.last_used_at",
+            rusqlite::params![
+                view.view_id,
+                view.name,
+                view.description,
+                view.search_text,
+                view.assigned_reviewer,
+                view.created_at,
+                view.updated_at,
+                view.last_used_at,
+            ],
+        )
+        .context("upsert adaptive review view")?;
+        tx.execute(
+            "DELETE FROM adaptive_review_view_artifacts WHERE view_id = ?1",
+            rusqlite::params![view.view_id],
+        )
+        .context("clear adaptive review view artifacts")?;
+        let mut stmt = tx
+            .prepare(
+                "INSERT INTO adaptive_review_view_artifacts (
+                    view_id, artifact_kind, artifact_id
+                ) VALUES (?1, ?2, ?3)",
+            )
+            .context("prepare adaptive review view artifact insert")?;
+        for selection in &view.artifact_selections {
+            stmt.execute(rusqlite::params![
+                view.view_id,
+                selection.artifact_kind,
+                selection.artifact_id,
+            ])
+            .context("insert adaptive review view artifact")?;
+        }
+        drop(stmt);
+        tx.commit()
+            .context("commit adaptive review view transaction")?;
+        Ok(())
+    }
+
+    pub fn delete_adaptive_review_view(&self, view_id: &str) -> Result<()> {
+        if !table_exists(&self.conn, "adaptive_review_views")? {
+            return Ok(());
+        }
+        self.conn
+            .execute(
+                "DELETE FROM adaptive_review_view_artifacts WHERE view_id = ?1",
+                rusqlite::params![view_id],
+            )
+            .context("delete adaptive review view artifacts")?;
+        self.conn
+            .execute(
+                "DELETE FROM adaptive_review_views WHERE view_id = ?1",
+                rusqlite::params![view_id],
+            )
+            .context("delete adaptive review view")?;
+        Ok(())
+    }
+
+    pub fn touch_adaptive_review_view(&self, view_id: &str, used_at: &str) -> Result<()> {
+        if !table_exists(&self.conn, "adaptive_review_views")? {
+            return Ok(());
+        }
+        self.conn
+            .execute(
+                "UPDATE adaptive_review_views
+                 SET last_used_at = ?2, updated_at = CASE WHEN updated_at > ?2 THEN updated_at ELSE ?2 END
+                 WHERE view_id = ?1",
+                rusqlite::params![view_id, used_at],
+            )
+            .context("touch adaptive review view")?;
+        Ok(())
     }
 
     pub fn add_ai_trace(&self, trace: &StoredAiTrace) -> Result<()> {
@@ -1681,16 +2750,18 @@ impl IncidentsStore {
         reason: &str,
         changed_at: Option<&str>,
     ) -> Result<()> {
-        self.conn
-            .execute(
+        match self.conn.execute(
                 "INSERT INTO incident_state_log (
                     incident_id, old_state, new_state, changed_at, reason
                 ) VALUES (
                     ?1, ?2, ?3, COALESCE(?4, strftime('%Y-%m-%dT%H:%M:%fZ', 'now')), ?5
                 )",
                 rusqlite::params![incident_id, old_state, new_state, changed_at, reason],
-            )
-            .context("insert incident state log")?;
+            ) {
+            Ok(_) => {}
+            Err(error) if is_missing_table_error(&error) => return Ok(()),
+            Err(error) => return Err(error).context("insert incident state log"),
+        }
         Ok(())
     }
 
@@ -1781,6 +2852,171 @@ impl IncidentsStore {
             Some(resolved_at),
         )?;
         Ok(())
+    }
+
+    pub fn stale_incident_ids_before(&self, cutoff: &str, limit: usize) -> Result<Vec<String>> {
+        let mut stmt = self
+            .conn
+            .prepare(
+                "SELECT incident_id FROM incidents
+                 WHERE state IN ('open','investigating','explained')
+                   AND updated_at < ?1
+                 ORDER BY updated_at ASC
+                 LIMIT ?2",
+            )
+            .context("prepare stale incident query")?;
+        let rows = stmt
+            .query_map(rusqlite::params![cutoff, limit as i64], |row| row.get::<_, String>(0))
+            .context("query stale incidents")?;
+        let mut out = Vec::new();
+        for row in rows {
+            out.push(row?);
+        }
+        Ok(out)
+    }
+
+    pub fn archive_candidate_ids_before(&self, cutoff: &str, limit: usize) -> Result<Vec<String>> {
+        let mut stmt = self
+            .conn
+            .prepare(
+                "SELECT incident_id FROM incidents
+                 WHERE state IN ('resolved','stale')
+                   AND updated_at < ?1
+                 ORDER BY updated_at ASC
+                 LIMIT ?2",
+            )
+            .context("prepare archive candidate query")?;
+        let rows = stmt
+            .query_map(rusqlite::params![cutoff, limit as i64], |row| row.get::<_, String>(0))
+            .context("query archive candidates")?;
+        let mut out = Vec::new();
+        for row in rows {
+            out.push(row?);
+        }
+        Ok(out)
+    }
+
+    pub fn incident_archive_payload(&self, incident_id: &str) -> Result<Option<Value>> {
+        let Some(incident) = self.get_incident(incident_id)? else {
+            return Ok(None);
+        };
+        let event_ids = self.incident_event_ids(incident_id)?;
+        let hypotheses = self.hypothesis_records(incident_id)?;
+        let clusters = self.clusters(incident_id)?;
+        let explanation = self.latest_explanation(incident_id)?;
+        let latest_trace = self.latest_ai_trace(incident_id)?;
+        let state_log = self.list_state_log(incident_id)?;
+        let feedback = self.list_feedback(incident_id)?;
+        let inference_graph = self.inference_graph_snapshot(incident_id)?;
+        let mut chat_stmt = self
+            .conn
+            .prepare(
+                "SELECT message_id, role, content, message_schema_version, created_at
+                 FROM incident_chat_messages WHERE incident_id = ?1 ORDER BY created_at ASC",
+            )
+            .context("prepare archive chat query")?;
+        let chat_rows = chat_stmt
+            .query_map(rusqlite::params![incident_id], |row| {
+                Ok(serde_json::json!({
+                    "message_id": row.get::<_, String>(0)?,
+                    "role": row.get::<_, String>(1)?,
+                    "content": row.get::<_, String>(2)?,
+                    "message_schema_version": row.get::<_, i64>(3)?,
+                    "created_at": row.get::<_, String>(4)?,
+                }))
+            })
+            .context("query archive chat rows")?;
+        let mut chat_messages = Vec::new();
+        for row in chat_rows {
+            chat_messages.push(row?);
+        }
+        Ok(Some(serde_json::json!({
+            "incident": incident,
+            "event_ids": event_ids,
+            "hypotheses": hypotheses,
+            "clusters": clusters,
+            "explanation": explanation,
+            "latest_trace": latest_trace,
+            "state_log": state_log,
+            "feedback": feedback,
+            "inference_graph": inference_graph,
+            "chat_messages": chat_messages,
+        })))
+    }
+
+    pub fn archive_incident_to_path(
+        &mut self,
+        incident_id: &str,
+        archive_db_path: &Path,
+        archived_at: &str,
+    ) -> Result<bool> {
+        let Some(payload) = self.incident_archive_payload(incident_id)? else {
+            return Ok(false);
+        };
+        if let Some(parent) = archive_db_path.parent() {
+            fs::create_dir_all(parent)
+                .with_context(|| format!("create archive dir {}", parent.display()))?;
+        }
+        let archive_conn = Connection::open(archive_db_path)
+            .with_context(|| format!("open archive db {}", archive_db_path.display()))?;
+        archive_conn
+            .execute_batch(
+                "PRAGMA journal_mode=WAL;
+                 CREATE TABLE IF NOT EXISTS archived_incidents (
+                     incident_id TEXT PRIMARY KEY,
+                     state TEXT NOT NULL,
+                     archived_at TEXT NOT NULL,
+                     payload_json TEXT NOT NULL
+                 );
+                 CREATE INDEX IF NOT EXISTS idx_archived_state ON archived_incidents(state);
+                 CREATE INDEX IF NOT EXISTS idx_archived_at ON archived_incidents(archived_at);",
+            )
+            .context("initialize archive database")?;
+        let state = payload
+            .get("incident")
+            .and_then(|value| value.get("state"))
+            .and_then(Value::as_str)
+            .unwrap_or("unknown")
+            .to_string();
+        archive_conn
+            .execute(
+                "INSERT INTO archived_incidents (incident_id, state, archived_at, payload_json)
+                 VALUES (?1, ?2, ?3, ?4)
+                 ON CONFLICT(incident_id) DO UPDATE SET
+                    state = excluded.state,
+                    archived_at = excluded.archived_at,
+                    payload_json = excluded.payload_json",
+                rusqlite::params![incident_id, state, archived_at, payload.to_string()],
+            )
+            .context("insert archived incident")?;
+        let tx = self
+            .conn
+            .unchecked_transaction()
+            .context("begin archive delete transaction")?;
+        for table in [
+            "incident_events",
+            "hypotheses",
+            "incident_clusters",
+            "explanations",
+            "incident_ai_traces",
+            "inference_graph_snapshots",
+            "feedback",
+            "incident_state_log",
+            "incident_chat_messages",
+        ] {
+            tx.execute(
+                &format!("DELETE FROM {table} WHERE incident_id = ?1"),
+                rusqlite::params![incident_id],
+            )
+            .with_context(|| format!("delete archived incident rows from {table}"))?;
+        }
+        tx.execute(
+            "DELETE FROM incidents WHERE incident_id = ?1",
+            rusqlite::params![incident_id],
+        )
+        .context("delete archived incident row")?;
+        tx.commit().context("commit archive delete transaction")?;
+        Ok(true)
     }
 }
 
@@ -2023,6 +3259,138 @@ fn initialize_incidents_db(path: &Path) -> Result<()> {
              message_schema_version INTEGER NOT NULL DEFAULT 1,
              created_at TEXT NOT NULL DEFAULT (strftime('%Y-%m-%dT%H:%M:%fZ', 'now'))
          );
+         CREATE TABLE IF NOT EXISTS adaptive_learning_audit (
+             audit_id TEXT PRIMARY KEY,
+             artifact_kind TEXT NOT NULL,
+             artifact_id TEXT NOT NULL,
+             action TEXT NOT NULL,
+             reason TEXT,
+             previous_status TEXT NOT NULL,
+             new_status TEXT NOT NULL,
+             review_status_before TEXT,
+             review_status_after TEXT,
+             runtime_effect TEXT,
+             created_at TEXT NOT NULL
+         );
+         CREATE TABLE IF NOT EXISTS adaptive_learning_history (
+             entry_id TEXT PRIMARY KEY,
+             artifact_kind TEXT NOT NULL,
+             artifact_id TEXT NOT NULL,
+             artifact_label TEXT NOT NULL,
+             incident_id TEXT NOT NULL,
+             cause_type TEXT NOT NULL,
+             hypothesis_id TEXT NOT NULL,
+             observed_at TEXT NOT NULL,
+             score REAL,
+             rank INTEGER,
+             estimated_impact REAL NOT NULL DEFAULT 0,
+             impact_metric TEXT,
+             score_delta REAL,
+             rank_delta INTEGER,
+             edge_delta REAL
+         );
+         CREATE TABLE IF NOT EXISTS adaptive_learning_registry_meta (
+             singleton_id INTEGER PRIMARY KEY CHECK (singleton_id = 1),
+             schema_version INTEGER NOT NULL DEFAULT 1,
+             last_updated TEXT
+         );
+         CREATE TABLE IF NOT EXISTS adaptive_learning_processed_feedback (
+             feedback_id TEXT PRIMARY KEY,
+             processed_at TEXT NOT NULL DEFAULT (strftime('%Y-%m-%dT%H:%M:%fZ', 'now'))
+         );
+         CREATE TABLE IF NOT EXISTS adaptive_learned_detectors (
+             detector_id TEXT PRIMARY KEY,
+             requirement_name TEXT NOT NULL,
+             cause_type TEXT NOT NULL,
+             positive_terms TEXT NOT NULL DEFAULT '[]',
+             tags TEXT NOT NULL DEFAULT '[]',
+             source_types TEXT NOT NULL DEFAULT '[]',
+             min_severity INTEGER,
+             confirmations INTEGER NOT NULL DEFAULT 0,
+             false_positives INTEGER NOT NULL DEFAULT 0,
+             created_from_feedback_id TEXT NOT NULL DEFAULT '',
+             updated_at TEXT NOT NULL DEFAULT '',
+             manually_disabled INTEGER NOT NULL DEFAULT 0,
+             status_reason TEXT,
+             review_status TEXT NOT NULL DEFAULT 'unreviewed',
+             review_reason TEXT,
+             last_reviewed_at TEXT
+         );
+         CREATE TABLE IF NOT EXISTS adaptive_learned_templates (
+             template_id TEXT PRIMARY KEY,
+             template_name TEXT NOT NULL,
+             cause_type TEXT NOT NULL,
+             cause_subtype TEXT,
+             title_template TEXT NOT NULL DEFAULT '',
+             confidence REAL NOT NULL DEFAULT 0,
+             requires_json TEXT NOT NULL DEFAULT '[]',
+             requires_same_service INTEGER NOT NULL DEFAULT 0,
+             requires_temporal_order INTEGER NOT NULL DEFAULT 0,
+             confirmations INTEGER NOT NULL DEFAULT 0,
+             false_positives INTEGER NOT NULL DEFAULT 0,
+             created_from_feedback_id TEXT NOT NULL DEFAULT '',
+             updated_at TEXT NOT NULL DEFAULT '',
+             manually_disabled INTEGER NOT NULL DEFAULT 0,
+             status_reason TEXT,
+             review_status TEXT NOT NULL DEFAULT 'unreviewed',
+             review_reason TEXT,
+             last_reviewed_at TEXT
+         );
+         CREATE TABLE IF NOT EXISTS adaptive_learned_compositions (
+             composition_id TEXT PRIMARY KEY,
+             composition_name TEXT NOT NULL,
+             cause_type TEXT NOT NULL,
+             cause_subtype TEXT,
+             title_template TEXT NOT NULL DEFAULT '',
+             confidence REAL NOT NULL DEFAULT 0,
+             requires_json TEXT NOT NULL DEFAULT '[]',
+             requires_same_service INTEGER NOT NULL DEFAULT 0,
+             requires_temporal_order INTEGER NOT NULL DEFAULT 0,
+             preferred_edge_types TEXT NOT NULL DEFAULT '[]',
+             confirmations INTEGER NOT NULL DEFAULT 0,
+             false_positives INTEGER NOT NULL DEFAULT 0,
+             created_from_feedback_id TEXT NOT NULL DEFAULT '',
+             updated_at TEXT NOT NULL DEFAULT '',
+             manually_disabled INTEGER NOT NULL DEFAULT 0,
+             status_reason TEXT,
+             review_status TEXT NOT NULL DEFAULT 'unreviewed',
+             review_reason TEXT,
+             last_reviewed_at TEXT
+         );
+         CREATE TABLE IF NOT EXISTS adaptive_learned_edge_profiles (
+             profile_id TEXT PRIMARY KEY,
+             edge_type TEXT NOT NULL,
+             source_service TEXT,
+             target_service TEXT,
+             cause_type TEXT,
+             confirmations INTEGER NOT NULL DEFAULT 0,
+             false_positives INTEGER NOT NULL DEFAULT 0,
+             average_plausibility REAL NOT NULL DEFAULT 0,
+             average_latency_ms REAL NOT NULL DEFAULT 0,
+             created_from_feedback_id TEXT NOT NULL DEFAULT '',
+             updated_at TEXT NOT NULL DEFAULT '',
+             manually_disabled INTEGER NOT NULL DEFAULT 0,
+             status_reason TEXT,
+             review_status TEXT NOT NULL DEFAULT 'unreviewed',
+             review_reason TEXT,
+             last_reviewed_at TEXT
+         );
+         CREATE TABLE IF NOT EXISTS adaptive_review_views (
+             view_id TEXT PRIMARY KEY,
+             name TEXT NOT NULL,
+             description TEXT,
+             search_text TEXT,
+             assigned_reviewer TEXT,
+             created_at TEXT NOT NULL DEFAULT (strftime('%Y-%m-%dT%H:%M:%fZ', 'now')),
+             updated_at TEXT NOT NULL DEFAULT (strftime('%Y-%m-%dT%H:%M:%fZ', 'now')),
+             last_used_at TEXT
+         );
+         CREATE TABLE IF NOT EXISTS adaptive_review_view_artifacts (
+             view_id TEXT NOT NULL,
+             artifact_kind TEXT NOT NULL,
+             artifact_id TEXT NOT NULL,
+             PRIMARY KEY (view_id, artifact_kind, artifact_id)
+         );
          CREATE INDEX IF NOT EXISTS idx_incidents_state ON incidents(state);
          CREATE INDEX IF NOT EXISTS idx_incidents_updated ON incidents(updated_at);
          CREATE INDEX IF NOT EXISTS idx_incidents_created ON incidents(created_at);
@@ -2040,7 +3408,21 @@ fn initialize_incidents_db(path: &Path) -> Result<()> {
          CREATE INDEX IF NOT EXISTS idx_state_log_incident ON incident_state_log(incident_id);
          CREATE INDEX IF NOT EXISTS idx_state_log_changed ON incident_state_log(changed_at);
          CREATE INDEX IF NOT EXISTS idx_ai_traces_incident ON incident_ai_traces(incident_id, created_at DESC);
-         CREATE INDEX IF NOT EXISTS idx_chat_incident ON incident_chat_messages(incident_id, created_at ASC);",
+         CREATE INDEX IF NOT EXISTS idx_chat_incident ON incident_chat_messages(incident_id, created_at ASC);
+         CREATE INDEX IF NOT EXISTS idx_adaptive_audit_created ON adaptive_learning_audit(created_at DESC);
+         CREATE INDEX IF NOT EXISTS idx_adaptive_audit_artifact ON adaptive_learning_audit(artifact_kind, artifact_id, created_at DESC);
+         CREATE INDEX IF NOT EXISTS idx_adaptive_audit_action ON adaptive_learning_audit(action, created_at DESC);
+         CREATE INDEX IF NOT EXISTS idx_adaptive_history_observed ON adaptive_learning_history(observed_at DESC);
+         CREATE INDEX IF NOT EXISTS idx_adaptive_history_artifact ON adaptive_learning_history(artifact_kind, artifact_id, observed_at DESC);
+         CREATE INDEX IF NOT EXISTS idx_adaptive_history_incident ON adaptive_learning_history(incident_id, observed_at DESC);
+         CREATE INDEX IF NOT EXISTS idx_adaptive_processed_feedback ON adaptive_learning_processed_feedback(processed_at DESC);
+         CREATE INDEX IF NOT EXISTS idx_adaptive_detectors_requirement ON adaptive_learned_detectors(requirement_name);
+         CREATE INDEX IF NOT EXISTS idx_adaptive_templates_name ON adaptive_learned_templates(template_name);
+         CREATE INDEX IF NOT EXISTS idx_adaptive_compositions_name ON adaptive_learned_compositions(composition_name);
+         CREATE INDEX IF NOT EXISTS idx_adaptive_edge_profiles_edge ON adaptive_learned_edge_profiles(edge_type, cause_type);
+         CREATE INDEX IF NOT EXISTS idx_adaptive_review_views_updated ON adaptive_review_views(updated_at DESC);
+         CREATE INDEX IF NOT EXISTS idx_adaptive_review_views_assignee ON adaptive_review_views(assigned_reviewer, updated_at DESC);
+         CREATE INDEX IF NOT EXISTS idx_adaptive_review_view_artifacts_view ON adaptive_review_view_artifacts(view_id, artifact_kind);",
     )
     .context("initialize incidents db schema")?;
     ensure_column(
@@ -2151,13 +3533,13 @@ fn initialize_incidents_db(path: &Path) -> Result<()> {
     )
     .context("create ai_operator_context")?;
     conn.execute(
-        "INSERT INTO _schema_version(schema_name, version) VALUES ('incidents', 5)
+        "INSERT INTO _schema_version(schema_name, version) VALUES ('incidents', 8)
          ON CONFLICT(schema_name) DO UPDATE SET version = excluded.version, applied_at = strftime('%Y-%m-%dT%H:%M:%fZ', 'now')",
         [],
     )
     .context("update incidents _schema_version")?;
     conn.execute(
-        "INSERT INTO schema_version(name, version) VALUES ('incidents', 5)
+        "INSERT INTO schema_version(name, version) VALUES ('incidents', 8)
          ON CONFLICT(name) DO UPDATE SET version = excluded.version",
         [],
     )
@@ -2256,6 +3638,17 @@ fn parse_tags(raw: String) -> Option<Vec<String>> {
 
 fn parse_json_array(raw: String) -> Vec<String> {
     serde_json::from_str::<Vec<String>>(&raw).unwrap_or_default()
+}
+
+fn table_exists(conn: &Connection, table_name: &str) -> Result<bool> {
+    conn.query_row(
+        "SELECT 1 FROM sqlite_master WHERE type = 'table' AND name = ?1 LIMIT 1",
+        rusqlite::params![table_name],
+        |_| Ok(()),
+    )
+    .optional()
+    .map(|value| value.is_some())
+    .context("query sqlite_master")
 }
 
 fn is_missing_table_error(error: &impl std::fmt::Display) -> bool {
@@ -2770,5 +4163,287 @@ mod tests {
             incidents.list_state_log("inc-1").expect("state log").len(),
             2
         );
+    }
+
+    #[test]
+    fn incidents_store_round_trips_adaptive_learning_registry() {
+        let (_root, events_db, incidents_db) = temp_db_paths("adaptive-registry");
+        initialize_databases(&events_db, &incidents_db).expect("initialize dbs");
+        let mut incidents = IncidentsStore::open(&incidents_db)
+            .expect("open incidents")
+            .expect("incidents store");
+
+        incidents
+            .replace_adaptive_learning_model(&StoredAdaptiveLearningModel {
+                schema_version: 1,
+                last_updated: Some("2026-05-08T10:10:00Z".into()),
+                processed_feedback_ids: vec!["fb-1".into(), "fb-2".into()],
+                learned_detectors: vec![StoredLearnedDetector {
+                    detector_id: "detector-1".into(),
+                    requirement_name: "database_latency".into(),
+                    cause_type: "database_failure".into(),
+                    positive_terms: vec!["timeout".into(), "postgres".into()],
+                    tags: vec!["database".into()],
+                    source_types: vec!["app_http".into()],
+                    min_severity: Some(3),
+                    confirmations: 4,
+                    false_positives: 1,
+                    created_from_feedback_id: "fb-1".into(),
+                    updated_at: "2026-05-08T10:10:00Z".into(),
+                    manually_disabled: false,
+                    status_reason: None,
+                    review_status: "approved".into(),
+                    review_reason: Some("looks stable".into()),
+                    last_reviewed_at: Some("2026-05-08T10:11:00Z".into()),
+                }],
+                learned_templates: vec![StoredLearnedTemplate {
+                    template_id: "template-1".into(),
+                    template_name: "db timeout".into(),
+                    cause_type: "database_failure".into(),
+                    cause_subtype: Some("latency".into()),
+                    title_template: "Database latency spike".into(),
+                    confidence: 0.82,
+                    requires: vec!["database_latency".into()],
+                    requires_same_service: true,
+                    requires_temporal_order: false,
+                    confirmations: 3,
+                    false_positives: 0,
+                    created_from_feedback_id: "fb-1".into(),
+                    updated_at: "2026-05-08T10:10:00Z".into(),
+                    manually_disabled: false,
+                    status_reason: None,
+                    review_status: "watch".into(),
+                    review_reason: Some("monitor drift".into()),
+                    last_reviewed_at: Some("2026-05-08T10:12:00Z".into()),
+                }],
+                learned_compositions: vec![StoredLearnedComposition {
+                    composition_id: "composition-1".into(),
+                    composition_name: "db timeout cascade".into(),
+                    cause_type: "database_failure".into(),
+                    cause_subtype: Some("cascade".into()),
+                    title_template: "Timeout cascade from database".into(),
+                    confidence: 0.91,
+                    requires: vec!["database_latency".into(), "restart_signal".into()],
+                    requires_same_service: true,
+                    requires_temporal_order: true,
+                    preferred_edge_types: vec!["depends_on".into()],
+                    confirmations: 2,
+                    false_positives: 0,
+                    created_from_feedback_id: "fb-2".into(),
+                    updated_at: "2026-05-08T10:13:00Z".into(),
+                    manually_disabled: false,
+                    status_reason: None,
+                    review_status: "unreviewed".into(),
+                    review_reason: None,
+                    last_reviewed_at: None,
+                }],
+                learned_edge_profiles: vec![StoredLearnedEdgeProfile {
+                    profile_id: "edge-1".into(),
+                    edge_type: "depends_on".into(),
+                    source_service: Some("api".into()),
+                    target_service: Some("postgres".into()),
+                    cause_type: Some("database_failure".into()),
+                    confirmations: 5,
+                    false_positives: 1,
+                    average_plausibility: 0.67,
+                    average_latency_ms: 245.0,
+                    created_from_feedback_id: "fb-2".into(),
+                    updated_at: "2026-05-08T10:14:00Z".into(),
+                    manually_disabled: true,
+                    status_reason: Some("under review".into()),
+                    review_status: "rejected".into(),
+                    review_reason: Some("too broad".into()),
+                    last_reviewed_at: Some("2026-05-08T10:15:00Z".into()),
+                }],
+            })
+            .expect("replace adaptive registry");
+
+        let loaded = incidents
+            .adaptive_learning_model()
+            .expect("load adaptive registry")
+            .expect("adaptive registry present");
+        assert_eq!(loaded.processed_feedback_ids, vec!["fb-1".to_string(), "fb-2".to_string()]);
+        assert_eq!(loaded.learned_detectors.len(), 1);
+        assert_eq!(loaded.learned_templates.len(), 1);
+        assert_eq!(loaded.learned_compositions.len(), 1);
+        assert_eq!(loaded.learned_edge_profiles.len(), 1);
+        assert_eq!(loaded.learned_detectors[0].positive_terms, vec!["timeout", "postgres"]);
+        assert!(loaded.learned_templates[0].requires_same_service);
+        assert_eq!(
+            loaded.learned_compositions[0].preferred_edge_types,
+            vec!["depends_on".to_string()]
+        );
+        assert!(loaded.learned_edge_profiles[0].manually_disabled);
+        assert_eq!(loaded.learned_edge_profiles[0].review_status, "rejected");
+    }
+
+    #[test]
+    fn incidents_store_round_trips_saved_adaptive_review_views() {
+        let (_root, events_db, incidents_db) = temp_db_paths("adaptive-review-views");
+        initialize_databases(&events_db, &incidents_db).expect("initialize dbs");
+        let mut incidents = IncidentsStore::open(&incidents_db)
+            .expect("open incidents")
+            .expect("incidents store");
+
+        incidents
+            .upsert_adaptive_review_view(&StoredAdaptiveReviewView {
+                view_id: "view-1".into(),
+                name: "DB queue".into(),
+                description: Some("database-focused triage".into()),
+                search_text: Some("database".into()),
+                assigned_reviewer: Some("alice".into()),
+                artifact_selections: vec![
+                    StoredAdaptiveReviewViewSelection {
+                        artifact_kind: "detector".into(),
+                        artifact_id: "det-1".into(),
+                    },
+                    StoredAdaptiveReviewViewSelection {
+                        artifact_kind: "template".into(),
+                        artifact_id: "tpl-1".into(),
+                    },
+                ],
+                created_at: "2026-05-08T10:00:00Z".into(),
+                updated_at: "2026-05-08T10:05:00Z".into(),
+                last_used_at: Some("2026-05-08T10:07:00Z".into()),
+            })
+            .expect("upsert review view");
+
+        let views = incidents
+            .list_adaptive_review_views()
+            .expect("list review views");
+        assert_eq!(views.len(), 1);
+        assert_eq!(views[0].name, "DB queue");
+        assert_eq!(views[0].assigned_reviewer.as_deref(), Some("alice"));
+        assert_eq!(views[0].artifact_selections.len(), 2);
+
+        incidents
+            .touch_adaptive_review_view("view-1", "2026-05-08T10:10:00Z")
+            .expect("touch review view");
+        let touched = incidents
+            .list_adaptive_review_views()
+            .expect("reload review views");
+        assert_eq!(touched[0].last_used_at.as_deref(), Some("2026-05-08T10:10:00Z"));
+
+        incidents
+            .delete_adaptive_review_view("view-1")
+            .expect("delete review view");
+        assert!(incidents
+            .list_adaptive_review_views()
+            .expect("list after delete")
+            .is_empty());
+    }
+
+    #[test]
+    fn archive_incident_moves_terminal_records_out_of_active_store() {
+        let (root, events_db, incidents_db) = temp_db_paths("archive");
+        initialize_databases(&events_db, &incidents_db).expect("initialize dbs");
+        let mut incidents = IncidentsStore::open(&incidents_db)
+            .expect("open incidents")
+            .expect("incidents store");
+        incidents
+            .upsert_incident(
+                &IncidentRecord {
+                    incident_id: "inc-archive".into(),
+                    state: "resolved".into(),
+                    severity: 3,
+                    primary_service: "api".into(),
+                    affected_services: vec!["api".into()],
+                    created_at: "2026-05-01T10:00:00Z".into(),
+                    updated_at: "2026-05-01T10:00:00Z".into(),
+                    time_range_start: "2026-05-01T10:00:00Z".into(),
+                    time_range_end: "2026-05-01T10:00:00Z".into(),
+                    event_count: 0,
+                    cluster_ids: vec!["cluster-archive".into()],
+                    runtime_context: Some(serde_json::json!({"service":"api"})),
+                    resolution_info: Some(serde_json::json!({"resolved_by":"operator"})),
+                },
+                &[],
+            )
+            .expect("upsert archive incident");
+        incidents
+            .replace_hypotheses(
+                "inc-archive",
+                &[StoredHypothesis {
+                    hypothesis_id: "hyp-archive".into(),
+                    rank: Some(1),
+                    cause_type: "dependency_failure".into(),
+                    description: "archived hypothesis".into(),
+                    total_score: Some(0.8),
+                    score_breakdown: serde_json::json!({"evidence_coverage":0.8}),
+                    supporting_events: Vec::new(),
+                    contradicting_events: Vec::new(),
+                    affected_services: vec!["api".into()],
+                    suggested_checks: Vec::new(),
+                    confidence_label: Some("medium".into()),
+                    is_valid: true,
+                    invalidation_reasons: Vec::new(),
+                    created_at: "2026-05-01T10:00:00Z".into(),
+                    updated_at: "2026-05-01T10:00:00Z".into(),
+                }],
+            )
+            .expect("replace archive hypotheses");
+        incidents
+            .upsert_inference_graph_snapshot(&StoredInferenceGraphSnapshot {
+                incident_id: "inc-archive".into(),
+                graph_data: serde_json::json!({"nodes":["n1"],"edges":[]}),
+                created_at: "2026-05-01T10:00:00Z".into(),
+                event_count: 0,
+            })
+            .expect("store archive graph");
+        incidents
+            .add_feedback(&StoredFeedback {
+                feedback_id: "fb-archive".into(),
+                incident_id: "inc-archive".into(),
+                correct_hypothesis_id: Some("hyp-archive".into()),
+                feedback_type: "confirmed".into(),
+                operator_notes: "archive me".into(),
+                resolved_at: "2026-05-01T10:05:00Z".into(),
+                created_at: Some("2026-05-01T10:05:00Z".into()),
+            })
+            .expect("store archive feedback");
+        incidents
+            .add_chat_message(&StoredChatMessage {
+                message_id: "msg-archive".into(),
+                incident_id: "inc-archive".into(),
+                role: "user".into(),
+                content: "hello".into(),
+                message_schema_version: 1,
+                created_at: "2026-05-01T10:06:00Z".into(),
+            })
+            .expect("store archive chat");
+
+        let archive_db = root.join("archive").join("incidents_20260508.db");
+        let archived = incidents
+            .archive_incident_to_path(
+                "inc-archive",
+                &archive_db,
+                "2026-05-08T00:00:00Z",
+            )
+            .expect("archive incident");
+        assert!(archived);
+        assert!(incidents
+            .get_incident("inc-archive")
+            .expect("load post-archive")
+            .is_none());
+
+        let archive = Connection::open(&archive_db).expect("open archive db");
+        let payload_raw: String = archive
+            .query_row(
+                "SELECT payload_json FROM archived_incidents WHERE incident_id = 'inc-archive'",
+                [],
+                |row| row.get(0),
+            )
+            .expect("archived payload");
+        let payload: Value = serde_json::from_str(&payload_raw).expect("parse archived payload");
+        assert_eq!(
+            payload["incident"]["incident_id"].as_str(),
+            Some("inc-archive")
+        );
+        assert_eq!(payload["feedback"].as_array().map(|items| items.len()), Some(1));
+        assert_eq!(
+            payload["chat_messages"].as_array().map(|items| items.len()),
+            Some(1)
+        );
+        let _ = std::fs::remove_dir_all(&root);
     }
 }

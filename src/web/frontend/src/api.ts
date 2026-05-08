@@ -68,6 +68,389 @@ export async function postJson<T>(path: string, body: unknown, init?: RequestIni
   });
 }
 
+export type AdaptiveArtifactKind = "detector" | "template" | "composition" | "edge_profile";
+export type AdaptiveReviewDecision = "approve" | "watch" | "reject" | "reset";
+export type AdaptiveRuntimeAction = "enable" | "disable";
+
+export type AdaptiveAuditEntry = {
+  audit_id: string;
+  artifact_kind: string;
+  artifact_id: string;
+  action: string;
+  reason?: string | null;
+  previous_status?: string | null;
+  new_status?: string | null;
+  review_status_before?: string | null;
+  review_status_after?: string | null;
+  runtime_effect?: string | null;
+  created_at?: string | null;
+};
+
+export type AdaptiveArtifactCounts = {
+  detectors: number;
+  templates: number;
+  compositions: number;
+  edge_profiles: number;
+  active_detectors: number;
+  active_templates: number;
+  active_compositions: number;
+  active_edge_profiles: number;
+  manually_disabled: number;
+};
+
+type AdaptiveArtifactBase = {
+  cause_type?: string | null;
+  confirmations: number;
+  false_positives: number;
+  manually_disabled: boolean;
+  status?: string;
+  status_reason?: string | null;
+  review_status?: string;
+  review_reason?: string | null;
+  last_reviewed_at?: string | null;
+  created_from_feedback_id?: string | null;
+  updated_at?: string | null;
+};
+
+export type AdaptiveDetector = AdaptiveArtifactBase & {
+  detector_id: string;
+  requirement_name: string;
+  positive_terms: string[];
+  tags: string[];
+  source_types: string[];
+  min_severity?: number | null;
+};
+
+export type AdaptiveTemplate = AdaptiveArtifactBase & {
+  template_id: string;
+  template_name: string;
+  cause_subtype?: string | null;
+  title_template: string;
+  confidence: number;
+  requires: string[];
+  requires_same_service: boolean;
+  requires_temporal_order: boolean;
+};
+
+export type AdaptiveComposition = AdaptiveTemplate & {
+  composition_id: string;
+  composition_name: string;
+  preferred_edge_types: string[];
+};
+
+export type AdaptiveEdgeProfile = AdaptiveArtifactBase & {
+  profile_id: string;
+  edge_type: string;
+  source_service?: string | null;
+  target_service?: string | null;
+  average_plausibility: number;
+  average_latency_ms: number;
+};
+
+export type AdaptiveReviewQueueItem = {
+  artifact_kind: AdaptiveArtifactKind;
+  artifact_id: string;
+  label: string;
+  status: string;
+  review_status: string;
+  confirmations: number;
+  false_positives: number;
+  updated_at?: string | null;
+};
+
+export type AdaptiveIncidentInfluence = {
+  incident_id: string;
+  state?: string;
+  primary_service?: string | null;
+  severity?: number;
+  learning: {
+    incident_id: string;
+    influenced_hypotheses: number;
+    estimated_total_impact: number;
+    artifacts: AdaptiveInfluenceArtifact[];
+  };
+};
+
+export type AdaptiveInfluenceArtifact = {
+  kind?: string | null;
+  artifact_id?: string | null;
+  label?: string | null;
+  reason?: string | null;
+  impact_metric?: string | null;
+  impact_value?: number | null;
+  cumulative_impact?: number;
+};
+
+export type HypothesisLearningProvenance = {
+  has_learned_influence?: boolean;
+  estimated_total_impact?: number;
+  artifacts?: AdaptiveInfluenceArtifact[];
+};
+
+export type IncidentLearningProvenance = {
+  incident_id: string;
+  influenced_hypotheses: number;
+  estimated_total_impact: number;
+  artifacts: AdaptiveInfluenceArtifact[];
+};
+
+export type AdaptiveHistorySummaryArtifact = {
+  artifact_kind: string;
+  artifact_id: string;
+  artifact_label?: string | null;
+  observations: number;
+  latest_observed_at?: string | null;
+  latest_score?: number | null;
+  latest_rank?: number | null;
+  best_rank?: number | null;
+  cumulative_score_delta?: number;
+  cumulative_edge_delta?: number;
+  latest_estimated_impact?: number;
+};
+
+export type AdaptiveHistorySummary = {
+  path: string;
+  artifacts: AdaptiveHistorySummaryArtifact[];
+  count: number;
+};
+
+export type AdaptiveComparisonRow = {
+  artifact_kind: AdaptiveArtifactKind;
+  artifact_id: string;
+  label: string;
+  status: string;
+  review_status: string;
+  confirmations: number;
+  false_positives: number;
+  noise_ratio: number;
+  manually_disabled: boolean;
+  attention: boolean;
+  updated_at?: string | null;
+  last_reviewed_at?: string | null;
+  pending_review_age_hours?: number | null;
+  watch_age_hours?: number | null;
+  aging_bucket: "fresh" | "warm" | "stale" | "aged";
+  history_observations: number;
+  latest_estimated_impact?: number | null;
+  latest_score?: number | null;
+  best_rank?: number | null;
+  cumulative_score_delta?: number | null;
+  cumulative_edge_delta?: number | null;
+  active_incident_count: number;
+  active_cumulative_impact: number;
+  incident_ids: string[];
+};
+
+export type AdaptiveKindBreakdown = {
+  artifact_kind: string;
+  total: number;
+  unreviewed: number;
+  attention: number;
+  manually_disabled: number;
+};
+
+export type AdaptiveReviewAnalytics = {
+  kind_breakdown: AdaptiveKindBreakdown[];
+  top_confirmed: AdaptiveComparisonRow[];
+  top_noisy: AdaptiveComparisonRow[];
+  top_impact: AdaptiveComparisonRow[];
+  recently_changed: AdaptiveComparisonRow[];
+};
+
+export type AdaptiveSavedReviewViewSelection = {
+  artifact_kind: AdaptiveArtifactKind;
+  artifact_id: string;
+};
+
+export type AdaptiveSavedReviewView = {
+  view_id: string;
+  name: string;
+  description?: string | null;
+  search_text?: string | null;
+  assigned_reviewer?: string | null;
+  created_at: string;
+  updated_at: string;
+  last_used_at?: string | null;
+  artifact_selections: AdaptiveSavedReviewViewSelection[];
+  match_count: number;
+  pending_review_count: number;
+  attention_count: number;
+  active_incident_count: number;
+  active_cumulative_impact: number;
+  oldest_pending_age_hours?: number | null;
+  oldest_pending_label?: string | null;
+  aging_bucket: "fresh" | "warm" | "stale" | "aged";
+  stale_pending: boolean;
+};
+
+export type AdaptiveTrendObservation = {
+  observed_at: string;
+  incident_id: string;
+  hypothesis_id: string;
+  score?: number | null;
+  rank?: number | null;
+  estimated_impact: number;
+  impact_metric?: string | null;
+  score_delta?: number | null;
+  rank_delta?: number | null;
+  edge_delta?: number | null;
+};
+
+export type AdaptiveTrendDrilldown = {
+  artifact_kind: AdaptiveArtifactKind;
+  artifact_id: string;
+  artifact_label: string;
+  observation_count: number;
+  total_abs_delta: number;
+  observations: AdaptiveTrendObservation[];
+};
+
+export type AdaptiveLearningSummaryResponse = {
+  schema_version: number;
+  last_updated?: string | null;
+  path: string;
+  audit_path: string;
+  processed_feedback_count: number;
+  counts: AdaptiveArtifactCounts;
+  detectors: AdaptiveDetector[];
+  templates: AdaptiveTemplate[];
+  compositions: AdaptiveComposition[];
+  edge_profiles: AdaptiveEdgeProfile[];
+  recent_audit: AdaptiveAuditEntry[];
+};
+
+export type AdaptiveLearningReviewResponse = {
+  summary: AdaptiveLearningSummaryResponse;
+  active_incident_influence: AdaptiveIncidentInfluence[];
+  artifacts_requiring_attention: Array<Record<string, unknown>>;
+  review_counts: Record<string, number>;
+  review_queue: AdaptiveReviewQueueItem[];
+  recent_review_activity: AdaptiveAuditEntry[];
+  history_summary: AdaptiveHistorySummary;
+  comparison_rows: AdaptiveComparisonRow[];
+  saved_views: AdaptiveSavedReviewView[];
+  trend_drilldowns: AdaptiveTrendDrilldown[];
+  analytics: AdaptiveReviewAnalytics;
+};
+
+export type AdaptiveReviewMutationResponse = {
+  updated: boolean;
+  artifact_kind: string;
+  artifact_id: string;
+  decision: string;
+  review: AdaptiveLearningReviewResponse;
+};
+
+export type AdaptiveStateMutationResponse = {
+  updated: boolean;
+  artifact_kind: string;
+  artifact_id: string;
+  action: string;
+  learning: AdaptiveLearningSummaryResponse;
+};
+
+export type AdaptiveBulkMutationArtifact = {
+  artifact_kind: AdaptiveArtifactKind;
+  artifact_id: string;
+  label: string;
+  previous_status: string;
+  new_status: string;
+  review_status_before?: string | null;
+  review_status_after?: string | null;
+  runtime_effect?: string | null;
+  updated_at?: string | null;
+};
+
+export type AdaptiveBulkReviewMutationResponse = {
+  updated: boolean;
+  updated_count: number;
+  decision: string;
+  artifacts: AdaptiveBulkMutationArtifact[];
+  review: AdaptiveLearningReviewResponse;
+};
+
+export type AdaptiveBulkStateMutationResponse = {
+  updated: boolean;
+  updated_count: number;
+  action: string;
+  artifacts: AdaptiveBulkMutationArtifact[];
+  review: AdaptiveLearningReviewResponse;
+};
+
+export type AdaptiveSavedReviewViewMutationResponse = {
+  updated?: boolean;
+  deleted?: boolean;
+  view_id: string;
+  used_at?: string | null;
+  review: AdaptiveLearningReviewResponse;
+};
+
+export async function reviewAdaptiveArtifact(
+  artifactKind: string,
+  artifactId: string,
+  body: { decision: AdaptiveReviewDecision; reason?: string },
+): Promise<AdaptiveReviewMutationResponse> {
+  return postJson<AdaptiveReviewMutationResponse>(
+    `/api/learning/adaptive/${encodeURIComponent(artifactKind)}/${encodeURIComponent(artifactId)}/review`,
+    body,
+  );
+}
+
+export async function setAdaptiveArtifactState(
+  artifactKind: string,
+  artifactId: string,
+  body: { action: AdaptiveRuntimeAction; reason?: string },
+): Promise<AdaptiveStateMutationResponse> {
+  return postJson<AdaptiveStateMutationResponse>(
+    `/api/learning/adaptive/${encodeURIComponent(artifactKind)}/${encodeURIComponent(artifactId)}`,
+    body,
+  );
+}
+
+export async function reviewAdaptiveArtifactsBulk(
+  artifacts: Array<{ artifact_kind: AdaptiveArtifactKind; artifact_id: string }>,
+  body: { decision: AdaptiveReviewDecision; reason?: string },
+): Promise<AdaptiveBulkReviewMutationResponse> {
+  return postJson<AdaptiveBulkReviewMutationResponse>("/api/learning/adaptive/bulk/review", {
+    artifacts,
+    ...body,
+  });
+}
+
+export async function setAdaptiveArtifactsStateBulk(
+  artifacts: Array<{ artifact_kind: AdaptiveArtifactKind; artifact_id: string }>,
+  body: { action: AdaptiveRuntimeAction; reason?: string },
+): Promise<AdaptiveBulkStateMutationResponse> {
+  return postJson<AdaptiveBulkStateMutationResponse>("/api/learning/adaptive/bulk/state", {
+    artifacts,
+    ...body,
+  });
+}
+
+export async function saveAdaptiveReviewView(body: {
+  view_id?: string;
+  name: string;
+  description?: string;
+  search_text?: string;
+  assigned_reviewer?: string;
+  artifacts: Array<{ artifact_kind: AdaptiveArtifactKind; artifact_id: string }>;
+}): Promise<AdaptiveSavedReviewViewMutationResponse> {
+  return postJson<AdaptiveSavedReviewViewMutationResponse>("/api/learning/adaptive/views", body);
+}
+
+export async function deleteAdaptiveReviewView(viewId: string): Promise<AdaptiveSavedReviewViewMutationResponse> {
+  return fetchJson<AdaptiveSavedReviewViewMutationResponse>(`/api/learning/adaptive/views/${encodeURIComponent(viewId)}`, {
+    method: "DELETE",
+  });
+}
+
+export async function useAdaptiveReviewView(viewId: string): Promise<AdaptiveSavedReviewViewMutationResponse> {
+  return postJson<AdaptiveSavedReviewViewMutationResponse>(
+    `/api/learning/adaptive/views/${encodeURIComponent(viewId)}/use`,
+    {},
+  );
+}
+
 export type InvestigateStreamCallbacks = {
   onMeta?: (jsonLine: string) => void;
   onDelta?: (text: string) => void;
@@ -448,6 +831,7 @@ export type HypothesisRow = {
   total_score?: number;
   confidence_label?: string;
   suggested_checks?: string[];
+  provenance?: HypothesisLearningProvenance;
 };
 
 export type EventRow = {
@@ -482,6 +866,7 @@ export type IncidentDetailResponse = {
     resolved_at: string;
     created_at: string;
   }>;
+  learning_provenance?: IncidentLearningProvenance | null;
 };
 
 export type AnomalyStatus = {

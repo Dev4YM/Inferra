@@ -7,6 +7,7 @@ import {
   Logs,
   Settings,
   Shield,
+  Sparkles,
   Siren,
   Workflow,
 } from "lucide-react";
@@ -22,6 +23,7 @@ import { AiInvestigatorPage } from "@/pages/AiInvestigatorPage";
 import { ControlPage } from "@/pages/ControlPage";
 import { EvidencePage } from "@/pages/EvidencePage";
 import { IncidentDetailPage, IncidentsPage } from "@/pages/IncidentsPage";
+import { LearningReviewPage } from "@/pages/LearningReviewPage";
 import { OverviewPage } from "@/pages/OverviewPage";
 import { SettingsPage } from "@/pages/SettingsPage";
 import { ServiceDetailPage, SystemsPage } from "@/pages/SystemsPage";
@@ -30,6 +32,7 @@ import { WorkspacePage } from "@/pages/WorkspacePage";
 const NAV_ITEMS: NavItem[] = [
   { to: "/", label: "Overview", icon: Home },
   { to: "/incidents", label: "Incidents", icon: Siren },
+  { to: "/learning", label: "Learning Review", icon: Sparkles },
   { to: "/systems", label: "Systems", icon: Workflow },
   { to: "/evidence", label: "Evidence", icon: Logs },
   { to: "/ai", label: "AI Investigator", icon: BrainCircuit },
@@ -98,6 +101,7 @@ export default function App() {
           <Route path="/" element={<OverviewPage mode={mode} />} />
           <Route path="/incidents" element={<IncidentsPage mode={mode} />} />
           <Route path="/incidents/:incidentId" element={<IncidentDetailPage mode={mode} />} />
+          <Route path="/learning" element={<LearningReviewPage mode={mode} />} />
           <Route path="/systems" element={<SystemsPage mode={mode} />} />
           <Route path="/systems/:serviceId" element={<ServiceDetailPage mode={mode} />} />
           <Route path="/evidence" element={<EvidencePage mode={mode} />} />

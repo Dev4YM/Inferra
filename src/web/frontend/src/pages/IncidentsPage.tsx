@@ -1,18 +1,32 @@
-import { RefreshCcw } from "lucide-react";
+import { Activity, CheckCircle2, CircleOff, Eye, RefreshCcw, ThumbsDown, Undo2 } from "lucide-react";
+import { useMemo, useState } from "react";
 import { Link, useParams } from "react-router-dom";
+import { toast } from "sonner";
 
-import type { IncidentDetailResponse, IncidentRow, InvestigationResponse } from "@/api";
+import type {
+  AdaptiveArtifactKind,
+  AdaptiveInfluenceArtifact,
+  AdaptiveLearningSummaryResponse,
+  AdaptiveReviewDecision,
+  AdaptiveRuntimeAction,
+  IncidentDetailResponse,
+  IncidentRow,
+  InvestigationResponse,
+} from "@/api";
+import { reviewAdaptiveArtifact, setAdaptiveArtifactState } from "@/api";
 import { Button } from "@/components/ui/button";
-import { Card, CardContent, CardHeader, CardTitle } from "@/components/ui/card";
+import { Alert, AlertDescription, AlertTitle } from "@/components/ui/alert";
 import { Badge } from "@/components/ui/badge";
+import { Card, CardContent, CardDescription, CardHeader, CardTitle } from "@/components/ui/card";
 import { Td, Th, Table, TableWrap } from "@/components/ui/table";
+import { Textarea } from "@/components/ui/textarea";
 import { PageHeader } from "@/components/layout/page-header";
 import { EmptyState, ErrorState, LoadingState } from "@/components/feedback/states";
 import { InvestigationView } from "@/components/investigation/investigation-view";
 import type { Mode } from "@/lib/experience";
 import { isAdvancedMode } from "@/lib/experience";
 import { formatRiskTone, formatSeverity, formatRelativeDate, summarizeEvent } from "@/lib/format";
-import { useApiQuery } from "@/lib/query";
+import { useApiMutation, useApiQuery } from "@/lib/query";
 
 export function IncidentsPage({ mode }: { mode: Mode }) {
   const incidents = useApiQuery<{ incidents: IncidentRow[] }>("/api/incidents");
@@ -98,6 +112,24 @@ export function IncidentDetailPage({ mode }: { mode: Mode }) {
     incidentId ? `/api/investigate/incident/${incidentId}?mode=${mode}` : null,
     { deps: [incidentId, mode] },
   );
+  const adaptive = useApiQuery<AdaptiveLearningSummaryResponse>(
+    detail.data?.learning_provenance?.artifacts?.length ? "/api/learning/adaptive" : null,
+    { deps: [incidentId, detail.data?.learning_provenance?.artifacts?.length ?? 0] },
+  );
+  const reviewMutation = useApiMutation(
+    async (args: { kind: AdaptiveArtifactKind; artifactId: string; decision: AdaptiveReviewDecision; reason?: string }) =>
+      reviewAdaptiveArtifact(args.kind, args.artifactId, { decision: args.decision, reason: args.reason }),
+  );
+  const stateMutation = useApiMutation(
+    async (args: { kind: AdaptiveArtifactKind; artifactId: string; action: AdaptiveRuntimeAction; reason?: string }) =>
+      setAdaptiveArtifactState(args.kind, args.artifactId, { action: args.action, reason: args.reason }),
+  );
+  const [artifactReasons, setArtifactReasons] = useState<Record<string, string>>({});
+  const adaptiveArtifacts = useMemo(
+    () => resolveIncidentAdaptiveArtifacts(detail.data?.learning_provenance?.artifacts ?? [], adaptive.data),
+    [detail.data?.learning_provenance?.artifacts, adaptive.data],
+  );
+  const busy = reviewMutation.isPending || stateMutation.isPending;
 
   if (!incidentId) return <EmptyState title="Missing incident id" description="Select an incident from the list first." />;
   if (detail.isLoading && !detail.data) return <LoadingState title="Loading incident" />;
@@ -106,6 +138,55 @@ export function IncidentDetailPage({ mode }: { mode: Mode }) {
 
   const incident = detail.data.incident;
   const investigationMissing = investigation.error?.status === 404;
+
+  const runArtifactReview = async (artifact: IncidentAdaptiveArtifact, decision: AdaptiveReviewDecision) => {
+    if (!artifact.actionKind) return;
+    const reason = artifactReasons[artifact.key]?.trim();
+    try {
+      await reviewMutation.run({
+        kind: artifact.actionKind,
+        artifactId: artifact.artifactId,
+        decision,
+        reason: reason || undefined,
+      });
+      toast.success("Adaptive review updated", {
+        description: `${artifact.label} is now ${decision}.`,
+      });
+      await Promise.all([
+        adaptive.reload({ silent: true }),
+        detail.reload({ silent: true }),
+      ]);
+    } catch (error) {
+      toast.error("Could not update adaptive review", {
+        description: error instanceof Error ? error.message : String(error),
+      });
+    }
+  };
+
+  const runArtifactState = async (artifact: IncidentAdaptiveArtifact, action: AdaptiveRuntimeAction) => {
+    if (!artifact.actionKind) return;
+    const reason = artifactReasons[artifact.key]?.trim();
+    try {
+      await stateMutation.run({
+        kind: artifact.actionKind,
+        artifactId: artifact.artifactId,
+        action,
+        reason: reason || undefined,
+      });
+      toast.success("Adaptive runtime state updated", {
+        description: `${artifact.label} was ${action}d.`,
+      });
+      await Promise.all([
+        adaptive.reload({ silent: true }),
+        detail.reload({ silent: true }),
+        investigation.reload({ silent: true }),
+      ]);
+    } catch (error) {
+      toast.error(`Could not ${action} artifact`, {
+        description: error instanceof Error ? error.message : String(error),
+      });
+    }
+  };
 
   return (
     <div className="space-y-6">
@@ -213,6 +294,161 @@ export function IncidentDetailPage({ mode }: { mode: Mode }) {
 
           <Card>
             <CardHeader>
+              <CardTitle>Adaptive influence</CardTitle>
+              <CardDescription>
+                Review the learned artifacts that are currently shaping this incident without leaving the incident workflow.
+              </CardDescription>
+            </CardHeader>
+            <CardContent className="space-y-4">
+              {detail.data.learning_provenance ? (
+                <>
+                  <div className="grid gap-3 md:grid-cols-3">
+                    <StatusStat
+                      label="Influenced hypotheses"
+                      value={String(detail.data.learning_provenance.influenced_hypotheses)}
+                    />
+                    <StatusStat
+                      label="Estimated learned impact"
+                      value={detail.data.learning_provenance.estimated_total_impact.toFixed(2)}
+                    />
+                    <StatusStat
+                      label="Influencing artifacts"
+                      value={String(detail.data.learning_provenance.artifacts.length)}
+                    />
+                  </div>
+
+                  {adaptive.errorMessage ? (
+                    <Alert variant="warning">
+                      <div className="min-w-0">
+                        <AlertTitle>Live artifact state unavailable</AlertTitle>
+                        <AlertDescription>
+                          {adaptive.errorMessage}. Provenance is still visible, but inline review actions may be incomplete until the adaptive registry reloads.
+                        </AlertDescription>
+                      </div>
+                    </Alert>
+                  ) : null}
+
+                  {adaptiveArtifacts.length ? (
+                    adaptiveArtifacts.map((artifact) => (
+                      <div key={artifact.key} className="rounded-2xl border border-border/60 bg-background/30 p-4">
+                        <div className="flex flex-wrap items-start justify-between gap-3">
+                          <div>
+                            <p className="font-medium">{artifact.label}</p>
+                            <p className="text-sm text-muted-foreground">
+                              {humanizeAdaptiveKind(artifact.kind)} · {artifact.artifactId}
+                            </p>
+                          </div>
+                          <div className="flex flex-wrap gap-2">
+                            <Badge variant={adaptiveStatusVariant(artifact.status)}>{artifact.status}</Badge>
+                            <Badge variant={adaptiveReviewVariant(artifact.reviewStatus)}>{artifact.reviewStatus}</Badge>
+                            <Badge variant="outline">
+                              {artifact.impactMetric === "matched_events" ? "matched events" : artifact.impactMetric || "impact"}{" "}
+                              {artifact.impactValue.toFixed(2)}
+                            </Badge>
+                          </div>
+                        </div>
+
+                        <div className="mt-3 grid gap-3 md:grid-cols-2 xl:grid-cols-4">
+                          <StatusStat label="Confirmations" value={String(artifact.confirmations)} />
+                          <StatusStat label="False positives" value={String(artifact.falsePositives)} />
+                          <StatusStat label="Updated" value={formatRelativeDate(artifact.updatedAt)} />
+                          <StatusStat label="Last reviewed" value={formatRelativeDate(artifact.lastReviewedAt)} />
+                        </div>
+
+                        {artifact.reason ? <p className="mt-3 text-sm text-muted-foreground">{artifact.reason}</p> : null}
+                        {artifact.reviewReason ? (
+                          <p className="mt-2 text-sm text-muted-foreground">Review note: {artifact.reviewReason}</p>
+                        ) : null}
+                        {artifact.statusReason ? (
+                          <p className="mt-1 text-sm text-muted-foreground">Runtime note: {artifact.statusReason}</p>
+                        ) : null}
+
+                        {artifact.actionKind ? (
+                          <>
+                            <Textarea
+                              value={artifactReasons[artifact.key] ?? ""}
+                              onChange={(event) =>
+                                setArtifactReasons((current) => ({
+                                  ...current,
+                                  [artifact.key]: event.target.value,
+                                }))
+                              }
+                              className="mt-4 min-h-[88px]"
+                              placeholder="Optional operator rationale for this review decision."
+                            />
+                            <div className="mt-4 flex flex-wrap gap-3">
+                              <Button onClick={() => void runArtifactReview(artifact, "approve")} disabled={busy}>
+                                <CheckCircle2 className="size-4" />
+                                Approve
+                              </Button>
+                              <Button variant="outline" onClick={() => void runArtifactReview(artifact, "watch")} disabled={busy}>
+                                <Eye className="size-4" />
+                                Watch
+                              </Button>
+                              <Button variant="destructive" onClick={() => void runArtifactReview(artifact, "reject")} disabled={busy}>
+                                <ThumbsDown className="size-4" />
+                                Reject
+                              </Button>
+                              <Button variant="outline" onClick={() => void runArtifactReview(artifact, "reset")} disabled={busy}>
+                                <Undo2 className="size-4" />
+                                Reset
+                              </Button>
+                              <Button
+                                variant="outline"
+                                onClick={() => void runArtifactState(artifact, "enable")}
+                                disabled={busy || !artifact.manuallyDisabled}
+                              >
+                                <Activity className="size-4" />
+                                Enable
+                              </Button>
+                              <Button
+                                variant="destructive"
+                                onClick={() => void runArtifactState(artifact, "disable")}
+                                disabled={busy || artifact.manuallyDisabled}
+                              >
+                                <CircleOff className="size-4" />
+                                Disable
+                              </Button>
+                            </div>
+                          </>
+                        ) : (
+                          <Alert className="mt-4" variant="warning">
+                            <div className="min-w-0">
+                              <AlertTitle>Artifact no longer in the active registry</AlertTitle>
+                              <AlertDescription>
+                                This incident still carries historical learned influence, but the current adaptive registry no longer exposes an actionable artifact entry.
+                              </AlertDescription>
+                            </div>
+                          </Alert>
+                        )}
+                      </div>
+                    ))
+                  ) : (
+                    <p className="text-sm text-muted-foreground">
+                      This incident has learned influence, but no actionable adaptive artifact entries were resolved from the current registry.
+                    </p>
+                  )}
+
+                  <div className="flex flex-wrap gap-3">
+                    <Button variant="outline" size="sm" asChild>
+                      <Link to="/learning">Open full learning review</Link>
+                    </Button>
+                    <Button variant="outline" size="sm" onClick={() => void adaptive.reload({ silent: true })}>
+                      <RefreshCcw className={`size-4 ${adaptive.isRefreshing ? "animate-spin" : ""}`} />
+                      Refresh artifact state
+                    </Button>
+                  </div>
+                </>
+              ) : (
+                <p className="text-sm text-muted-foreground">
+                  No learned artifacts are currently influencing the stored hypotheses for this incident.
+                </p>
+              )}
+            </CardContent>
+          </Card>
+
+          <Card>
+            <CardHeader>
               <CardTitle>Hypotheses</CardTitle>
             </CardHeader>
             <CardContent className="space-y-3">
@@ -222,8 +458,22 @@ export function IncidentDetailPage({ mode }: { mode: Mode }) {
                     <div className="flex flex-wrap items-center gap-2">
                       <p className="font-medium">{hypothesis.cause_type}</p>
                       {hypothesis.confidence_label ? <Badge variant="outline">{hypothesis.confidence_label}</Badge> : null}
+                      {hypothesis.provenance?.has_learned_influence ? (
+                        <Badge variant="info">
+                          learned impact {hypothesis.provenance.estimated_total_impact?.toFixed(2) ?? "0.00"}
+                        </Badge>
+                      ) : null}
                     </div>
                     {hypothesis.description ? <p className="mt-2 text-sm text-muted-foreground">{hypothesis.description}</p> : null}
+                    {hypothesis.provenance?.artifacts?.length ? (
+                      <div className="mt-3 flex flex-wrap gap-2">
+                        {hypothesis.provenance.artifacts.map((artifact, index) => (
+                          <Badge key={`${artifact.artifact_id ?? artifact.label ?? index}`} variant="outline">
+                            {artifact.label ?? artifact.artifact_id ?? "learned artifact"}
+                          </Badge>
+                        ))}
+                      </div>
+                    ) : null}
                   </div>
                 ))
               ) : (
@@ -288,6 +538,175 @@ export function IncidentDetailPage({ mode }: { mode: Mode }) {
           </Card>
         </div>
       </div>
+    </div>
+  );
+}
+
+type IncidentAdaptiveArtifact = {
+  key: string;
+  kind: string;
+  artifactId: string;
+  label: string;
+  impactMetric?: string | null;
+  impactValue: number;
+  reason?: string | null;
+  status: string;
+  reviewStatus: string;
+  reviewReason?: string | null;
+  statusReason?: string | null;
+  confirmations: number;
+  falsePositives: number;
+  updatedAt?: string | null;
+  lastReviewedAt?: string | null;
+  manuallyDisabled: boolean;
+  actionKind: AdaptiveArtifactKind | null;
+};
+
+function resolveIncidentAdaptiveArtifacts(
+  artifacts: AdaptiveInfluenceArtifact[],
+  adaptive: AdaptiveLearningSummaryResponse | null,
+): IncidentAdaptiveArtifact[] {
+  const index = buildAdaptiveArtifactIndex(adaptive);
+  return artifacts
+    .map((artifact, itemIndex) => {
+      const kind = artifact.kind ?? "unknown";
+      const artifactId = artifact.artifact_id ?? `artifact-${itemIndex + 1}`;
+      const key = `${kind}:${artifactId}`;
+      const snapshot = index.get(key);
+      return {
+        key,
+        kind,
+        artifactId,
+        label: artifact.label ?? artifactId,
+        impactMetric: artifact.impact_metric,
+        impactValue: artifact.cumulative_impact ?? artifact.impact_value ?? 0,
+        reason: artifact.reason,
+        status: snapshot?.status ?? "unknown",
+        reviewStatus: snapshot?.reviewStatus ?? "unreviewed",
+        reviewReason: snapshot?.reviewReason,
+        statusReason: snapshot?.statusReason,
+        confirmations: snapshot?.confirmations ?? 0,
+        falsePositives: snapshot?.falsePositives ?? 0,
+        updatedAt: snapshot?.updatedAt,
+        lastReviewedAt: snapshot?.lastReviewedAt,
+        manuallyDisabled: snapshot?.manuallyDisabled ?? false,
+        actionKind: snapshot?.actionKind ?? normalizeAdaptiveArtifactKind(kind),
+      };
+    })
+    .sort((left, right) => right.impactValue - left.impactValue || left.label.localeCompare(right.label));
+}
+
+function buildAdaptiveArtifactIndex(adaptive: AdaptiveLearningSummaryResponse | null) {
+  const index = new Map<string, Omit<IncidentAdaptiveArtifact, "key" | "kind" | "artifactId" | "label" | "impactMetric" | "impactValue" | "reason">>();
+  if (!adaptive) return index;
+
+  for (const detector of adaptive.detectors) {
+    index.set(`detector:${detector.detector_id}`, {
+      status: detector.status ?? "unknown",
+      reviewStatus: detector.review_status ?? "unreviewed",
+      reviewReason: detector.review_reason,
+      statusReason: detector.status_reason,
+      confirmations: detector.confirmations,
+      falsePositives: detector.false_positives,
+      updatedAt: detector.updated_at,
+      lastReviewedAt: detector.last_reviewed_at,
+      manuallyDisabled: detector.manually_disabled,
+      actionKind: "detector",
+    });
+  }
+  for (const template of adaptive.templates) {
+    index.set(`template:${template.template_id}`, {
+      status: template.status ?? "unknown",
+      reviewStatus: template.review_status ?? "unreviewed",
+      reviewReason: template.review_reason,
+      statusReason: template.status_reason,
+      confirmations: template.confirmations,
+      falsePositives: template.false_positives,
+      updatedAt: template.updated_at,
+      lastReviewedAt: template.last_reviewed_at,
+      manuallyDisabled: template.manually_disabled,
+      actionKind: "template",
+    });
+  }
+  for (const composition of adaptive.compositions) {
+    index.set(`composition:${composition.composition_id}`, {
+      status: composition.status ?? "unknown",
+      reviewStatus: composition.review_status ?? "unreviewed",
+      reviewReason: composition.review_reason,
+      statusReason: composition.status_reason,
+      confirmations: composition.confirmations,
+      falsePositives: composition.false_positives,
+      updatedAt: composition.updated_at,
+      lastReviewedAt: composition.last_reviewed_at,
+      manuallyDisabled: composition.manually_disabled,
+      actionKind: "composition",
+    });
+  }
+  for (const profile of adaptive.edge_profiles) {
+    index.set(`edge_profile:${profile.profile_id}`, {
+      status: profile.status ?? "unknown",
+      reviewStatus: profile.review_status ?? "unreviewed",
+      reviewReason: profile.review_reason,
+      statusReason: profile.status_reason,
+      confirmations: profile.confirmations,
+      falsePositives: profile.false_positives,
+      updatedAt: profile.updated_at,
+      lastReviewedAt: profile.last_reviewed_at,
+      manuallyDisabled: profile.manually_disabled,
+      actionKind: "edge_profile",
+    });
+  }
+
+  return index;
+}
+
+function normalizeAdaptiveArtifactKind(value: string): AdaptiveArtifactKind | null {
+  switch (value) {
+    case "detector":
+    case "template":
+    case "composition":
+    case "edge_profile":
+      return value;
+    default:
+      return null;
+  }
+}
+
+function adaptiveStatusVariant(value: string): "success" | "warning" | "destructive" | "secondary" {
+  switch (value) {
+    case "active":
+      return "success";
+    case "suppressed":
+      return "warning";
+    case "manually_disabled":
+      return "destructive";
+    default:
+      return "secondary";
+  }
+}
+
+function adaptiveReviewVariant(value: string): "success" | "warning" | "destructive" | "secondary" {
+  switch (value) {
+    case "approved":
+      return "success";
+    case "watch":
+      return "warning";
+    case "rejected":
+      return "destructive";
+    default:
+      return "secondary";
+  }
+}
+
+function humanizeAdaptiveKind(value: string): string {
+  return value.replace(/_/g, " ");
+}
+
+function StatusStat({ label, value }: { label: string; value: string }) {
+  return (
+    <div className="rounded-2xl border border-border/60 bg-background/30 px-4 py-3">
+      <p className="text-xs font-semibold uppercase tracking-[0.18em] text-muted-foreground">{label}</p>
+      <p className="mt-2 text-sm font-medium">{value}</p>
     </div>
   );
 }

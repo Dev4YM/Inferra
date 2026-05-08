@@ -10,6 +10,7 @@ inferra-config = { path = "../inferra-config" }
 inferra-contracts = { path = "../inferra-contracts" }
 inferra-storage = { path = "../inferra-storage" }
 reqwest = { workspace = true }
+serde = { workspace = true }
 serde_json = { workspace = true }
 sysinfo = { workspace = true }
 time = { workspace = true }

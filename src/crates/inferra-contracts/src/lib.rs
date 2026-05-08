@@ -290,6 +290,8 @@ pub struct HypothesisRow {
     pub confidence_label: Option<String>,
     #[serde(skip_serializing_if = "Option::is_none")]
     pub suggested_checks: Option<Vec<String>>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub provenance: Option<Value>,
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
@@ -306,6 +308,8 @@ pub struct IncidentDetailResponse {
     pub state_log: Vec<Value>,
     #[serde(default, skip_serializing_if = "Vec::is_empty")]
     pub feedback: Vec<Value>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub learning_provenance: Option<Value>,
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize)]

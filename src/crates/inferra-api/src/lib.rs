@@ -7,7 +7,7 @@ use axum::{
     extract::{Path as AxumPath, Query, Request, State},
     http::{header, HeaderValue, StatusCode},
     response::{sse::Event, sse::KeepAlive, sse::Sse, IntoResponse, Response},
-    routing::{get, post},
+    routing::{delete, get, post},
     Json, Router,
 };
 use futures_util::Stream;
@@ -22,11 +22,19 @@ use inferra_contracts::{
     WorkspaceMapResponse,
 };
 use inferra_core::{
-    ai_status_from_config, build_overview, build_workspace_map, collect_host_resources_snapshot,
-    collect_runtime_monitor_window, try_collect_gpu_summary,
+    adaptive_learning_audit_log, adaptive_learning_history, adaptive_learning_review_summary,
+    adaptive_learning_bulk_review_artifacts, adaptive_learning_bulk_set_artifact_state,
+    adaptive_learning_review_artifact, adaptive_learning_set_artifact_state,
+    adaptive_learning_delete_review_view, adaptive_learning_save_review_view,
+    adaptive_learning_touch_review_view, AdaptiveArtifactSelection, AdaptiveSavedReviewViewDraft,
+    adaptive_learning_summary, ai_status_from_config,
+    build_overview, build_overview_with_runtime_signals, build_workspace_map,
+    collect_host_resources_snapshot, collect_runtime_monitor_window, refresh_incident_reasoning,
+    try_collect_gpu_summary, OverviewRuntimeSignals,
 };
 use inferra_storage::{
-    initialize_databases, EventsStore, IncidentsStore, StoredAiTrace, StoredExplanation,
+    initialize_databases, AdaptiveLearningAuditQuery, AdaptiveLearningHistoryQuery, EventsStore,
+    IncidentsStore, StoredAiTrace, StoredExplanation, StoredFeedback,
 };
 use serde_json::{json, Value as JsonValue};
 use std::collections::{HashMap, HashSet};
@@ -205,6 +213,27 @@ pub fn app_router(state: AppState) -> Router {
             "/api/incidents/{incident_id}/clusters",
             get(api_incident_clusters),
         )
+        .route(
+            "/api/incidents/{incident_id}/feedback",
+            post(api_incident_feedback),
+        )
+        .route("/api/learning/adaptive", get(api_adaptive_learning))
+        .route("/api/learning/adaptive/audit", get(api_adaptive_learning_audit))
+        .route("/api/learning/adaptive/history", get(api_adaptive_learning_history))
+        .route("/api/learning/adaptive/review", get(api_adaptive_learning_review))
+        .route("/api/learning/adaptive/views", post(api_adaptive_learning_save_view))
+        .route("/api/learning/adaptive/views/{view_id}", delete(api_adaptive_learning_delete_view))
+        .route("/api/learning/adaptive/views/{view_id}/use", post(api_adaptive_learning_use_view))
+        .route("/api/learning/adaptive/bulk/review", post(api_adaptive_learning_bulk_review_action))
+        .route("/api/learning/adaptive/bulk/state", post(api_adaptive_learning_bulk_state_action))
+        .route(
+            "/api/learning/adaptive/{artifact_kind}/{artifact_id}/review",
+            post(api_adaptive_learning_review_action),
+        )
+        .route(
+            "/api/learning/adaptive/{artifact_kind}/{artifact_id}",
+            post(api_adaptive_learning_action),
+        )
         .route("/api/services", get(api_services))
         .route("/api/services/{service_id}", get(api_service_detail))
         .route("/api/services/{service_id}/events", get(api_service_events))
@@ -338,16 +367,15 @@ async fn api_overview(
     State(state): State<AppState>,
 ) -> Result<Json<OverviewResponse>, (StatusCode, String)> {
     let cfg = state.config.read().await.clone();
-    let mut overview = build_overview(&cfg, state.paths.as_ref())
-        .map_err(|e| (StatusCode::INTERNAL_SERVER_ERROR, e.to_string()))?;
     let probe = probe_ai_provider(&cfg, AiProbePurpose::Status).await;
-    if let Some(health) = overview.dashboard.health.as_mut() {
-        health.ai_enabled = Some(probe.enabled);
-        health.ai_available = Some(probe.available);
-        health.ai_reason = probe.reason.clone();
-        health.queue_depth = Some(state.collectors.queue_depth());
-        health.collector_errors = Some(state.collectors.total_errors().await);
-    }
+    let signals = OverviewRuntimeSignals {
+        ai_available: Some(probe.available),
+        ai_reason: probe.reason.clone(),
+        queue_depth: Some(state.collectors.queue_depth()),
+        collector_errors: Some(state.collectors.total_errors().await),
+    };
+    let overview = build_overview_with_runtime_signals(&cfg, state.paths.as_ref(), Some(&signals))
+        .map_err(|e| (StatusCode::INTERNAL_SERVER_ERROR, e.to_string()))?;
     Ok(Json(overview))
 }
 
@@ -558,6 +586,7 @@ async fn api_incident_detail(
     let feedback = incidents
         .list_feedback(&incident_id)
         .map_err(|e| (StatusCode::INTERNAL_SERVER_ERROR, e.to_string()))?;
+    let learning_provenance = aggregate_hypothesis_provenance(&hypotheses);
     Ok(Json(IncidentDetailResponse {
         incident,
         events: event_rows,
@@ -567,6 +596,7 @@ async fn api_incident_detail(
         latest_trace,
         state_log,
         feedback,
+        learning_provenance,
     }))
 }
 
@@ -640,6 +670,514 @@ async fn api_incident_clusters(
         .clusters(&incident_id)
         .map_err(|e| (StatusCode::INTERNAL_SERVER_ERROR, e.to_string()))?;
     Ok(Json(json!({ "clusters": clusters })))
+}
+
+async fn api_incident_feedback(
+    State(state): State<AppState>,
+    AxumPath(incident_id): AxumPath<String>,
+    Json(payload): Json<JsonValue>,
+) -> Result<Json<JsonValue>, (StatusCode, String)> {
+    initialize_databases(&state.paths.events_db, &state.paths.incidents_db)
+        .map_err(|e| (StatusCode::INTERNAL_SERVER_ERROR, e.to_string()))?;
+    let cfg = state.config.read().await.clone();
+    let store = IncidentsStore::open(&state.paths.incidents_db)
+        .map_err(|e| (StatusCode::INTERNAL_SERVER_ERROR, e.to_string()))?
+        .ok_or_else(|| (StatusCode::NOT_FOUND, "Incident store not found".to_string()))?;
+    let Some(_incident) = store
+        .get_incident(&incident_id)
+        .map_err(|e| (StatusCode::INTERNAL_SERVER_ERROR, e.to_string()))?
+    else {
+        return Err((StatusCode::NOT_FOUND, "Incident not found".to_string()));
+    };
+    let feedback_type = payload
+        .get("feedback_type")
+        .and_then(JsonValue::as_str)
+        .unwrap_or("skipped")
+        .trim()
+        .to_string();
+    if !matches!(feedback_type.as_str(), "confirmed" | "none_correct" | "skipped") {
+        return Err((
+            StatusCode::BAD_REQUEST,
+            "feedback_type must be one of confirmed, none_correct, skipped".to_string(),
+        ));
+    }
+    let correct_hypothesis_id = payload
+        .get("correct_hypothesis_id")
+        .and_then(JsonValue::as_str)
+        .map(str::trim)
+        .filter(|value| !value.is_empty())
+        .map(str::to_string);
+    let operator_notes = payload
+        .get("operator_notes")
+        .and_then(JsonValue::as_str)
+        .unwrap_or("")
+        .to_string();
+    let resolved_at = payload
+        .get("resolved_at")
+        .and_then(JsonValue::as_str)
+        .filter(|value| !value.trim().is_empty())
+        .map(str::to_string)
+        .unwrap_or_else(now_iso);
+    let feedback_id = format!(
+        "fb-{}-{}",
+        incident_id,
+        OffsetDateTime::now_utc().unix_timestamp_nanos()
+    );
+    store
+        .add_feedback(&StoredFeedback {
+            feedback_id: feedback_id.clone(),
+            incident_id: incident_id.clone(),
+            correct_hypothesis_id,
+            feedback_type: feedback_type.clone(),
+            operator_notes,
+            resolved_at: resolved_at.clone(),
+            created_at: Some(now_iso()),
+        })
+        .map_err(|e| (StatusCode::INTERNAL_SERVER_ERROR, e.to_string()))?;
+    let refreshed = refresh_incident_reasoning(&cfg, state.paths.as_ref(), &incident_id)
+        .map_err(|e| (StatusCode::INTERNAL_SERVER_ERROR, e.to_string()))?;
+    let feedback = store
+        .list_feedback(&incident_id)
+        .map_err(|e| (StatusCode::INTERNAL_SERVER_ERROR, e.to_string()))?;
+    Ok(Json(json!({
+        "stored": true,
+        "feedback_id": feedback_id,
+        "incident_id": incident_id,
+        "feedback_type": feedback_type,
+        "resolved_at": resolved_at,
+        "refreshed": refreshed,
+        "feedback": feedback,
+    })))
+}
+
+async fn api_adaptive_learning(
+    State(state): State<AppState>,
+) -> Result<Json<JsonValue>, (StatusCode, String)> {
+    initialize_databases(&state.paths.events_db, &state.paths.incidents_db)
+        .map_err(|e| (StatusCode::INTERNAL_SERVER_ERROR, e.to_string()))?;
+    let cfg = state.config.read().await.clone();
+    let payload = adaptive_learning_summary(&cfg, state.paths.as_ref())
+        .map_err(|e| (StatusCode::INTERNAL_SERVER_ERROR, e.to_string()))?;
+    Ok(Json(payload))
+}
+
+async fn api_adaptive_learning_audit(
+    State(state): State<AppState>,
+    Query(params): Query<std::collections::HashMap<String, String>>,
+) -> Result<Json<JsonValue>, (StatusCode, String)> {
+    initialize_databases(&state.paths.events_db, &state.paths.incidents_db)
+        .map_err(|e| (StatusCode::INTERNAL_SERVER_ERROR, e.to_string()))?;
+    let cfg = state.config.read().await.clone();
+    let limit = params
+        .get("limit")
+        .and_then(|value| value.parse::<usize>().ok())
+        .unwrap_or(50)
+        .clamp(1, 500);
+    let offset = params
+        .get("offset")
+        .and_then(|value| value.parse::<usize>().ok())
+        .unwrap_or(0)
+        .min(10_000);
+    let payload = adaptive_learning_audit_log(
+        &cfg,
+        state.paths.as_ref(),
+        &AdaptiveLearningAuditQuery {
+            artifact_kind: params.get("artifact_kind").cloned().filter(|value| !value.is_empty()),
+            artifact_id: params.get("artifact_id").cloned().filter(|value| !value.is_empty()),
+            action: params.get("action").cloned().filter(|value| !value.is_empty()),
+            review_status_after: params.get("review_status").cloned().filter(|value| !value.is_empty()),
+            limit,
+            offset,
+        },
+    )
+        .map_err(|e| (StatusCode::INTERNAL_SERVER_ERROR, e.to_string()))?;
+    Ok(Json(payload))
+}
+
+async fn api_adaptive_learning_history(
+    State(state): State<AppState>,
+    Query(params): Query<std::collections::HashMap<String, String>>,
+) -> Result<Json<JsonValue>, (StatusCode, String)> {
+    initialize_databases(&state.paths.events_db, &state.paths.incidents_db)
+        .map_err(|e| (StatusCode::INTERNAL_SERVER_ERROR, e.to_string()))?;
+    let cfg = state.config.read().await.clone();
+    let limit = params
+        .get("limit")
+        .and_then(|value| value.parse::<usize>().ok())
+        .unwrap_or(100)
+        .clamp(1, 1000);
+    let offset = params
+        .get("offset")
+        .and_then(|value| value.parse::<usize>().ok())
+        .unwrap_or(0)
+        .min(10_000);
+    let payload = adaptive_learning_history(
+        &cfg,
+        state.paths.as_ref(),
+        &AdaptiveLearningHistoryQuery {
+            artifact_kind: params.get("artifact_kind").cloned().filter(|value| !value.is_empty()),
+            artifact_id: params.get("artifact_id").cloned().filter(|value| !value.is_empty()),
+            incident_id: params.get("incident_id").cloned().filter(|value| !value.is_empty()),
+            cause_type: params.get("cause_type").cloned().filter(|value| !value.is_empty()),
+            limit,
+            offset,
+        },
+    )
+        .map_err(|e| (StatusCode::INTERNAL_SERVER_ERROR, e.to_string()))?;
+    Ok(Json(payload))
+}
+
+async fn api_adaptive_learning_review(
+    State(state): State<AppState>,
+) -> Result<Json<JsonValue>, (StatusCode, String)> {
+    initialize_databases(&state.paths.events_db, &state.paths.incidents_db)
+        .map_err(|e| (StatusCode::INTERNAL_SERVER_ERROR, e.to_string()))?;
+    let cfg = state.config.read().await.clone();
+    let payload = adaptive_learning_review_summary(&cfg, state.paths.as_ref())
+        .map_err(|e| (StatusCode::INTERNAL_SERVER_ERROR, e.to_string()))?;
+    Ok(Json(payload))
+}
+
+async fn api_adaptive_learning_review_action(
+    State(state): State<AppState>,
+    AxumPath((artifact_kind, artifact_id)): AxumPath<(String, String)>,
+    Json(payload): Json<JsonValue>,
+) -> Result<Json<JsonValue>, (StatusCode, String)> {
+    initialize_databases(&state.paths.events_db, &state.paths.incidents_db)
+        .map_err(|e| (StatusCode::INTERNAL_SERVER_ERROR, e.to_string()))?;
+    let cfg = state.config.read().await.clone();
+    let decision = payload
+        .get("decision")
+        .or_else(|| payload.get("action"))
+        .and_then(JsonValue::as_str)
+        .unwrap_or("approve");
+    let reason = payload.get("reason").and_then(JsonValue::as_str);
+    let review = adaptive_learning_review_artifact(
+        &cfg,
+        state.paths.as_ref(),
+        &artifact_kind,
+        &artifact_id,
+        decision,
+        reason,
+    )
+    .map_err(classify_adaptive_learning_error)?;
+    Ok(Json(json!({
+        "updated": true,
+        "artifact_kind": artifact_kind,
+        "artifact_id": artifact_id,
+        "decision": decision,
+        "review": review,
+    })))
+}
+
+async fn api_adaptive_learning_save_view(
+    State(state): State<AppState>,
+    Json(payload): Json<JsonValue>,
+) -> Result<Json<JsonValue>, (StatusCode, String)> {
+    initialize_databases(&state.paths.events_db, &state.paths.incidents_db)
+        .map_err(|e| (StatusCode::INTERNAL_SERVER_ERROR, e.to_string()))?;
+    let cfg = state.config.read().await.clone();
+    let draft = parse_adaptive_review_view_draft(&payload)?;
+    let response = adaptive_learning_save_review_view(&cfg, state.paths.as_ref(), &draft)
+        .map_err(classify_adaptive_learning_error)?;
+    Ok(Json(response))
+}
+
+async fn api_adaptive_learning_delete_view(
+    State(state): State<AppState>,
+    AxumPath(view_id): AxumPath<String>,
+) -> Result<Json<JsonValue>, (StatusCode, String)> {
+    initialize_databases(&state.paths.events_db, &state.paths.incidents_db)
+        .map_err(|e| (StatusCode::INTERNAL_SERVER_ERROR, e.to_string()))?;
+    let cfg = state.config.read().await.clone();
+    let response = adaptive_learning_delete_review_view(&cfg, state.paths.as_ref(), &view_id)
+        .map_err(classify_adaptive_learning_error)?;
+    Ok(Json(response))
+}
+
+async fn api_adaptive_learning_use_view(
+    State(state): State<AppState>,
+    AxumPath(view_id): AxumPath<String>,
+) -> Result<Json<JsonValue>, (StatusCode, String)> {
+    initialize_databases(&state.paths.events_db, &state.paths.incidents_db)
+        .map_err(|e| (StatusCode::INTERNAL_SERVER_ERROR, e.to_string()))?;
+    let cfg = state.config.read().await.clone();
+    let response = adaptive_learning_touch_review_view(&cfg, state.paths.as_ref(), &view_id)
+        .map_err(classify_adaptive_learning_error)?;
+    Ok(Json(response))
+}
+
+async fn api_adaptive_learning_bulk_review_action(
+    State(state): State<AppState>,
+    Json(payload): Json<JsonValue>,
+) -> Result<Json<JsonValue>, (StatusCode, String)> {
+    initialize_databases(&state.paths.events_db, &state.paths.incidents_db)
+        .map_err(|e| (StatusCode::INTERNAL_SERVER_ERROR, e.to_string()))?;
+    let cfg = state.config.read().await.clone();
+    let decision = payload
+        .get("decision")
+        .or_else(|| payload.get("action"))
+        .and_then(JsonValue::as_str)
+        .unwrap_or("approve");
+    let reason = payload.get("reason").and_then(JsonValue::as_str);
+    let artifacts = parse_adaptive_bulk_artifacts(&payload)?;
+    let review = adaptive_learning_bulk_review_artifacts(
+        &cfg,
+        state.paths.as_ref(),
+        &artifacts,
+        decision,
+        reason,
+    )
+    .map_err(classify_adaptive_learning_error)?;
+    Ok(Json(review))
+}
+
+async fn api_adaptive_learning_action(
+    State(state): State<AppState>,
+    AxumPath((artifact_kind, artifact_id)): AxumPath<(String, String)>,
+    Json(payload): Json<JsonValue>,
+) -> Result<Json<JsonValue>, (StatusCode, String)> {
+    initialize_databases(&state.paths.events_db, &state.paths.incidents_db)
+        .map_err(|e| (StatusCode::INTERNAL_SERVER_ERROR, e.to_string()))?;
+    let cfg = state.config.read().await.clone();
+    let action = payload
+        .get("action")
+        .and_then(JsonValue::as_str)
+        .unwrap_or("disable");
+    let reason = payload.get("reason").and_then(JsonValue::as_str);
+    let learning = adaptive_learning_set_artifact_state(
+        &cfg,
+        state.paths.as_ref(),
+        &artifact_kind,
+        &artifact_id,
+        action,
+        reason,
+    )
+    .map_err(classify_adaptive_learning_error)?;
+    Ok(Json(json!({
+        "updated": true,
+        "artifact_kind": artifact_kind,
+        "artifact_id": artifact_id,
+        "action": action,
+        "learning": learning,
+    })))
+}
+
+async fn api_adaptive_learning_bulk_state_action(
+    State(state): State<AppState>,
+    Json(payload): Json<JsonValue>,
+) -> Result<Json<JsonValue>, (StatusCode, String)> {
+    initialize_databases(&state.paths.events_db, &state.paths.incidents_db)
+        .map_err(|e| (StatusCode::INTERNAL_SERVER_ERROR, e.to_string()))?;
+    let cfg = state.config.read().await.clone();
+    let action = payload
+        .get("action")
+        .and_then(JsonValue::as_str)
+        .unwrap_or("disable");
+    let reason = payload.get("reason").and_then(JsonValue::as_str);
+    let artifacts = parse_adaptive_bulk_artifacts(&payload)?;
+    let review = adaptive_learning_bulk_set_artifact_state(
+        &cfg,
+        state.paths.as_ref(),
+        &artifacts,
+        action,
+        reason,
+    )
+    .map_err(classify_adaptive_learning_error)?;
+    Ok(Json(review))
+}
+
+fn parse_adaptive_bulk_artifacts(
+    payload: &JsonValue,
+) -> Result<Vec<AdaptiveArtifactSelection>, (StatusCode, String)> {
+    let items = payload
+        .get("artifacts")
+        .and_then(JsonValue::as_array)
+        .ok_or_else(|| {
+            (
+                StatusCode::BAD_REQUEST,
+                "expected JSON body with an artifacts array".to_string(),
+            )
+        })?;
+    let mut selections = Vec::new();
+    for item in items {
+        let artifact_kind = item
+            .get("artifact_kind")
+            .or_else(|| item.get("kind"))
+            .and_then(JsonValue::as_str)
+            .map(str::trim)
+            .filter(|value| !value.is_empty())
+            .ok_or_else(|| {
+                (
+                    StatusCode::BAD_REQUEST,
+                    "each bulk artifact must include artifact_kind".to_string(),
+                )
+            })?;
+        let artifact_id = item
+            .get("artifact_id")
+            .or_else(|| item.get("id"))
+            .and_then(JsonValue::as_str)
+            .map(str::trim)
+            .filter(|value| !value.is_empty())
+            .ok_or_else(|| {
+                (
+                    StatusCode::BAD_REQUEST,
+                    "each bulk artifact must include artifact_id".to_string(),
+                )
+            })?;
+        selections.push(AdaptiveArtifactSelection {
+            artifact_kind: artifact_kind.to_string(),
+            artifact_id: artifact_id.to_string(),
+        });
+    }
+    if selections.is_empty() {
+        return Err((
+            StatusCode::BAD_REQUEST,
+            "expected at least one adaptive artifact selection".to_string(),
+        ));
+    }
+    Ok(selections)
+}
+
+fn parse_adaptive_review_view_draft(
+    payload: &JsonValue,
+) -> Result<AdaptiveSavedReviewViewDraft, (StatusCode, String)> {
+    let name = payload
+        .get("name")
+        .and_then(JsonValue::as_str)
+        .map(str::trim)
+        .filter(|value| !value.is_empty())
+        .ok_or_else(|| {
+            (
+                StatusCode::BAD_REQUEST,
+                "saved review view name must not be empty".to_string(),
+            )
+        })?;
+    let artifact_selections = payload
+        .get("artifacts")
+        .and_then(JsonValue::as_array)
+        .map(|items| {
+            items.iter()
+                .filter_map(|item| {
+                    Some(AdaptiveArtifactSelection {
+                        artifact_kind: item
+                            .get("artifact_kind")
+                            .or_else(|| item.get("kind"))?
+                            .as_str()?
+                            .to_string(),
+                        artifact_id: item
+                            .get("artifact_id")
+                            .or_else(|| item.get("id"))?
+                            .as_str()?
+                            .to_string(),
+                    })
+                })
+                .collect::<Vec<_>>()
+        })
+        .unwrap_or_default();
+    Ok(AdaptiveSavedReviewViewDraft {
+        view_id: payload
+            .get("view_id")
+            .and_then(JsonValue::as_str)
+            .map(str::trim)
+            .filter(|value| !value.is_empty())
+            .map(str::to_string),
+        name: name.to_string(),
+        description: payload
+            .get("description")
+            .and_then(JsonValue::as_str)
+            .map(str::to_string),
+        search_text: payload
+            .get("search_text")
+            .or_else(|| payload.get("search"))
+            .and_then(JsonValue::as_str)
+            .map(str::to_string),
+        assigned_reviewer: payload
+            .get("assigned_reviewer")
+            .or_else(|| payload.get("reviewer"))
+            .and_then(JsonValue::as_str)
+            .map(str::to_string),
+        artifact_selections,
+    })
+}
+
+fn classify_adaptive_learning_error(error: anyhow::Error) -> (StatusCode, String) {
+    let message = error.to_string();
+    if message.contains("not found") {
+        (StatusCode::NOT_FOUND, message)
+    } else if message.contains("unsupported") {
+        (StatusCode::BAD_REQUEST, message)
+    } else {
+        (StatusCode::INTERNAL_SERVER_ERROR, message)
+    }
+}
+
+fn aggregate_hypothesis_provenance(
+    hypotheses: &[inferra_contracts::HypothesisRow],
+) -> Option<JsonValue> {
+    let mut artifacts = std::collections::BTreeMap::<String, JsonValue>::new();
+    let mut influenced_hypotheses = 0usize;
+    let mut estimated_total_impact = 0.0;
+    for hypothesis in hypotheses {
+        let Some(provenance) = hypothesis.provenance.as_ref() else {
+            continue;
+        };
+        let has_learning = provenance
+            .get("has_learned_influence")
+            .and_then(JsonValue::as_bool)
+            .unwrap_or(false);
+        if has_learning {
+            influenced_hypotheses += 1;
+        }
+        estimated_total_impact += provenance
+            .get("estimated_total_impact")
+            .and_then(JsonValue::as_f64)
+            .unwrap_or_default();
+        if let Some(items) = provenance.get("artifacts").and_then(JsonValue::as_array) {
+            for item in items {
+                let key = format!(
+                    "{}:{}",
+                    item.get("kind").and_then(JsonValue::as_str).unwrap_or("unknown"),
+                    item.get("artifact_id").and_then(JsonValue::as_str).unwrap_or("unknown"),
+                );
+                let impact = item
+                    .get("impact_value")
+                    .and_then(JsonValue::as_f64)
+                    .unwrap_or_default();
+                let entry = artifacts.entry(key).or_insert_with(|| {
+                    json!({
+                        "kind": item.get("kind").cloned().unwrap_or(JsonValue::Null),
+                        "artifact_id": item.get("artifact_id").cloned().unwrap_or(JsonValue::Null),
+                        "label": item.get("label").cloned().unwrap_or(JsonValue::Null),
+                        "impact_metric": item.get("impact_metric").cloned().unwrap_or(JsonValue::Null),
+                        "cumulative_impact": 0.0,
+                    })
+                });
+                let current = entry
+                    .get("cumulative_impact")
+                    .and_then(JsonValue::as_f64)
+                    .unwrap_or_default();
+                entry["cumulative_impact"] = json!(current + impact);
+            }
+        }
+    }
+    let mut artifacts = artifacts.into_values().collect::<Vec<_>>();
+    artifacts.sort_by(|left, right| {
+        right["cumulative_impact"]
+            .as_f64()
+            .unwrap_or_default()
+            .partial_cmp(&left["cumulative_impact"].as_f64().unwrap_or_default())
+            .unwrap_or(std::cmp::Ordering::Equal)
+    });
+    if artifacts.is_empty() {
+        None
+    } else {
+        Some(json!({
+            "influenced_hypotheses": influenced_hypotheses,
+            "estimated_total_impact": estimated_total_impact,
+            "artifacts": artifacts,
+        }))
+    }
 }
 
 async fn api_services(
@@ -3387,6 +3925,139 @@ enabled = false
         state
     }
 
+    fn write_adaptive_learning_fixture(paths: &Paths) {
+        std::fs::write(
+            paths.data_dir.join("adaptive_learning.json"),
+            serde_json::to_string_pretty(&json!({
+                "schema_version": 1,
+                "last_updated": "2026-05-08T10:00:00Z",
+                "processed_feedback_ids": [],
+                "learned_detectors": [{
+                    "detector_id": "det-1",
+                    "requirement_name": "learned_postgres_timeout",
+                    "cause_type": "dependency_failure",
+                    "positive_terms": ["postgres", "timeout"],
+                    "tags": ["database"],
+                    "source_types": ["app"],
+                    "min_severity": 3,
+                    "confirmations": 2,
+                    "false_positives": 0,
+                    "created_from_feedback_id": "fb-1",
+                    "updated_at": "2026-05-08T10:00:00Z",
+                    "manually_disabled": false,
+                    "status_reason": null
+                }],
+                "learned_templates": [],
+                "learned_compositions": [],
+                "learned_edge_profiles": []
+            }))
+            .expect("serialize adaptive learning fixture"),
+        )
+        .expect("write adaptive learning fixture");
+    }
+
+    fn write_adaptive_learning_bulk_fixture(paths: &Paths) {
+        std::fs::write(
+            paths.data_dir.join("adaptive_learning.json"),
+            serde_json::to_string_pretty(&json!({
+                "schema_version": 1,
+                "last_updated": "2026-05-08T10:00:00Z",
+                "processed_feedback_ids": [],
+                "learned_detectors": [{
+                    "detector_id": "det-1",
+                    "requirement_name": "learned_postgres_timeout",
+                    "cause_type": "dependency_failure",
+                    "positive_terms": ["postgres", "timeout"],
+                    "tags": ["database"],
+                    "source_types": ["app"],
+                    "min_severity": 3,
+                    "confirmations": 2,
+                    "false_positives": 0,
+                    "created_from_feedback_id": "fb-1",
+                    "updated_at": "2026-05-08T10:00:00Z",
+                    "manually_disabled": false,
+                    "status_reason": null
+                }],
+                "learned_templates": [{
+                    "template_id": "tpl-1",
+                    "template_name": "database timeout chain",
+                    "cause_type": "dependency_failure",
+                    "cause_subtype": "database",
+                    "title_template": "Database dependency timeout",
+                    "confidence": 0.84,
+                    "requires": ["learned_postgres_timeout"],
+                    "requires_same_service": true,
+                    "requires_temporal_order": false,
+                    "confirmations": 3,
+                    "false_positives": 0,
+                    "created_from_feedback_id": "fb-1",
+                    "updated_at": "2026-05-08T10:01:00Z",
+                    "manually_disabled": false,
+                    "status_reason": null
+                }],
+                "learned_compositions": [],
+                "learned_edge_profiles": []
+            }))
+            .expect("serialize adaptive bulk learning fixture"),
+        )
+        .expect("write adaptive bulk learning fixture");
+    }
+
+    fn write_adaptive_learning_history_fixture(paths: &Paths) {
+        initialize_databases(&paths.events_db, &paths.incidents_db).expect("initialize adaptive history fixture tables");
+        let mut incidents = IncidentsStore::open(&paths.incidents_db)
+            .expect("open incidents db")
+            .expect("incidents store");
+        incidents
+            .add_adaptive_learning_history_entries(&[
+                inferra_storage::StoredAdaptiveLearningHistoryEntry {
+                    entry_id: "hist-1".into(),
+                    artifact_kind: "detector".into(),
+                    artifact_id: "det-1".into(),
+                    artifact_label: "learned_postgres_timeout".into(),
+                    incident_id: "inc-1".into(),
+                    cause_type: "database".into(),
+                    hypothesis_id: "hyp-1".into(),
+                    observed_at: "2026-05-08T10:00:00Z".into(),
+                    score: Some(0.62),
+                    rank: Some(2),
+                    estimated_impact: 1.5,
+                    impact_metric: Some("matched_events".into()),
+                    score_delta: Some(0.12),
+                    rank_delta: Some(1),
+                    edge_delta: None,
+                },
+                inferra_storage::StoredAdaptiveLearningHistoryEntry {
+                    entry_id: "hist-2".into(),
+                    artifact_kind: "edge_profile".into(),
+                    artifact_id: "edge-1".into(),
+                    artifact_label: "timeout_chain".into(),
+                    incident_id: "inc-1".into(),
+                    cause_type: "database".into(),
+                    hypothesis_id: "hyp-1".into(),
+                    observed_at: "2026-05-08T10:05:00Z".into(),
+                    score: Some(0.71),
+                    rank: Some(1),
+                    estimated_impact: 0.08,
+                    impact_metric: Some("plausibility_delta".into()),
+                    score_delta: Some(0.09),
+                    rank_delta: Some(1),
+                    edge_delta: Some(0.08),
+                },
+            ])
+            .expect("write adaptive learning history fixture");
+    }
+
+    fn write_legacy_adaptive_learning_history_fixture(paths: &Paths) {
+        std::fs::write(
+            paths.data_dir.join("adaptive_learning_history.jsonl"),
+            concat!(
+                "{\"entry_id\":\"hist-legacy-1\",\"artifact_kind\":\"detector\",\"artifact_id\":\"det-legacy\",\"artifact_label\":\"legacy_detector\",\"incident_id\":\"inc-1\",\"cause_type\":\"database\",\"hypothesis_id\":\"hyp-1\",\"observed_at\":\"2026-05-08T09:55:00Z\",\"score\":0.58,\"rank\":2,\"estimated_impact\":1.2,\"impact_metric\":\"matched_events\",\"score_delta\":0.08,\"rank_delta\":1,\"edge_delta\":null}\n"
+            ),
+        )
+        .expect("write legacy adaptive learning history fixture");
+    }
+
     fn seed_test_databases(paths: &Paths) {
         let events = Connection::open(&paths.events_db).expect("open test events db");
         events
@@ -3457,6 +4128,7 @@ enabled = false
                     cause_type TEXT,
                     description TEXT,
                     total_score REAL,
+                    score_breakdown TEXT NOT NULL DEFAULT '{}',
                     confidence_label TEXT,
                     suggested_checks TEXT,
                     rank INTEGER
@@ -3503,14 +4175,15 @@ enabled = false
             .expect("insert incident event 2");
         incidents
             .execute(
-                "INSERT INTO hypotheses (hypothesis_id, incident_id, cause_type, description, total_score, confidence_label, suggested_checks, rank)
-                 VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8)",
+                "INSERT INTO hypotheses (hypothesis_id, incident_id, cause_type, description, total_score, score_breakdown, confidence_label, suggested_checks, rank)
+                 VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8, ?9)",
                 rusqlite::params![
                     "hyp-1",
                     "inc-1",
                     "database",
                     "Primary datastore is timing out",
                     0.92,
+                    "{\"provenance\":{\"has_learned_influence\":true,\"estimated_total_impact\":2.5,\"artifacts\":[{\"kind\":\"detector\",\"artifact_id\":\"det-seeded\",\"label\":\"learned_postgres_timeout\",\"reason\":\"seeded test provenance\",\"impact_metric\":\"matched_events\",\"impact_value\":2.5}]}}",
                     "high",
                     "[\"check postgres latency\"]",
                     1
@@ -4032,6 +4705,470 @@ enabled = false
             .await
             .expect("missing incident response");
         assert_eq!(response.status(), StatusCode::NOT_FOUND);
+    }
+
+    #[tokio::test]
+    async fn incident_feedback_route_persists_feedback_and_refreshes_reasoning() {
+        let state = seeded_test_state("incident-feedback", false);
+        let app = app_router(state.clone());
+        let (status, payload) = post_json(
+            app.clone(),
+            "/api/incidents/inc-1/feedback",
+            json!({
+                "feedback_type": "confirmed",
+                "correct_hypothesis_id": "hyp-1",
+                "operator_notes": "matched operator judgment"
+            }),
+            None,
+        )
+        .await;
+        assert_eq!(status, StatusCode::OK);
+        assert_eq!(payload.get("stored").and_then(JsonValue::as_bool), Some(true));
+        assert!(payload
+            .get("feedback")
+            .and_then(JsonValue::as_array)
+            .map(|items| !items.is_empty())
+            .unwrap_or(false));
+
+        let detail = get_json(app, "/api/incidents/inc-1").await;
+        assert!(detail
+            .get("feedback")
+            .and_then(JsonValue::as_array)
+            .map(|items| !items.is_empty())
+            .unwrap_or(false));
+    }
+
+    #[tokio::test]
+    async fn adaptive_learning_route_returns_learned_artifacts() {
+        let state = seeded_test_state("adaptive-learning-get", false);
+        write_adaptive_learning_fixture(state.paths.as_ref());
+        let app = app_router(state);
+        let payload = get_json(app, "/api/learning/adaptive").await;
+        assert_eq!(
+            payload
+                .get("counts")
+                .and_then(|value| value.get("detectors"))
+                .and_then(JsonValue::as_u64),
+            Some(1)
+        );
+        assert_eq!(
+            payload["detectors"][0]
+                .get("status")
+                .and_then(JsonValue::as_str),
+            Some("active")
+        );
+    }
+
+    #[tokio::test]
+    async fn adaptive_learning_action_route_can_disable_detector() {
+        let state = seeded_test_state("adaptive-learning-disable", false);
+        write_adaptive_learning_fixture(state.paths.as_ref());
+        let app = app_router(state.clone());
+        let (status, payload) = post_json(
+            app.clone(),
+            "/api/learning/adaptive/detector/det-1",
+            json!({
+                "action": "disable",
+                "reason": "operator retired noisy learned detector"
+            }),
+            None,
+        )
+        .await;
+        assert_eq!(status, StatusCode::OK);
+        assert_eq!(
+            payload["learning"]["detectors"][0]
+                .get("manually_disabled")
+                .and_then(JsonValue::as_bool),
+            Some(true)
+        );
+        let refreshed = get_json(app, "/api/learning/adaptive").await;
+        assert_eq!(
+            refreshed["detectors"][0]
+                .get("status")
+                .and_then(JsonValue::as_str),
+            Some("manually_disabled")
+        );
+    }
+
+    #[tokio::test]
+    async fn adaptive_learning_audit_route_returns_governance_actions() {
+        let state = seeded_test_state("adaptive-learning-audit", false);
+        write_adaptive_learning_fixture(state.paths.as_ref());
+        let app = app_router(state.clone());
+        let (status, _) = post_json(
+            app.clone(),
+            "/api/learning/adaptive/detector/det-1",
+            json!({
+                "action": "disable",
+                "reason": "retired for audit test"
+            }),
+            None,
+        )
+        .await;
+        assert_eq!(status, StatusCode::OK);
+        let payload = get_json(app, "/api/learning/adaptive/audit").await;
+        assert_eq!(payload.get("count").and_then(JsonValue::as_u64), Some(1));
+        assert_eq!(
+            payload["entries"][0]
+                .get("action")
+                .and_then(JsonValue::as_str),
+            Some("disable")
+        );
+    }
+
+    #[tokio::test]
+    async fn adaptive_learning_audit_route_supports_query_filters() {
+        let state = seeded_test_state("adaptive-learning-audit-filters", false);
+        write_adaptive_learning_fixture(state.paths.as_ref());
+        let app = app_router(state.clone());
+        let (status, _) = post_json(
+            app.clone(),
+            "/api/learning/adaptive/detector/det-1",
+            json!({
+                "action": "disable",
+                "reason": "filtered audit entry"
+            }),
+            None,
+        )
+        .await;
+        assert_eq!(status, StatusCode::OK);
+        let payload = get_json(app, "/api/learning/adaptive/audit?action=disable&artifact_kind=detector&offset=0&limit=10").await;
+        assert_eq!(payload.get("count").and_then(JsonValue::as_u64), Some(1));
+        assert_eq!(
+            payload["query"]
+                .get("action")
+                .and_then(JsonValue::as_str),
+            Some("disable")
+        );
+    }
+
+    #[tokio::test]
+    async fn incident_detail_includes_learning_provenance_summary() {
+        let app = app_router(seeded_test_state("incident-provenance", false));
+        let detail = get_json(app, "/api/incidents/inc-1").await;
+        assert_eq!(
+            detail["learning_provenance"]
+                .get("influenced_hypotheses")
+                .and_then(JsonValue::as_u64),
+            Some(1)
+        );
+        assert_eq!(
+            detail["learning_provenance"]
+                .get("estimated_total_impact")
+                .and_then(JsonValue::as_f64),
+            Some(2.5)
+        );
+        assert_eq!(
+            detail["hypotheses"][0]
+                .get("provenance")
+                .and_then(|value| value.get("has_learned_influence"))
+                .and_then(JsonValue::as_bool),
+            Some(true)
+        );
+        assert_eq!(
+            detail["hypotheses"][0]
+                .get("provenance")
+                .and_then(|value| value.get("artifacts"))
+                .and_then(JsonValue::as_array)
+                .and_then(|items| items.first())
+                .and_then(|value| value.get("impact_value"))
+                .and_then(JsonValue::as_f64),
+            Some(2.5)
+        );
+    }
+
+    #[tokio::test]
+    async fn adaptive_learning_review_route_groups_incident_influence_and_attention() {
+        let state = seeded_test_state("adaptive-learning-review", false);
+        write_adaptive_learning_fixture(state.paths.as_ref());
+        write_adaptive_learning_history_fixture(state.paths.as_ref());
+        let app = app_router(state.clone());
+        let payload = get_json(app.clone(), "/api/learning/adaptive/review").await;
+        assert_eq!(
+            payload["active_incident_influence"][0]["incident_id"]
+                .as_str(),
+            Some("inc-1")
+        );
+        assert!(payload["history_summary"]["count"]
+            .as_u64()
+            .map(|count| count > 0)
+            .unwrap_or(false));
+        assert!(payload["comparison_rows"]
+            .as_array()
+            .map(|items| !items.is_empty())
+            .unwrap_or(false));
+        assert!(payload["trend_drilldowns"]
+            .as_array()
+            .map(|items| !items.is_empty())
+            .unwrap_or(false));
+        assert!(payload["analytics"]["kind_breakdown"]
+            .as_array()
+            .map(|items| !items.is_empty())
+            .unwrap_or(false));
+        let (status, _) = post_json(
+            app,
+            "/api/learning/adaptive/detector/det-1",
+            json!({
+                "action": "disable",
+                "reason": "review workflow retirement"
+            }),
+            None,
+        )
+        .await;
+        assert_eq!(status, StatusCode::OK);
+        let refreshed = get_json(app_router(state), "/api/learning/adaptive/review").await;
+        assert!(refreshed["artifacts_requiring_attention"]
+            .as_array()
+            .map(|items| !items.is_empty())
+            .unwrap_or(false));
+    }
+
+    #[tokio::test]
+    async fn adaptive_learning_review_action_route_records_decision_and_updates_queue() {
+        let state = seeded_test_state("adaptive-learning-review-action", false);
+        write_adaptive_learning_fixture(state.paths.as_ref());
+        let app = app_router(state.clone());
+        let initial = get_json(app.clone(), "/api/learning/adaptive/review").await;
+        assert_eq!(
+            initial["review_queue"]
+                .as_array()
+                .map(|items| items.len()),
+            Some(1)
+        );
+
+        let (status, payload) = post_json(
+            app.clone(),
+            "/api/learning/adaptive/detector/det-1/review",
+            json!({
+                "decision": "reject",
+                "reason": "operator rejected noisy detector"
+            }),
+            None,
+        )
+        .await;
+        assert_eq!(status, StatusCode::OK);
+        assert_eq!(
+            payload["review"]["review_counts"]
+                .get("rejected")
+                .and_then(JsonValue::as_u64),
+            Some(1)
+        );
+        assert_eq!(
+            payload["review"]["recent_review_activity"][0]
+                .get("action")
+                .and_then(JsonValue::as_str),
+            Some("review:reject")
+        );
+
+        let refreshed = get_json(app_router(state), "/api/learning/adaptive").await;
+        assert_eq!(
+            refreshed["detectors"][0]
+                .get("review_status")
+                .and_then(JsonValue::as_str),
+            Some("rejected")
+        );
+        assert_eq!(
+            refreshed["detectors"][0]
+                .get("manually_disabled")
+                .and_then(JsonValue::as_bool),
+            Some(true)
+        );
+    }
+
+    #[tokio::test]
+    async fn adaptive_learning_bulk_review_route_updates_multiple_artifacts() {
+        let state = seeded_test_state("adaptive-learning-bulk-review", false);
+        write_adaptive_learning_bulk_fixture(state.paths.as_ref());
+        let app = app_router(state.clone());
+        let (status, payload) = post_json(
+            app.clone(),
+            "/api/learning/adaptive/bulk/review",
+            json!({
+                "decision": "watch",
+                "reason": "bulk watch during triage",
+                "artifacts": [
+                    { "artifact_kind": "detector", "artifact_id": "det-1" },
+                    { "artifact_kind": "template", "artifact_id": "tpl-1" }
+                ]
+            }),
+            None,
+        )
+        .await;
+        assert_eq!(status, StatusCode::OK);
+        assert_eq!(payload.get("updated_count").and_then(JsonValue::as_u64), Some(2));
+        assert_eq!(
+            payload["review"]["review_counts"]
+                .get("watch")
+                .and_then(JsonValue::as_u64),
+            Some(2)
+        );
+
+        let refreshed = get_json(app_router(state), "/api/learning/adaptive").await;
+        assert_eq!(
+            refreshed["detectors"][0]
+                .get("review_status")
+                .and_then(JsonValue::as_str),
+            Some("watch")
+        );
+        assert_eq!(
+            refreshed["templates"][0]
+                .get("review_status")
+                .and_then(JsonValue::as_str),
+            Some("watch")
+        );
+    }
+
+    #[tokio::test]
+    async fn adaptive_learning_bulk_state_route_updates_multiple_artifacts() {
+        let state = seeded_test_state("adaptive-learning-bulk-state", false);
+        write_adaptive_learning_bulk_fixture(state.paths.as_ref());
+        let app = app_router(state.clone());
+        let (status, payload) = post_json(
+            app.clone(),
+            "/api/learning/adaptive/bulk/state",
+            json!({
+                "action": "disable",
+                "reason": "bulk runtime retirement",
+                "artifacts": [
+                    { "artifact_kind": "detector", "artifact_id": "det-1" },
+                    { "artifact_kind": "template", "artifact_id": "tpl-1" }
+                ]
+            }),
+            None,
+        )
+        .await;
+        assert_eq!(status, StatusCode::OK);
+        assert_eq!(payload.get("updated_count").and_then(JsonValue::as_u64), Some(2));
+        assert!(payload["review"]["artifacts_requiring_attention"]
+            .as_array()
+            .map(|items| !items.is_empty())
+            .unwrap_or(false));
+
+        let refreshed = get_json(app_router(state), "/api/learning/adaptive").await;
+        assert_eq!(
+            refreshed["detectors"][0]
+                .get("manually_disabled")
+                .and_then(JsonValue::as_bool),
+            Some(true)
+        );
+        assert_eq!(
+            refreshed["templates"][0]
+                .get("manually_disabled")
+                .and_then(JsonValue::as_bool),
+            Some(true)
+        );
+    }
+
+    #[tokio::test]
+    async fn adaptive_learning_saved_view_routes_persist_and_touch_views() {
+        let state = seeded_test_state("adaptive-learning-saved-views", false);
+        write_adaptive_learning_bulk_fixture(state.paths.as_ref());
+        write_adaptive_learning_history_fixture(state.paths.as_ref());
+        let app = app_router(state.clone());
+
+        let (save_status, save_payload) = post_json(
+            app.clone(),
+            "/api/learning/adaptive/views",
+            json!({
+                "name": "Database queue",
+                "description": "review db artifacts first",
+                "search_text": "database",
+                "assigned_reviewer": "alice",
+                "artifacts": [
+                    { "artifact_kind": "detector", "artifact_id": "det-1" },
+                    { "artifact_kind": "template", "artifact_id": "tpl-1" }
+                ]
+            }),
+            None,
+        )
+        .await;
+        assert_eq!(save_status, StatusCode::OK);
+        let view_id = save_payload
+            .get("view_id")
+            .and_then(JsonValue::as_str)
+            .expect("view id");
+        assert_eq!(
+            save_payload["review"]["saved_views"][0]
+                .get("assigned_reviewer")
+                .and_then(JsonValue::as_str),
+            Some("alice")
+        );
+
+        let (use_status, use_payload) = post_json(
+            app.clone(),
+            &format!("/api/learning/adaptive/views/{view_id}/use"),
+            json!({}),
+            None,
+        )
+        .await;
+        assert_eq!(use_status, StatusCode::OK);
+        assert!(use_payload["review"]["saved_views"][0]
+            .get("last_used_at")
+            .and_then(JsonValue::as_str)
+            .is_some());
+
+        let delete_response = app
+            .clone()
+            .oneshot(
+                Request::builder()
+                    .method("DELETE")
+                    .uri(format!("/api/learning/adaptive/views/{view_id}"))
+                    .body(Body::empty())
+                    .expect("build delete request"),
+            )
+            .await
+            .expect("delete saved view response");
+        assert_eq!(delete_response.status(), StatusCode::OK);
+        let delete_body = axum::body::to_bytes(delete_response.into_body(), usize::MAX)
+            .await
+            .expect("read delete body");
+        let delete_payload: JsonValue = serde_json::from_slice(&delete_body).expect("parse delete json");
+        assert_eq!(
+            delete_payload["review"]["saved_views"]
+                .as_array()
+                .map(|items| items.len()),
+            Some(0)
+        );
+    }
+
+    #[tokio::test]
+    async fn adaptive_learning_history_route_returns_longitudinal_entries() {
+        let state = seeded_test_state("adaptive-learning-history", false);
+        write_adaptive_learning_history_fixture(state.paths.as_ref());
+        let app = app_router(state);
+        let payload = get_json(app, "/api/learning/adaptive/history").await;
+        assert_eq!(payload.get("count").and_then(JsonValue::as_u64), Some(2));
+        assert_eq!(
+            payload["entries"][1]
+                .get("edge_delta")
+                .and_then(JsonValue::as_f64),
+            Some(0.08)
+        );
+    }
+
+    #[tokio::test]
+    async fn adaptive_learning_history_route_supports_filters_and_legacy_import() {
+        let state = seeded_test_state("adaptive-learning-history-filters", false);
+        write_legacy_adaptive_learning_history_fixture(state.paths.as_ref());
+        let app = app_router(state);
+        let payload = get_json(
+            app,
+            "/api/learning/adaptive/history?artifact_kind=detector&artifact_id=det-legacy&incident_id=inc-1&limit=5",
+        )
+        .await;
+        assert_eq!(payload.get("count").and_then(JsonValue::as_u64), Some(1));
+        assert_eq!(
+            payload["entries"][0]
+                .get("artifact_id")
+                .and_then(JsonValue::as_str),
+            Some("det-legacy")
+        );
+        assert_eq!(
+            payload["query"]
+                .get("artifact_kind")
+                .and_then(JsonValue::as_str),
+            Some("detector")
+        );
     }
 
     #[tokio::test]
