@@ -24,7 +24,7 @@ legacy = [
   "psutil>=5.9",
   "pydantic>=2",
   "aiofiles>=23",
-  "aiohttp>=3.9",
+  "aiohttp>=3.13.5",
   "rich>=13.9",
   "tomli-w>=1.0",
 ]
