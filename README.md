@@ -214,9 +214,6 @@ Python is used for **developer tooling, docs, and pytest** over archived modules
 
 ```text
 python -m pip install -e ".[dev,legacy]"
-```
-
-```text
 python -m compileall tests deploy deprecated
 python -m pytest -q
 ```
