@@ -207,7 +207,7 @@ jobs:
           labels: ${{ steps.meta.outputs.labels }}
       - name: Install cosign
         if: github.ref_type == 'tag'
-        uses: sigstore/cosign-installer@v3.7.0
+        uses: sigstore/cosign-installer@v4.1.2
       - name: Sign image digest (keyless)
         if: github.ref_type == 'tag'
         run: cosign sign --yes "${{ env.REGISTRY }}/${{ steps.image_lc.outputs.repository }}@${{ steps.push.outputs.digest }}"
