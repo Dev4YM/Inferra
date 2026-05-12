@@ -1,72 +1,55 @@
-import { useCallback, useEffect, useRef, useState } from "react";
+import { useCallback, useMemo } from "react";
+import { useMutation, useQuery, useQueryClient } from "@tanstack/react-query";
 
 import { type ApiError, errorMessage, fetchJson } from "@/api";
 
 type QueryOptions = {
   deps?: readonly unknown[];
   enabled?: boolean;
+  staleTime?: number;
+  refetchInterval?: number | false;
 };
 
 export function useApiQuery<T>(path: string | null, options: QueryOptions = {}) {
-  const { deps = [], enabled = true } = options;
-  const [data, setData] = useState<T | null>(null);
-  const [error, setError] = useState<ApiError | null>(null);
-  const [isLoading, setIsLoading] = useState(false);
-  const [isRefreshing, setIsRefreshing] = useState(false);
-  const abortRef = useRef<AbortController | null>(null);
-  const mountedRef = useRef(true);
-  const hasLoadedRef = useRef(false);
-
-  useEffect(() => {
-    return () => {
-      mountedRef.current = false;
-      abortRef.current?.abort();
-    };
-  }, []);
+  const { deps = [], enabled = true, staleTime, refetchInterval } = options;
+  const queryClient = useQueryClient();
+  const queryKey = useMemo(() => ["api", path, ...deps], [deps, path]);
+  const query = useQuery<T, ApiError>({
+    queryKey,
+    enabled: Boolean(path && enabled),
+    staleTime,
+    refetchInterval,
+    queryFn: ({ signal }) => fetchJson<T>(path as string, { signal }),
+  });
 
   const reload = useCallback(
-    async (opts?: { silent?: boolean }) => {
-      if (!path || !enabled) return;
-      abortRef.current?.abort();
-      const controller = new AbortController();
-      abortRef.current = controller;
-      const showRefreshing = Boolean(hasLoadedRef.current || opts?.silent);
-      if (showRefreshing) {
-        setIsRefreshing(true);
-      } else {
-        setIsLoading(true);
-      }
-      try {
-        const next = await fetchJson<T>(path, { signal: controller.signal });
-        if (!mountedRef.current || controller.signal.aborted) return;
-        hasLoadedRef.current = true;
-        setData(next);
-        setError(null);
-        return next;
-      } catch (err) {
-        if (!mountedRef.current || controller.signal.aborted) return;
-        setError(err as ApiError);
-      } finally {
-        if (!mountedRef.current || controller.signal.aborted) return;
-        setIsLoading(false);
-        setIsRefreshing(false);
-      }
+    async (_opts?: { silent?: boolean }) => {
+      if (!path || !enabled) return undefined;
+      const result = await queryClient.fetchQuery({
+        queryKey,
+        staleTime: 0,
+        queryFn: ({ signal }) => fetchJson<T>(path, { signal }),
+      });
+      return result;
     },
-    [enabled, path],
+    [enabled, path, queryClient, queryKey],
   );
 
-  useEffect(() => {
-    if (!path || !enabled) return;
-    void reload();
-    // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [path, enabled, ...deps]);
+  const setData = useCallback(
+    (next: T | null | ((current: T | null) => T | null)) => {
+      queryClient.setQueryData<T | null>(queryKey, (current) =>
+        typeof next === "function" ? (next as (current: T | null) => T | null)(current ?? null) : next,
+      );
+    },
+    [queryClient, queryKey],
+  );
 
   return {
-    data,
-    error,
-    errorMessage: error ? errorMessage(error) : null,
-    isLoading,
-    isRefreshing,
+    data: query.data ?? null,
+    error: query.error ?? null,
+    errorMessage: query.error ? errorMessage(query.error) : null,
+    isLoading: query.isLoading,
+    isRefreshing: query.isFetching && !query.isLoading,
     reload,
     setData,
   };
@@ -80,30 +63,12 @@ export function useApiMutation<TArgs, TResult>(
   isPending: boolean;
   run: (args: TArgs) => Promise<TResult>;
 } {
-  const [isPending, setIsPending] = useState(false);
-  const [error, setError] = useState<ApiError | null>(null);
-
-  const run = useCallback(
-    async (args: TArgs) => {
-      setIsPending(true);
-      setError(null);
-      try {
-        return await fn(args);
-      } catch (err) {
-        setError(err as ApiError);
-        throw err;
-      } finally {
-        setIsPending(false);
-      }
-    },
-    [fn],
-  );
+  const mutation = useMutation<TResult, ApiError, TArgs>({ mutationFn: fn });
 
   return {
-    error,
-    errorMessage: error ? errorMessage(error) : null,
-    isPending,
-    run,
+    error: mutation.error ?? null,
+    errorMessage: mutation.error ? errorMessage(mutation.error) : null,
+    isPending: mutation.isPending,
+    run: mutation.mutateAsync,
   };
 }
-

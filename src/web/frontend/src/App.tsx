@@ -5,6 +5,7 @@ import {
   FolderKanban,
   Home,
   Logs,
+  Network,
   Settings,
   Shield,
   Sparkles,
@@ -17,26 +18,29 @@ import { Toaster, toast } from "sonner";
 import { type ConfigResponse, type InferraConfigPayload, fetchJson, putJson } from "@/api";
 import { AppShell, type NavItem } from "@/components/layout/app-shell";
 import { configMode, type Mode, useMode } from "@/lib/experience";
+import { formatModeLabel } from "@/lib/format";
 import { useApiQuery } from "@/lib/query";
 import { useTheme } from "@/lib/theme";
 import { AiInvestigatorPage } from "@/pages/AiInvestigatorPage";
 import { ControlPage } from "@/pages/ControlPage";
 import { EvidencePage } from "@/pages/EvidencePage";
+import { GraphPage } from "@/pages/GraphPage";
 import { IncidentDetailPage, IncidentsPage } from "@/pages/IncidentsPage";
 import { LearningReviewPage } from "@/pages/LearningReviewPage";
 import { OverviewPage } from "@/pages/OverviewPage";
 import { SettingsPage } from "@/pages/SettingsPage";
 import { ServiceDetailPage, SystemsPage } from "@/pages/SystemsPage";
-import { WorkspacePage } from "@/pages/WorkspacePage";
+import { WorkspaceAppPage, WorkspacePage } from "@/pages/WorkspacePage";
 
 const NAV_ITEMS: NavItem[] = [
   { to: "/", label: "Overview", icon: Home },
   { to: "/incidents", label: "Incidents", icon: Siren },
-  { to: "/learning", label: "Learning Review", icon: Sparkles },
   { to: "/systems", label: "Systems", icon: Workflow },
+  { to: "/graph", label: "Graph", icon: Network },
   { to: "/evidence", label: "Evidence", icon: Logs },
   { to: "/ai", label: "AI Investigator", icon: BrainCircuit },
   { to: "/workspace", label: "Workspace", icon: FolderKanban },
+  { to: "/learning", label: "Learning Review", icon: Sparkles },
   { to: "/control", label: "Control", icon: Shield },
   { to: "/settings", label: "Settings", icon: Settings },
 ];
@@ -70,7 +74,7 @@ export default function App() {
         };
         const saved = await putJson<ConfigResponse>("/api/config", { config: nextConfig });
         setModeStatus(saved.applied ? "Mode saved to config." : "Mode updated locally.");
-        toast.success("Experience mode updated", { description: `${nextMode} mode is now active.` });
+        toast.success("Experience mode updated", { description: `${formatModeLabel(nextMode)} mode is now active.` });
         void configState.reload({ silent: true });
       } catch (error) {
         const message = error instanceof Error ? error.message : String(error);
@@ -104,9 +108,11 @@ export default function App() {
           <Route path="/learning" element={<LearningReviewPage mode={mode} />} />
           <Route path="/systems" element={<SystemsPage mode={mode} />} />
           <Route path="/systems/:serviceId" element={<ServiceDetailPage mode={mode} />} />
+          <Route path="/graph" element={<GraphPage mode={mode} />} />
           <Route path="/evidence" element={<EvidencePage mode={mode} />} />
           <Route path="/ai" element={<AiInvestigatorPage mode={mode} />} />
           <Route path="/workspace" element={<WorkspacePage mode={mode} />} />
+          <Route path="/workspace/apps" element={<WorkspaceAppPage mode={mode} />} />
           <Route path="/control" element={<ControlPage mode={mode} />} />
           <Route path="/settings" element={<SettingsPage mode={mode} theme={theme} onThemeChange={setTheme} />} />
         </Routes>
@@ -115,4 +121,3 @@ export default function App() {
     </>
   );
 }
-

@@ -6,7 +6,7 @@ export function TableWrap({ className, ...props }: HTMLAttributes<HTMLDivElement
   return (
     <div
       className={cn(
-        "overflow-hidden rounded-3xl border border-border/80 bg-card/70 shadow-[0_10px_40px_-28px_rgba(14,165,233,0.3)]",
+        "overflow-hidden rounded-2xl border border-border/80 bg-card/80 shadow-[0_14px_48px_-38px_rgba(15,23,42,0.45)]",
         className,
       )}
       {...props}
@@ -22,7 +22,7 @@ export function Th({ className, ...props }: ThHTMLAttributes<HTMLTableCellElemen
   return (
     <th
       className={cn(
-        "bg-secondary/60 px-4 py-3 text-left text-[11px] font-semibold uppercase tracking-[0.18em] text-muted-foreground",
+        "sticky top-0 z-10 bg-secondary/80 px-4 py-3 text-left text-[11px] font-semibold uppercase tracking-[0.16em] text-muted-foreground backdrop-blur",
         className,
       )}
       {...props}
@@ -33,4 +33,3 @@ export function Th({ className, ...props }: ThHTMLAttributes<HTMLTableCellElemen
 export function Td({ className, ...props }: TdHTMLAttributes<HTMLTableCellElement>) {
   return <td className={cn("border-t border-border/60 px-4 py-3 align-top text-sm", className)} {...props} />;
 }
-

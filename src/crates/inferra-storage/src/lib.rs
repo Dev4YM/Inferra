@@ -160,6 +160,16 @@ pub struct StoredInferenceGraphSnapshot {
 }
 
 #[derive(Debug, Clone)]
+pub struct StoredUiSnapshot {
+    pub data_type: String,
+    pub payload: Value,
+    pub source: String,
+    pub updated_at: String,
+    pub schema_version: i64,
+    pub interval_seconds: Option<i64>,
+}
+
+#[derive(Debug, Clone)]
 pub struct StoredAdaptiveLearningAuditEntry {
     pub audit_id: String,
     pub artifact_kind: String,
@@ -1180,6 +1190,69 @@ impl IncidentsStore {
         let conn = Connection::open(path)
             .with_context(|| format!("open incidents db {}", path.display()))?;
         Ok(Some(Self { conn }))
+    }
+
+    pub fn upsert_ui_snapshot(
+        &self,
+        data_type: &str,
+        payload: &Value,
+        source: &str,
+        interval_seconds: Option<i64>,
+    ) -> Result<StoredUiSnapshot> {
+        let updated_at = now_iso();
+        let payload_json = serde_json::to_string(payload).context("serialize ui snapshot")?;
+        self.conn
+            .execute(
+                "INSERT INTO ui_snapshots (
+                    data_type, payload_json, source, updated_at, schema_version, interval_seconds
+                 ) VALUES (?1, ?2, ?3, ?4, 1, ?5)
+                 ON CONFLICT(data_type) DO UPDATE SET
+                    payload_json = excluded.payload_json,
+                    source = excluded.source,
+                    updated_at = excluded.updated_at,
+                    schema_version = excluded.schema_version,
+                    interval_seconds = excluded.interval_seconds",
+                rusqlite::params![data_type, payload_json, source, updated_at, interval_seconds],
+            )
+            .with_context(|| format!("upsert ui snapshot {data_type}"))?;
+        Ok(StoredUiSnapshot {
+            data_type: data_type.to_string(),
+            payload: payload.clone(),
+            source: source.to_string(),
+            updated_at,
+            schema_version: 1,
+            interval_seconds,
+        })
+    }
+
+    pub fn ui_snapshot(&self, data_type: &str) -> Result<Option<StoredUiSnapshot>> {
+        self.conn
+            .query_row(
+                "SELECT data_type, payload_json, source, updated_at, schema_version, interval_seconds
+                 FROM ui_snapshots WHERE data_type = ?1",
+                [data_type],
+                ui_snapshot_from_row,
+            )
+            .optional()
+            .with_context(|| format!("query ui snapshot {data_type}"))
+    }
+
+    pub fn ui_snapshots(&self) -> Result<Vec<StoredUiSnapshot>> {
+        let mut stmt = self
+            .conn
+            .prepare(
+                "SELECT data_type, payload_json, source, updated_at, schema_version, interval_seconds
+                 FROM ui_snapshots ORDER BY data_type ASC",
+            )
+            .context("prepare ui snapshots")?;
+        let rows = stmt
+            .query_map([], ui_snapshot_from_row)
+            .context("query ui snapshots")?;
+        let mut out = Vec::new();
+        for row in rows {
+            out.push(row?);
+        }
+        Ok(out)
     }
 
     pub fn active_incidents(&self, limit: usize) -> Result<Vec<IncidentRow>> {
@@ -3222,6 +3295,14 @@ fn initialize_incidents_db(path: &Path) -> Result<()> {
              created_at TEXT NOT NULL DEFAULT (strftime('%Y-%m-%dT%H:%M:%fZ', 'now')),
              event_count INTEGER NOT NULL DEFAULT 0
          );
+         CREATE TABLE IF NOT EXISTS ui_snapshots (
+             data_type TEXT PRIMARY KEY,
+             payload_json TEXT NOT NULL DEFAULT '{}',
+             source TEXT NOT NULL DEFAULT 'inferra_core',
+             updated_at TEXT NOT NULL DEFAULT (strftime('%Y-%m-%dT%H:%M:%fZ', 'now')),
+             schema_version INTEGER NOT NULL DEFAULT 1,
+             interval_seconds INTEGER
+         );
          CREATE TABLE IF NOT EXISTS feedback (
              feedback_id TEXT PRIMARY KEY,
              incident_id TEXT NOT NULL,
@@ -3403,6 +3484,8 @@ fn initialize_incidents_db(path: &Path) -> Result<()> {
          CREATE INDEX IF NOT EXISTS idx_incident_clusters_incident_id ON incident_clusters(incident_id);
          CREATE INDEX IF NOT EXISTS idx_explanations_incident ON explanations(incident_id);
          CREATE INDEX IF NOT EXISTS idx_explanations_cache ON explanations(incident_id, hypotheses_hash, events_hash_head);
+         CREATE INDEX IF NOT EXISTS idx_ui_snapshots_updated ON ui_snapshots(updated_at DESC);
+         CREATE INDEX IF NOT EXISTS idx_ui_snapshots_source ON ui_snapshots(source);
          CREATE INDEX IF NOT EXISTS idx_feedback_incident ON feedback(incident_id);
          CREATE INDEX IF NOT EXISTS idx_feedback_created ON feedback(created_at);
          CREATE INDEX IF NOT EXISTS idx_state_log_incident ON incident_state_log(incident_id);
@@ -3655,6 +3738,18 @@ fn is_missing_table_error(error: &impl std::fmt::Display) -> bool {
     error.to_string().to_ascii_lowercase().contains("no such table")
 }
 
+fn ui_snapshot_from_row(row: &Row<'_>) -> rusqlite::Result<StoredUiSnapshot> {
+    let payload_raw: String = row.get(1)?;
+    Ok(StoredUiSnapshot {
+        data_type: row.get(0)?,
+        payload: serde_json::from_str(&payload_raw).unwrap_or(Value::Null),
+        source: row.get(2)?,
+        updated_at: row.get(3)?,
+        schema_version: row.get(4)?,
+        interval_seconds: row.get(5)?,
+    })
+}
+
 fn now_iso() -> String {
     OffsetDateTime::now_utc()
         .format(&time::format_description::well_known::Rfc3339)
@@ -3721,6 +3816,14 @@ mod tests {
             )
             .expect("feedback table");
         assert_eq!(feedback_table, "feedback");
+        let snapshots_table: String = incidents
+            .query_row(
+                "SELECT name FROM sqlite_master WHERE type = 'table' AND name = 'ui_snapshots'",
+                [],
+                |row| row.get(0),
+            )
+            .expect("ui_snapshots table");
+        assert_eq!(snapshots_table, "ui_snapshots");
     }
 
     #[test]
@@ -3763,6 +3866,33 @@ mod tests {
             .get_collector_state("host_metrics", "cursor")
             .expect("get collector state");
         assert_eq!(cursor.as_deref(), Some("42"));
+    }
+
+    #[test]
+    fn incidents_store_persists_ui_snapshots_by_data_type() {
+        let (_root, events_db, incidents_db) = temp_db_paths("ui-snapshot");
+        initialize_databases(&events_db, &incidents_db).expect("initialize dbs");
+        let store = IncidentsStore::open(&incidents_db)
+            .expect("open incidents result")
+            .expect("incidents store present");
+
+        store
+            .upsert_ui_snapshot(
+                "workspace",
+                &serde_json::json!({"runtime_apps":[{"name":"inferra"}]}),
+                "inferra_core",
+                Some(120),
+            )
+            .expect("upsert snapshot");
+        let snapshot = store
+            .ui_snapshot("workspace")
+            .expect("query snapshot")
+            .expect("snapshot present");
+        assert_eq!(snapshot.data_type, "workspace");
+        assert_eq!(snapshot.source, "inferra_core");
+        assert_eq!(snapshot.interval_seconds, Some(120));
+        assert_eq!(snapshot.payload["runtime_apps"][0]["name"], "inferra");
+        assert_eq!(store.ui_snapshots().expect("list snapshots").len(), 1);
     }
 
     #[test]

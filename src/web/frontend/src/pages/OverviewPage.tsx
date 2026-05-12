@@ -1,4 +1,6 @@
-import { Activity, AlertTriangle, Bot, FolderGit2, RefreshCcw, ServerCog, Sparkles } from "lucide-react";
+import { useState } from "react";
+import { Activity, AlertTriangle, Bot, Boxes, Cpu, FolderGit2, RefreshCcw, ServerCog, Sparkles } from "lucide-react";
+import { Link } from "react-router-dom";
 
 import type { Mode } from "@/lib/experience";
 import type { OverviewResponse } from "@/api";
@@ -8,12 +10,15 @@ import { Alert, AlertDescription, AlertTitle } from "@/components/ui/alert";
 import { Badge } from "@/components/ui/badge";
 import { PageHeader } from "@/components/layout/page-header";
 import { EmptyState, ErrorState, LoadingState, MetricGridSkeleton } from "@/components/feedback/states";
-import { formatRiskTone, formatSeverity, formatRelativeDate } from "@/lib/format";
+import { formatDisplayValue, formatRiskTone, formatSeverity, formatSeverityLabel, formatRelativeDate } from "@/lib/format";
 import { useApiQuery } from "@/lib/query";
-import { Link } from "react-router-dom";
+import { EventRateBars, SeverityDistribution } from "@/components/inferra/charts";
+import { IncidentCard } from "@/components/inferra/incident";
+import { RuntimeStatusCard, ServiceHealthBadge, riskTone } from "@/components/inferra/health";
 
 export function OverviewPage({ mode }: { mode: Mode }) {
   const overview = useApiQuery<OverviewResponse>("/api/overview");
+  const [quickFilter, setQuickFilter] = useState<"all" | "active" | "degraded" | "ai">("all");
 
   if (overview.isLoading && !overview.data) {
     return (
@@ -43,6 +48,10 @@ export function OverviewPage({ mode }: { mode: Mode }) {
   const incidents = dashboard.incidents ?? [];
   const services = dashboard.services ?? [];
   const riskyServices = services.filter((item) => ["critical", "degraded", "elevated"].includes(item.status));
+  const visibleIncidents = quickFilter === "active" ? incidents.filter((incident) => incident.state !== "resolved") : incidents;
+  const visibleServices = quickFilter === "degraded" ? riskyServices : services;
+  const eventRate = normalizeEventRate(dashboard.event_rate);
+  const severityCounts = normalizeSeverityCounts(dashboard.severity_counts);
   const aiState = health.ai_enabled
     ? health.ai_available
       ? { label: "AI ready", variant: "success" as const }
@@ -63,16 +72,47 @@ export function OverviewPage({ mode }: { mode: Mode }) {
         }
       />
 
+      <div className="dashboard-grid">
+        <RuntimeStatusCard
+          icon={Activity}
+          label="System health"
+          value={health.status ?? quick.risk_level}
+          tone={riskTone(health.status ?? quick.risk_level)}
+          detail={`${health.queue_depth ?? 0} queued events, ${health.collector_errors ?? 0} collector errors`}
+        />
+        <RuntimeStatusCard
+          icon={AlertTriangle}
+          label="Active incidents"
+          value={String(incidents.length)}
+          tone={incidents.length ? "warning" : "success"}
+          detail="Open failures currently worth inspecting."
+        />
+        <RuntimeStatusCard
+          icon={ServerCog}
+          label="Monitored services"
+          value={String(services.length)}
+          tone={riskyServices.length ? "warning" : "success"}
+          detail={`${riskyServices.length} services need attention.`}
+        />
+        <RuntimeStatusCard
+          icon={Bot}
+          label="AI investigator"
+          value={aiState.label}
+          tone={aiState.variant === "warning" ? "warning" : aiState.variant === "success" ? "success" : "secondary"}
+          detail={health.ai_reason ?? "Evidence-backed summaries and suggested checks."}
+        />
+      </div>
+
       <Card className="overflow-hidden">
         <CardContent className="grid gap-6 p-6 lg:grid-cols-[1.5fr_1fr]">
           <div className="space-y-4">
             <div className="flex flex-wrap items-center gap-2">
-              <Badge variant={formatRiskTone(quick.risk_level)}>risk {quick.risk_level}</Badge>
+              <Badge variant={formatRiskTone(quick.risk_level)}>Risk {formatDisplayValue(quick.risk_level)}</Badge>
               <Badge variant={aiState.variant}>
                 <Bot className="size-3.5" />
                 {aiState.label}
               </Badge>
-              <Badge variant="outline">{experience.ai_role}</Badge>
+              <Badge variant="outline">{formatDisplayValue(experience.ai_role)}</Badge>
             </div>
             <div>
               <p className="text-xs font-semibold uppercase tracking-[0.28em] text-primary/80">Quick analysis</p>
@@ -83,14 +123,96 @@ export function OverviewPage({ mode }: { mode: Mode }) {
               </p>
             </div>
           </div>
-          <div className="grid gap-3 sm:grid-cols-2 lg:grid-cols-1">
-            <QuickStat icon={AlertTriangle} label="Active incidents" value={String(incidents.length)} note="Open or investigating now" />
-            <QuickStat icon={ServerCog} label="Risky services" value={String(riskyServices.length)} note="Critical, degraded, or elevated" />
+          <div className="grid gap-3 sm:grid-cols-2">
             <QuickStat icon={FolderGit2} label="Workspace projects" value={String(projects.length)} note="Mapped to local runtime context" />
-            <QuickStat icon={Sparkles} label="Safe actions" value={experience.suggest_safe_actions ? "suggest" : "disabled"} note="Never executed automatically" />
+            <QuickStat icon={Boxes} label="Containers" value={String(overview.data.runtime.containers?.length ?? 0)} note="Observed from local runtime" />
+            <QuickStat icon={Cpu} label="Process sample" value={String(quick.process_sample_size)} note="Local process context" />
+            <QuickStat icon={Sparkles} label="Safe actions" value={experience.suggest_safe_actions ? "Suggest" : "Disabled"} note="Never executed automatically" />
           </div>
         </CardContent>
       </Card>
+
+      <div className="flex flex-wrap gap-2">
+        {[
+          ["all", "All signals"],
+          ["active", "Active incidents"],
+          ["degraded", "Degraded services"],
+          ["ai", "AI state"],
+        ].map(([value, label]) => (
+          <Button
+            key={value}
+            type="button"
+            variant={quickFilter === value ? "default" : "outline"}
+            size="sm"
+            onClick={() => setQuickFilter(value as typeof quickFilter)}
+          >
+            {label}
+          </Button>
+        ))}
+      </div>
+
+      <section className="grid gap-4 xl:grid-cols-[minmax(0,1.45fr)_minmax(360px,0.85fr)]">
+        <Card>
+          <CardHeader>
+            <CardTitle>Active incidents</CardTitle>
+          </CardHeader>
+          <CardContent>
+            {visibleIncidents.length ? (
+              <div className="grid gap-3 lg:grid-cols-2">
+                {visibleIncidents.slice(0, 6).map((incident) => (
+                  <IncidentCard key={incident.incident_id} incident={incident} />
+                ))}
+              </div>
+            ) : (
+              <EmptyState title="No active incidents" description="Inferra is quiet right now. Keep collectors running and refresh when needed." />
+            )}
+          </CardContent>
+        </Card>
+
+        <Card>
+          <CardHeader>
+            <CardTitle>Severity distribution</CardTitle>
+          </CardHeader>
+          <CardContent>
+            <SeverityDistribution counts={severityCounts} />
+          </CardContent>
+        </Card>
+      </section>
+
+      <section className="grid gap-4 xl:grid-cols-[minmax(0,1.35fr)_minmax(360px,0.9fr)]">
+        <Card>
+          <CardHeader>
+            <CardTitle>Recent anomaly timeline</CardTitle>
+          </CardHeader>
+          <CardContent>
+            <EventRateBars points={eventRate} />
+          </CardContent>
+        </Card>
+
+        <Card>
+          <CardHeader>
+            <CardTitle>Monitored services</CardTitle>
+          </CardHeader>
+          <CardContent className="space-y-3">
+            {visibleServices.slice(0, 7).map((service) => (
+              <Link
+                key={service.service_id}
+                to={`/systems/${service.service_id}`}
+                className="flex items-center justify-between gap-3 rounded-2xl border border-border/60 bg-background/35 p-4 text-foreground hover:bg-secondary/45 hover:opacity-100"
+              >
+                <div className="min-w-0">
+                  <p className="truncate font-medium">{service.service_id}</p>
+                  <p className="text-sm text-muted-foreground">
+                    {service.event_count ?? 0} events, {service.error_count ?? 0} errors
+                  </p>
+                </div>
+                <ServiceHealthBadge status={service.status} />
+              </Link>
+            ))}
+            {!visibleServices.length ? <p className="text-sm text-muted-foreground">No monitored services reported yet.</p> : null}
+          </CardContent>
+        </Card>
+      </section>
 
       <section className="grid gap-4 xl:grid-cols-[minmax(0,1.5fr)_minmax(360px,1fr)]">
         <Card>
@@ -110,15 +232,15 @@ export function OverviewPage({ mode }: { mode: Mode }) {
             <CardTitle>Platform health</CardTitle>
           </CardHeader>
           <CardContent className="space-y-3 text-sm">
-            <HealthRow label="Status" value={health.status ?? "unknown"} />
+            <HealthRow label="Status" value={formatDisplayValue(health.status ?? "unknown")} />
             <HealthRow label="Queue depth" value={String(health.queue_depth ?? 0)} />
             <HealthRow label="Storage writes" value={String(health.storage_writes_ok ?? false)} />
             <HealthRow
               label="AI status"
               value={
                 health.ai_enabled
-                  ? (health.ai_available ? "available" : "degraded")
-                  : "disabled"
+                  ? (health.ai_available ? "Available" : "Degraded")
+                  : "Disabled"
               }
             />
             {health.degraded_reasons?.length ? (
@@ -129,7 +251,7 @@ export function OverviewPage({ mode }: { mode: Mode }) {
                   <AlertDescription>
                     {health.degraded_reasons.map((reason, index) => (
                       <span key={index} className="block">
-                        • {reason}
+                        - {reason}
                       </span>
                     ))}
                   </AlertDescription>
@@ -155,7 +277,7 @@ export function OverviewPage({ mode }: { mode: Mode }) {
                       <p className="text-sm text-muted-foreground">{incident.incident_id}</p>
                     </div>
                     <div className="flex items-center gap-2">
-                      <Badge variant={formatRiskTone(formatSeverity(incident.severity))}>sev {formatSeverity(incident.severity)}</Badge>
+                      <Badge variant={formatRiskTone(formatSeverity(incident.severity))}>Sev {formatSeverityLabel(incident.severity)}</Badge>
                       <Link className="text-sm font-medium" to={`/incidents/${incident.incident_id}`}>
                         Open incident
                       </Link>
@@ -189,7 +311,7 @@ export function OverviewPage({ mode }: { mode: Mode }) {
                       <p className="font-medium">{service.service_id}</p>
                       <p className="text-sm text-muted-foreground">{service.event_count ?? 0} events observed</p>
                     </div>
-                    <Badge variant={formatRiskTone(service.status)}>{service.status}</Badge>
+                    <Badge variant={formatRiskTone(service.status)}>{formatDisplayValue(service.status)}</Badge>
                   </div>
                 </div>
               ))
@@ -250,3 +372,58 @@ function HealthRow({ label, value }: { label: string; value: string }) {
   );
 }
 
+function normalizeEventRate(value: unknown) {
+  if (!Array.isArray(value)) {
+    if (value && typeof value === "object") {
+      const point = value as Record<string, unknown>;
+      return [{
+        label: "Current",
+        total: numberValue(point.events ?? point.total),
+        warn: numberValue(point.warn),
+        error: numberValue(point.error),
+        critical: numberValue(point.critical),
+      }];
+    }
+    return [];
+  }
+  return value
+    .filter((point): point is Record<string, unknown> => Boolean(point && typeof point === "object" && !Array.isArray(point)))
+    .map((point) => ({
+      label: formatRelativeDate(typeof point.timestamp === "string" ? point.timestamp : undefined),
+      total: numberValue(point.total),
+      warn: numberValue(point.warn),
+      error: numberValue(point.error),
+      critical: numberValue(point.critical),
+    }));
+}
+
+function normalizeSeverityCounts(value: unknown): Record<string, number> {
+  if (!value || typeof value !== "object" || Array.isArray(value)) return {};
+  const counts: Record<string, number> = {};
+  for (const [key, raw] of Object.entries(value)) {
+    const normalizedKey = severityKey(key);
+    counts[normalizedKey] = (counts[normalizedKey] ?? 0) + numberValue(raw);
+  }
+  return counts;
+}
+
+function severityKey(value: string): string {
+  switch (value.toLowerCase()) {
+    case "0":
+      return "debug";
+    case "1":
+      return "info";
+    case "2":
+      return "warn";
+    case "3":
+      return "error";
+    case "4":
+      return "critical";
+    default:
+      return value.toLowerCase();
+  }
+}
+
+function numberValue(value: unknown): number {
+  return typeof value === "number" && Number.isFinite(value) ? value : 0;
+}

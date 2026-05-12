@@ -6,7 +6,7 @@ import { Badge } from "@/components/ui/badge";
 import { Button } from "@/components/ui/button";
 import { Card, CardContent, CardHeader, CardTitle } from "@/components/ui/card";
 import { JsonInspector } from "@/components/ui/json-inspector";
-import { formatRelativeDate, formatRiskTone, investigationHasSignal } from "@/lib/format";
+import { formatDisplayValue, formatRelativeDate, formatRiskTone, investigationHasSignal } from "@/lib/format";
 
 export function InvestigationView({
   result,
@@ -28,7 +28,7 @@ export function InvestigationView({
             <div className="space-y-2">
               <div className="flex flex-wrap items-center gap-2">
                 <Badge variant={formatRiskTone(output.risk_level)}>
-                  risk {output.risk_level}
+                  Risk {formatDisplayValue(output.risk_level)}
                 </Badge>
                 <Badge variant={result.used_ai ? "info" : "warning"}>
                   {result.used_ai ? (
@@ -219,7 +219,7 @@ export function InvestigationView({
                   {result.audit.explanation ? (
                     <>
                       <div className="flex flex-wrap items-center gap-2">
-                        <Badge variant="outline">{result.audit.explanation.quality}</Badge>
+                      <Badge variant="outline">{formatDisplayValue(result.audit.explanation.quality)}</Badge>
                         <Badge variant="outline">{result.audit.explanation.model_used}</Badge>
                         <span className="text-muted-foreground">
                           stored {formatRelativeDate(result.audit.explanation.created_at)}
@@ -256,9 +256,9 @@ export function InvestigationView({
                     result.audit.state_log.slice(0, 5).map((entry, index) => (
                       <div key={`${entry.changed_at ?? "state"}-${index}`} className="rounded-xl border border-border/60 bg-card/60 p-3">
                         <div className="flex flex-wrap items-center gap-2">
-                          <Badge variant="outline">{entry.old_state ?? "?"}</Badge>
+                          <Badge variant="outline">{formatDisplayValue(entry.old_state ?? "?")}</Badge>
                           <span className="text-muted-foreground">to</span>
-                          <Badge variant="outline">{entry.new_state ?? "?"}</Badge>
+                          <Badge variant="outline">{formatDisplayValue(entry.new_state ?? "?")}</Badge>
                         </div>
                         {entry.reason ? <p className="mt-2 text-muted-foreground">{entry.reason}</p> : null}
                         <p className="mt-1 text-xs text-muted-foreground">{formatRelativeDate(entry.changed_at)}</p>
@@ -337,4 +337,3 @@ function Section({ title, items, empty }: { title: string; items: string[]; empt
     </Card>
   );
 }
-

@@ -627,8 +627,8 @@ export type DashboardPayload = {
   noise?: Record<string, number>;
   incidents?: IncidentRow[];
   services?: ServiceRow[];
-  event_rate?: { timestamp: string; total: number; warn?: number; error?: number; critical?: number }[];
-  severity_counts?: Record<string, number>;
+  event_rate?: unknown;
+  severity_counts?: unknown;
 };
 
 export type RuntimeContext = {
@@ -660,6 +660,24 @@ export type CollectorRow = {
   queue_depth?: number;
   last_error?: string | null;
   lag_seconds?: number;
+};
+
+export type ScannerStatusResponse = {
+  scanner: Record<
+    string,
+    {
+      data_type: string;
+      mode: string;
+      route?: string;
+      interval_seconds?: number;
+      min_interval_seconds?: number;
+      max_interval_seconds?: number;
+      last_scanned_at?: string | null;
+      age_seconds?: number;
+      next_scan_in_seconds?: number;
+      cached?: boolean;
+    }
+  >;
 };
 
 export type InvestigationTrace = {
@@ -791,6 +809,42 @@ export type InvestigationResponse = {
 
 export type WorkspaceMappingSignal = { name: string; confidence: number; detail: string };
 
+export type WorkspaceRuntimeApp = {
+  pid?: number | null;
+  name: string;
+  runtime: string;
+  language?: string | null;
+  process_kind?: string | null;
+  framework?: string | null;
+  libraries?: string[];
+  log_hints?: string[];
+  manager?: string | null;
+  status?: string | null;
+  cwd?: string | null;
+  script?: string | null;
+  command?: string | null;
+  project_path?: string | null;
+  confidence: number;
+  source: string;
+  signals: WorkspaceMappingSignal[];
+};
+
+export type WorkspaceSupportItem = {
+  id: string;
+  label: string;
+  support_type: string;
+  detects: string[];
+  log_hints?: string[];
+  children?: WorkspaceSupportItem[];
+};
+
+export type WorkspaceSupportLayer = {
+  layer: string;
+  title: string;
+  description: string;
+  items: WorkspaceSupportItem[];
+};
+
 export type WorkspaceMapping = {
   service_id: string;
   project_path: string;
@@ -802,7 +856,9 @@ export type WorkspaceMapping = {
 
 export type WorkspaceMapResponse = {
   enabled: boolean;
+  support_layers?: WorkspaceSupportLayer[];
   projects: WorkspaceProject[];
+  runtime_apps?: WorkspaceRuntimeApp[];
   service_mappings: WorkspaceMapping[];
   unmapped_services: string[];
   config_mappings: WorkspaceMapping[];

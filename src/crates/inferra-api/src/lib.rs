@@ -19,7 +19,7 @@ use inferra_config::{
 use inferra_contracts::{
     AiDoctorResponse, AiStatusResponse, ApiVersionResponse, CollectorRow, CollectorsResponse,
     ConfigResponse, IncidentDetailResponse, IncidentRow, OverviewResponse, ServiceDetailResponse,
-    WorkspaceMapResponse,
+    SeverityValue, WorkspaceMapResponse,
 };
 use inferra_core::{
     adaptive_learning_audit_log, adaptive_learning_history, adaptive_learning_review_summary,
@@ -34,7 +34,7 @@ use inferra_core::{
 };
 use inferra_storage::{
     initialize_databases, AdaptiveLearningAuditQuery, AdaptiveLearningHistoryQuery, EventsStore,
-    IncidentsStore, StoredAiTrace, StoredExplanation, StoredFeedback,
+    IncidentsStore, StoredAiTrace, StoredExplanation, StoredFeedback, StoredUiSnapshot,
 };
 use serde_json::{json, Value as JsonValue};
 use std::collections::{HashMap, HashSet};
@@ -43,11 +43,24 @@ use std::future::Future;
 use std::hash::{Hash, Hasher};
 use std::path::PathBuf;
 use std::sync::Arc;
+use std::time::{Duration, Instant};
 use time::OffsetDateTime;
 use tokio::sync::RwLock;
 use toml::Value as TomlValue;
 
 const INVESTIGATION_MAX_AI_ATTEMPTS: usize = 3;
+const SCANNER_WORKSPACE_MIN_INTERVAL_SECONDS: u64 = 15;
+const SCANNER_WORKSPACE_DEFAULT_INTERVAL_SECONDS: u64 = 120;
+const SCANNER_WORKSPACE_MAX_INTERVAL_SECONDS: u64 = 3600;
+const UI_SNAPSHOT_SOURCE_CORE: &str = "inferra_core";
+const SNAPSHOT_OVERVIEW: &str = "overview";
+const SNAPSHOT_GRAPH: &str = "graph";
+const SNAPSHOT_SYSTEMS: &str = "systems";
+const SNAPSHOT_WORKSPACE: &str = "workspace";
+const SNAPSHOT_AI_STATUS: &str = "ai.status";
+const SNAPSHOT_AI_INVESTIGATION: &str = "ai.investigation";
+const SNAPSHOT_CONTROL: &str = "control";
+const SNAPSHOT_SETTINGS: &str = "settings";
 const INVESTIGATION_SYSTEM_PROMPT: &str = "You are Inferra's read-only investigation assistant.\n\
 You receive a redacted runtime evidence bundle. You must:\n\
 - explain what is happening using only the supplied facts\n\
@@ -55,7 +68,10 @@ You receive a redacted runtime evidence bundle. You must:\n\
 - cite supporting incident_id, service_id, or event_id values when possible\n\
 - never claim you executed or modified anything\n\
 - never propose remediation that would mutate the observed system\n\
+- do not include CLI commands unless the bundle explicitly exposes an executable action surface for that exact command\n\
+- prefer UI inspection steps such as reviewing the incident, evidence, service events, collector status, or workspace app logs\n\
 - include explicit uncertainty when evidence is thin\n\
+- make the answer specific to context_summary, focus, selected workspace app/service/incident, and the supplied evidence\n\
 - respect host_resources and runtime_monitor samples as authoritative for machine state during this investigation window\n\
 - if hypotheses[] is non-empty, list likely_causes in the SAME best-first order as hypotheses (by rank ascending, then total_score descending). If you disagree, keep that order and explain the disagreement under uncertainty[]\n\
 - never invent IDs: every citation and evidence[].id must exist in the bundle\n\n\
@@ -79,7 +95,7 @@ Schema:\n\
       \"title\": \"string\",\n\
       \"reason\": \"string\",\n\
       \"safety\": \"read_only\",\n\
-      \"command\": \"string\",\n\
+      \"command\": \"string, optional and usually empty unless an exact executable surface exists\",\n\
       \"requires_user_action\": true\n\
     }}\n\
   ],\n\
@@ -185,7 +201,26 @@ pub struct AppState {
     pub paths: Arc<Paths>,
     pub config: Arc<RwLock<TomlValue>>,
     pub collectors: CollectorRuntime,
+    pub scanner_cache: Arc<RwLock<ScannerCache>>,
     pub ui_dist: PathBuf,
+}
+
+#[derive(Default)]
+pub struct ScannerCache {
+    workspace: Option<CachedWorkspaceMap>,
+}
+
+#[derive(Clone)]
+struct CachedWorkspaceMap {
+    value: WorkspaceMapResponse,
+    scanned_at: OffsetDateTime,
+    cached_at: Instant,
+    interval_seconds: u64,
+}
+
+#[derive(serde::Deserialize)]
+struct ScanQuery {
+    force: Option<bool>,
 }
 
 pub fn app_router(state: AppState) -> Router {
@@ -255,6 +290,8 @@ pub fn app_router(state: AppState) -> Router {
         .route("/api/collectors", get(api_collectors))
         .route("/api/collectors/start", post(api_collectors_start))
         .route("/api/collectors/stop", post(api_collectors_stop))
+        .route("/api/scanner/status", get(api_scanner_status))
+        .route("/api/scanner/run", post(api_scanner_run))
         .route("/api/ingest", post(api_ingest))
         .route("/api/workspace/projects", get(api_workspace_projects))
         .route("/api/workspace/map", get(api_workspace_map))
@@ -286,6 +323,7 @@ where
         paths: Arc::new(paths),
         config: Arc::new(RwLock::new(merged)),
         collectors: CollectorRuntime::default(),
+        scanner_cache: Arc::new(RwLock::new(ScannerCache::default())),
         ui_dist,
     };
     if collectors_auto_start {
@@ -298,6 +336,7 @@ where
             )
             .await?;
     }
+    tokio::spawn(scanner_service_loop(state.clone()));
     let app = app_router(state);
 
     let addr = format!("{host}:{port}");
@@ -307,6 +346,22 @@ where
         .with_graceful_shutdown(shutdown)
         .await?;
     Ok(())
+}
+
+async fn scanner_service_loop(state: AppState) {
+    loop {
+        let cfg = state.config.read().await.clone();
+        let interval_seconds = workspace_scan_interval_seconds(&cfg);
+        match refresh_workspace_scan_cache(&state, &cfg).await {
+            Ok(workspace) => tracing::debug!(
+                projects = workspace.projects.len(),
+                runtime_apps = workspace.runtime_apps.len(),
+                "workspace scanner snapshot refreshed"
+            ),
+            Err(error) => tracing::warn!(error = %error, "workspace scanner refresh failed"),
+        }
+        tokio::time::sleep(Duration::from_secs(interval_seconds)).await;
+    }
 }
 
 async fn api_version() -> Json<ApiVersionResponse> {
@@ -333,8 +388,16 @@ async fn api_health(State(state): State<AppState>) -> Json<JsonValue> {
 
 async fn api_get_config(State(state): State<AppState>) -> Json<ConfigResponse> {
     let cfg = state.config.read().await;
+    let config_json = config_to_json(&cfg);
+    let _ = persist_ui_snapshot(
+        state.paths.as_ref(),
+        SNAPSHOT_SETTINGS,
+        &config_json,
+        UI_SNAPSHOT_SOURCE_CORE,
+        None,
+    );
     Json(ConfigResponse {
-        config: config_to_json(&cfg),
+        config: config_json,
         applied: None,
     })
 }
@@ -357,8 +420,16 @@ async fn api_put_config(
     inferra_config::write_config(&state.paths.config_path, &new_cfg)
         .map_err(|e| (StatusCode::INTERNAL_SERVER_ERROR, e.to_string()))?;
     *state.config.write().await = new_cfg.clone();
+    let config_json = config_to_json(&new_cfg);
+    let _ = persist_ui_snapshot(
+        state.paths.as_ref(),
+        SNAPSHOT_SETTINGS,
+        &config_json,
+        UI_SNAPSHOT_SOURCE_CORE,
+        None,
+    );
     Ok(Json(ConfigResponse {
-        config: config_to_json(&new_cfg),
+        config: config_json,
         applied: Some(true),
     }))
 }
@@ -376,6 +447,13 @@ async fn api_overview(
     };
     let overview = build_overview_with_runtime_signals(&cfg, state.paths.as_ref(), Some(&signals))
         .map_err(|e| (StatusCode::INTERNAL_SERVER_ERROR, e.to_string()))?;
+    let _ = persist_ui_snapshot(
+        state.paths.as_ref(),
+        SNAPSHOT_OVERVIEW,
+        &serde_json::to_value(&overview).unwrap_or_else(|_| json!({})),
+        UI_SNAPSHOT_SOURCE_CORE,
+        None,
+    );
     Ok(Json(overview))
 }
 
@@ -1186,9 +1264,17 @@ async fn api_services(
     let cfg = state.config.read().await.clone();
     let overview = build_overview(&cfg, state.paths.as_ref())
         .map_err(|e| (StatusCode::INTERNAL_SERVER_ERROR, e.to_string()))?;
-    Ok(Json(json!({
+    let payload = json!({
         "services": overview.dashboard.services.unwrap_or_default(),
-    })))
+    });
+    let _ = persist_ui_snapshot(
+        state.paths.as_ref(),
+        SNAPSHOT_SYSTEMS,
+        &payload,
+        UI_SNAPSHOT_SOURCE_CORE,
+        None,
+    );
+    Ok(Json(payload))
 }
 
 async fn api_service_detail(
@@ -1272,6 +1358,13 @@ async fn api_ai_status(State(state): State<AppState>) -> Json<AiStatusResponse> 
     status.reason = probe.reason.clone();
     status.error = probe.error.clone();
     status.allow_remote = Some(probe.allow_remote);
+    let _ = persist_ui_snapshot(
+        state.paths.as_ref(),
+        SNAPSHOT_AI_STATUS,
+        &serde_json::to_value(&status).unwrap_or_else(|_| json!({})),
+        UI_SNAPSHOT_SOURCE_CORE,
+        None,
+    );
     Json(status)
 }
 
@@ -1544,6 +1637,17 @@ async fn investigation_response_for_bundle(
     if report {
         response["report"] = JsonValue::Bool(true);
     }
+    let _ = persist_ui_snapshot(
+        paths,
+        SNAPSHOT_AI_INVESTIGATION,
+        &json!({
+            "focus": focus,
+            "mode": mode,
+            "response": response.clone(),
+        }),
+        UI_SNAPSHOT_SOURCE_CORE,
+        None,
+    );
     Ok(Json(response))
 }
 
@@ -1811,7 +1915,7 @@ async fn api_collectors(State(state): State<AppState>) -> Json<CollectorsRespons
         .into_iter()
         .map(|row| (row.collector_id.clone(), row))
         .collect();
-    Json(CollectorsResponse {
+    let response = CollectorsResponse {
         collectors: configured_collectors(&cfg)
             .into_iter()
             .map(|c| CollectorRow {
@@ -1846,7 +1950,15 @@ async fn api_collectors(State(state): State<AppState>) -> Json<CollectorsRespons
             })
             .collect(),
         queue_depth: state.collectors.queue_depth(),
-    })
+    };
+    let _ = persist_ui_snapshot(
+        state.paths.as_ref(),
+        SNAPSHOT_CONTROL,
+        &serde_json::to_value(&response).unwrap_or_else(|_| json!({})),
+        UI_SNAPSHOT_SOURCE_CORE,
+        None,
+    );
+    Json(response)
 }
 
 async fn api_collectors_start(
@@ -1886,6 +1998,74 @@ async fn api_collectors_stop(
     Ok(Json(json!({ "stopped": true, "desired_state": "stopped" })))
 }
 
+async fn api_scanner_status(State(state): State<AppState>) -> Json<JsonValue> {
+    let cfg = state.config.read().await.clone();
+    let workspace_interval = workspace_scan_interval_seconds(&cfg);
+    let cache = state.scanner_cache.read().await;
+    let workspace = cache.workspace.as_ref();
+    let db_workspace = read_ui_snapshot(state.paths.as_ref(), SNAPSHOT_WORKSPACE)
+        .ok()
+        .flatten();
+    let db_snapshots = read_ui_snapshots(state.paths.as_ref()).unwrap_or_default();
+    let age_seconds = workspace
+        .map(|cached| cached.cached_at.elapsed().as_secs())
+        .or_else(|| {
+            db_workspace
+                .as_ref()
+                .and_then(|snapshot| ui_snapshot_age_seconds(&snapshot.updated_at))
+        })
+        .unwrap_or_default();
+    Json(json!({
+        "scanner": {
+            "workspace": {
+                "data_type": "workspace",
+                "mode": "database_snapshot",
+                "interval_seconds": workspace_interval,
+                "min_interval_seconds": SCANNER_WORKSPACE_MIN_INTERVAL_SECONDS,
+                "max_interval_seconds": SCANNER_WORKSPACE_MAX_INTERVAL_SECONDS,
+                "last_scanned_at": db_workspace
+                    .as_ref()
+                    .map(|snapshot| snapshot.updated_at.clone())
+                    .or_else(|| workspace.map(|cached| format_offset_datetime(cached.scanned_at))),
+                "age_seconds": age_seconds,
+                "next_scan_in_seconds": workspace
+                    .map(|cached| cached.interval_seconds.saturating_sub(age_seconds))
+                    .or_else(|| Some(workspace_interval.saturating_sub(age_seconds)))
+                    .unwrap_or(0),
+                "cached": workspace.is_some() || db_workspace.is_some(),
+                "route": "/api/workspace/map"
+            },
+            "events": { "data_type": "events", "mode": "database_table", "route": "/api/logs" },
+            "incidents": { "data_type": "incidents", "mode": "database_table", "route": "/api/incidents" },
+            "services": { "data_type": "services", "mode": "database_projection", "route": "/api/services" },
+            "evidence": { "data_type": "evidence", "mode": "database_table", "route": "/api/events" },
+            "graph": { "data_type": "graph", "mode": "database_snapshot", "route": "/api/topology" },
+            "ai": { "data_type": "ai", "mode": "database_snapshot", "route": "/api/ai/status" },
+            "learning_review": { "data_type": "learning_review", "mode": "database_table", "route": "/api/adaptive-learning/review" },
+            "control": { "data_type": "control", "mode": "database_snapshot", "route": "/api/collectors" },
+            "settings": { "data_type": "settings", "mode": "database_snapshot", "route": "/api/config" }
+        },
+        "snapshots": db_snapshots
+    }))
+}
+
+async fn api_scanner_run(
+    State(state): State<AppState>,
+) -> Result<Json<JsonValue>, (StatusCode, String)> {
+    let cfg = state.config.read().await.clone();
+    let workspace = refresh_workspace_scan_cache(&state, &cfg)
+        .await
+        .map_err(|e| (StatusCode::INTERNAL_SERVER_ERROR, e.to_string()))?;
+    Ok(Json(json!({
+        "ok": true,
+        "workspace": {
+            "projects": workspace.projects.len(),
+            "runtime_apps": workspace.runtime_apps.len(),
+            "service_mappings": workspace.service_mappings.len()
+        }
+    })))
+}
+
 async fn api_ingest(
     State(state): State<AppState>,
     headers: axum::http::HeaderMap,
@@ -1895,11 +2075,90 @@ async fn api_ingest(
     Ok(Json(accepted))
 }
 
+async fn cached_workspace_map(
+    state: &AppState,
+    config: &TomlValue,
+    force: bool,
+) -> Result<WorkspaceMapResponse> {
+    let interval_seconds = workspace_scan_interval_seconds(config);
+    if !force {
+        let cache = state.scanner_cache.read().await;
+        if let Some(cached) = cache.workspace.as_ref() {
+            if cached.cached_at.elapsed() < Duration::from_secs(interval_seconds) {
+                return Ok(cached.value.clone());
+            }
+        }
+        drop(cache);
+        if let Some(snapshot) = read_ui_snapshot(state.paths.as_ref(), SNAPSHOT_WORKSPACE)? {
+            let snapshot_age = ui_snapshot_age_seconds(&snapshot.updated_at).unwrap_or(u64::MAX);
+            if snapshot_age < interval_seconds {
+                let value: WorkspaceMapResponse = serde_json::from_value(snapshot.payload.clone())
+                    .context("deserialize workspace snapshot")?;
+                state.scanner_cache.write().await.workspace = Some(CachedWorkspaceMap {
+                    value: value.clone(),
+                    scanned_at: parse_offset_datetime(&snapshot.updated_at)
+                        .unwrap_or_else(OffsetDateTime::now_utc),
+                    cached_at: Instant::now()
+                        .checked_sub(Duration::from_secs(snapshot_age))
+                        .unwrap_or_else(Instant::now),
+                    interval_seconds,
+                });
+                return Ok(value);
+            }
+        }
+    }
+    refresh_workspace_scan_cache(state, config).await
+}
+
+async fn refresh_workspace_scan_cache(
+    state: &AppState,
+    config: &TomlValue,
+) -> Result<WorkspaceMapResponse> {
+    let interval_seconds = workspace_scan_interval_seconds(config);
+    let value = build_workspace_map(config, state.paths.as_ref())?;
+    let cached = CachedWorkspaceMap {
+        value: value.clone(),
+        scanned_at: OffsetDateTime::now_utc(),
+        cached_at: Instant::now(),
+        interval_seconds,
+    };
+    persist_ui_snapshot(
+        state.paths.as_ref(),
+        SNAPSHOT_WORKSPACE,
+        &serde_json::to_value(&value).unwrap_or_else(|_| json!({})),
+        UI_SNAPSHOT_SOURCE_CORE,
+        Some(interval_seconds),
+    )?;
+    state.scanner_cache.write().await.workspace = Some(cached);
+    Ok(value)
+}
+
+fn workspace_scan_interval_seconds(config: &TomlValue) -> u64 {
+    config
+        .get("scanner")
+        .and_then(|value| value.get("workspace_interval_seconds"))
+        .and_then(TomlValue::as_integer)
+        .or_else(|| {
+            config
+                .get("workspace")
+                .and_then(|value| value.get("scan_interval_seconds"))
+                .and_then(TomlValue::as_integer)
+        })
+        .and_then(|value| u64::try_from(value).ok())
+        .unwrap_or(SCANNER_WORKSPACE_DEFAULT_INTERVAL_SECONDS)
+        .clamp(
+            SCANNER_WORKSPACE_MIN_INTERVAL_SECONDS,
+            SCANNER_WORKSPACE_MAX_INTERVAL_SECONDS,
+        )
+}
+
 async fn api_workspace_map(
     State(state): State<AppState>,
+    Query(query): Query<ScanQuery>,
 ) -> Result<Json<WorkspaceMapResponse>, (StatusCode, String)> {
     let cfg = state.config.read().await.clone();
-    build_workspace_map(&cfg, state.paths.as_ref())
+    cached_workspace_map(&state, &cfg, query.force.unwrap_or(false))
+        .await
         .map(Json)
         .map_err(|e| (StatusCode::INTERNAL_SERVER_ERROR, e.to_string()))
 }
@@ -1932,7 +2191,8 @@ async fn api_workspace_services(
     State(state): State<AppState>,
 ) -> Result<Json<JsonValue>, (StatusCode, String)> {
     let cfg = state.config.read().await.clone();
-    let workspace = build_workspace_map(&cfg, state.paths.as_ref())
+    let workspace = cached_workspace_map(&state, &cfg, false)
+        .await
         .map_err(|e| (StatusCode::INTERNAL_SERVER_ERROR, e.to_string()))?;
     Ok(Json(json!({
         "service_mappings": workspace.service_mappings,
@@ -2030,7 +2290,15 @@ async fn api_workspace_add_mapping(
 
 async fn api_topology(State(state): State<AppState>) -> Json<JsonValue> {
     let cfg = state.config.read().await.clone();
-    Json(json!({ "edges": topology_edges(&cfg) }))
+    let payload = json!({ "edges": topology_edges(&cfg) });
+    let _ = persist_ui_snapshot(
+        state.paths.as_ref(),
+        SNAPSHOT_GRAPH,
+        &payload,
+        UI_SNAPSHOT_SOURCE_CORE,
+        None,
+    );
+    Json(payload)
 }
 
 async fn api_topology_add_edge(
@@ -2476,6 +2744,81 @@ fn now_iso() -> String {
         .unwrap_or_else(|_| "1970-01-01T00:00:00Z".into())
 }
 
+fn format_offset_datetime(value: OffsetDateTime) -> String {
+    value
+        .format(&time::format_description::well_known::Rfc3339)
+        .unwrap_or_else(|_| "1970-01-01T00:00:00Z".into())
+}
+
+fn parse_offset_datetime(value: &str) -> Option<OffsetDateTime> {
+    OffsetDateTime::parse(value, &time::format_description::well_known::Rfc3339).ok()
+}
+
+fn persist_ui_snapshot(
+    paths: &Paths,
+    data_type: &str,
+    payload: &JsonValue,
+    source: &str,
+    interval_seconds: Option<u64>,
+) -> Result<()> {
+    initialize_databases(&paths.events_db, &paths.incidents_db)?;
+    if let Some(store) = IncidentsStore::open(&paths.incidents_db)? {
+        store.upsert_ui_snapshot(
+            data_type,
+            payload,
+            source,
+            interval_seconds.and_then(|value| i64::try_from(value).ok()),
+        )?;
+    }
+    Ok(())
+}
+
+fn read_ui_snapshot(paths: &Paths, data_type: &str) -> Result<Option<StoredUiSnapshot>> {
+    initialize_databases(&paths.events_db, &paths.incidents_db)?;
+    let Some(store) = IncidentsStore::open(&paths.incidents_db)? else {
+        return Ok(None);
+    };
+    store.ui_snapshot(data_type)
+}
+
+fn read_ui_snapshots(paths: &Paths) -> Result<Vec<JsonValue>> {
+    initialize_databases(&paths.events_db, &paths.incidents_db)?;
+    let Some(store) = IncidentsStore::open(&paths.incidents_db)? else {
+        return Ok(Vec::new());
+    };
+    Ok(store
+        .ui_snapshots()?
+        .into_iter()
+        .map(|snapshot| {
+            json!({
+                "data_type": snapshot.data_type,
+                "source": snapshot.source,
+                "updated_at": snapshot.updated_at,
+                "schema_version": snapshot.schema_version,
+                "interval_seconds": snapshot.interval_seconds,
+                "age_seconds": ui_snapshot_age_seconds(&snapshot.updated_at),
+            })
+        })
+        .collect())
+}
+
+fn ui_snapshot_age_seconds(updated_at: &str) -> Option<u64> {
+    let timestamp = parse_offset_datetime(updated_at)?;
+    let delta = OffsetDateTime::now_utc() - timestamp;
+    Some(delta.whole_seconds().max(0) as u64)
+}
+
+fn severity_option_is_error(value: Option<&SeverityValue>) -> bool {
+    match value {
+        Some(SeverityValue::Level(level)) => *level >= 3,
+        Some(SeverityValue::Label(label)) => matches!(
+            label.to_ascii_lowercase().as_str(),
+            "error" | "critical" | "fatal" | "panic"
+        ),
+        None => false,
+    }
+}
+
 fn current_mode(config: &TomlValue, override_mode: Option<&str>) -> String {
     if let Some(mode) = override_mode {
         if matches!(mode, "operator" | "expert" | "developer") {
@@ -2532,6 +2875,16 @@ fn build_investigation_bundle(
             }
             Ok(json!({
                 "mode": mode,
+                "focus": "overview",
+                "context_summary": {
+                    "scope_kind": "overview",
+                    "active_incident_count": overview.dashboard.incidents.as_ref().map(Vec::len).unwrap_or_default(),
+                    "service_count": overview.dashboard.services.as_ref().map(Vec::len).unwrap_or_default(),
+                    "event_preview_count": events_preview.as_array().map(Vec::len).unwrap_or_default(),
+                    "workspace_project_count": workspace.projects.len(),
+                    "workspace_runtime_app_count": workspace.runtime_apps.len(),
+                    "operator_question": question,
+                },
                 "incident": overview.dashboard.incidents.as_ref().and_then(|items| items.first().cloned()),
                 "hypotheses": hypotheses_json,
                 "events": events_preview,
@@ -2554,6 +2907,18 @@ fn build_investigation_bundle(
             let hypotheses = incidents.hypotheses(&incident_id)?;
             Ok(json!({
                 "mode": mode,
+                "focus": format!("incident:{incident_id}"),
+                "context_summary": {
+                    "scope_kind": "incident",
+                    "incident_id": incident_id,
+                    "primary_service": incident.primary_service.clone(),
+                    "affected_services": incident.affected_services.clone(),
+                    "severity": incident.severity,
+                    "state": incident.state.clone(),
+                    "event_count": event_rows.len(),
+                    "hypothesis_count": hypotheses.len(),
+                    "operator_question": question,
+                },
                 "incident": incident,
                 "hypotheses": hypotheses,
                 "events": event_rows,
@@ -2578,6 +2943,15 @@ fn build_investigation_bundle(
                 .context("service not found")?;
             Ok(json!({
                 "mode": mode,
+                "focus": format!("service:{service_id}"),
+                "context_summary": {
+                    "scope_kind": "service",
+                    "service_id": service_id,
+                    "status": service.status.clone(),
+                    "event_count": events.len(),
+                    "recent_error_count": events.iter().filter(|event| severity_option_is_error(event.severity.as_ref())).count(),
+                    "operator_question": question,
+                },
                 "incident": JsonValue::Null,
                 "hypotheses": [],
                 "events": events,
@@ -2586,6 +2960,62 @@ fn build_investigation_bundle(
                 "workspace": workspace,
                 "user_question": question,
                 "constraints": {},
+            }))
+        }
+        InvestigationScope::WorkspaceApp(app_name) => {
+            let app = workspace
+                .runtime_apps
+                .iter()
+                .find(|item| item.name == app_name)
+                .cloned()
+                .with_context(|| format!("workspace app not found: {app_name}"))?;
+            let events = if let Some(store) = EventsStore::open(&paths.events_db)? {
+                let by_service = store.query_logs(50, Some(&app.name), None, None, None)?;
+                if by_service.is_empty() {
+                    store.query_logs(50, None, None, Some(&app.name), None)?
+                } else {
+                    by_service
+                }
+            } else {
+                vec![]
+            };
+            let services = overview.dashboard.services.unwrap_or_default();
+            Ok(json!({
+                "mode": mode,
+                "focus": format!("workspace_app:{app_name}"),
+                "context_summary": {
+                    "scope_kind": "workspace_app",
+                    "app_name": app.name.clone(),
+                    "display_name": app.name.clone(),
+                    "runtime": app.runtime.clone(),
+                    "framework": app.framework.clone(),
+                    "manager": app.manager.clone(),
+                    "pid": app.pid,
+                    "project_path": app.project_path.clone(),
+                    "log_hint_count": app.log_hints.len(),
+                    "detected_signal_count": app.signals.len(),
+                    "matching_event_count": events.len(),
+                    "operator_question": question,
+                },
+                "incident": JsonValue::Null,
+                "hypotheses": [],
+                "events": events,
+                "services": services
+                    .into_iter()
+                    .filter(|service| service.service_id == app.name)
+                    .collect::<Vec<_>>(),
+                "runtime": overview.runtime,
+                "workspace": {
+                    "projects": workspace.projects,
+                    "runtime_apps": workspace.runtime_apps,
+                    "service_mappings": workspace.service_mappings,
+                    "selected_app": app,
+                },
+                "user_question": question,
+                "constraints": {
+                    "scope_kind": "workspace_app",
+                    "note": "This is a workspace runtime app. It may not exist as a service in the event database yet."
+                },
             }))
         }
     }
@@ -2867,6 +3297,7 @@ enum InvestigationScope {
     Overview,
     Incident(String),
     Service(String),
+    WorkspaceApp(String),
 }
 
 fn resolve_focus_from_scope(paths: &Paths, scope: &str) -> Result<String> {
@@ -2874,7 +3305,10 @@ fn resolve_focus_from_scope(paths: &Paths, scope: &str) -> Result<String> {
     if trimmed.eq_ignore_ascii_case("latest") {
         return Ok(latest_incident_focus(paths)?.unwrap_or_else(|| "latest:none".to_string()));
     }
-    if trimmed.starts_with("incident:") || trimmed.starts_with("service:") {
+    if trimmed.starts_with("incident:")
+        || trimmed.starts_with("service:")
+        || trimmed.starts_with("workspace_app:")
+    {
         return Ok(trimmed.to_string());
     }
     Ok("overview".to_string())
@@ -2898,6 +3332,9 @@ fn focus_to_scope(focus: &str) -> InvestigationScope {
     }
     if let Some(id) = focus.strip_prefix("service:") {
         return InvestigationScope::Service(id.to_string());
+    }
+    if let Some(id) = focus.strip_prefix("workspace_app:") {
+        return InvestigationScope::WorkspaceApp(id.to_string());
     }
     InvestigationScope::Overview
 }
@@ -3210,7 +3647,7 @@ fn json_next_steps(value: Option<&JsonValue>) -> Vec<JsonValue> {
                         "title": item.get("title").and_then(JsonValue::as_str).unwrap_or_default(),
                         "reason": item.get("reason").and_then(JsonValue::as_str).unwrap_or_default(),
                         "safety": "read_only",
-                        "command": item.get("command").and_then(JsonValue::as_str).unwrap_or_default(),
+                        "command": "",
                         "requires_user_action": true,
                     })
                 })
@@ -3299,6 +3736,14 @@ fn deterministic_investigation_response(
         .get("workspace")
         .cloned()
         .unwrap_or_else(|| json!({}));
+    let context_summary = bundle
+        .get("context_summary")
+        .cloned()
+        .unwrap_or_else(|| json!({}));
+    let scope_kind = context_summary
+        .get("scope_kind")
+        .and_then(JsonValue::as_str)
+        .unwrap_or("overview");
 
     let mut headline_parts = Vec::new();
     let mut risk_level = "low".to_string();
@@ -3325,6 +3770,27 @@ fn deterministic_investigation_response(
                 .get("primary_service")
                 .and_then(JsonValue::as_str)
                 .unwrap_or("unknown")
+        ));
+    } else if scope_kind == "workspace_app" {
+        let app_name = context_summary
+            .get("app_name")
+            .and_then(JsonValue::as_str)
+            .unwrap_or("workspace app");
+        let runtime = context_summary
+            .get("runtime")
+            .and_then(JsonValue::as_str)
+            .unwrap_or("runtime");
+        let matching_event_count = context_summary
+            .get("matching_event_count")
+            .and_then(JsonValue::as_u64)
+            .unwrap_or(events.len() as u64);
+        let severe_events = events
+            .iter()
+            .filter(|event| event.get("severity").and_then(JsonValue::as_i64).unwrap_or_default() >= 3)
+            .count();
+        risk_level = if severe_events > 0 { "medium" } else { "low" }.to_string();
+        headline_parts.push(format!(
+            "Workspace app {app_name} observed as {runtime} with {matching_event_count} matching event(s)"
         ));
     } else if !services.is_empty() {
         let affected: Vec<&JsonValue> = services
@@ -3365,7 +3831,20 @@ fn deterministic_investigation_response(
             "title": format!("Inspect incident {incident_id}"),
             "reason": "Review hypotheses and supporting evidence locally before any change.",
             "safety": "read_only",
-            "command": format!("inferra incidents show {incident_id}"),
+            "command": "",
+            "requires_user_action": true,
+        }));
+    }
+    if scope_kind == "workspace_app" {
+        let app_name = context_summary
+            .get("app_name")
+            .and_then(JsonValue::as_str)
+            .unwrap_or("this app");
+        next_steps.push(json!({
+            "title": format!("Review logs and detected signals for {app_name}"),
+            "reason": "This scope is a workspace runtime app, so app logs, runtime metadata, and detected project signals are the most relevant evidence.",
+            "safety": "read_only",
+            "command": "",
             "requires_user_action": true,
         }));
     }
@@ -3385,16 +3864,16 @@ fn deterministic_investigation_response(
             "title": format!("Look at recent events for {service_id}"),
             "reason": "Recent events often clarify whether the service is failing or noisy.",
             "safety": "read_only",
-            "command": format!("inferra services events {service_id} --limit 25"),
+            "command": "",
             "requires_user_action": true,
         }));
     }
     if next_steps.is_empty() {
         next_steps.push(json!({
-            "title": "List recent events",
-            "reason": "No active incident; sample events to understand current activity.",
+            "title": "Review the latest normalized events",
+            "reason": "No active incident is selected, so recent normalized events are the best read-only starting point.",
             "safety": "read_only",
-            "command": "inferra events list --limit 25",
+            "command": "",
             "requires_user_action": true,
         }));
     }
@@ -3701,16 +4180,38 @@ fn discover_projects_with_limits(
     max_results: usize,
 ) -> Vec<JsonValue> {
     let markers: &[(&str, &str)] = &[
+        ("pnpm-workspace.yaml", "pnpm_workspace"),
         ("package.json", "node"),
+        ("yarn.lock", "yarn"),
+        ("package-lock.json", "npm"),
+        ("pyproject.toml", "python"),
+        ("requirements.txt", "python"),
+        ("setup.py", "python"),
+        ("Pipfile", "python"),
+        ("poetry.lock", "python"),
         ("Cargo.toml", "rust"),
         ("go.mod", "go"),
-        ("pyproject.toml", "python"),
+        ("composer.json", "php"),
+        ("Gemfile", "ruby"),
+        ("pom.xml", "maven"),
+        ("build.gradle", "gradle"),
+        ("build.gradle.kts", "gradle"),
+        ("*.csproj", "dotnet"),
+        ("*.sln", "dotnet"),
+        ("Makefile", "make"),
+        ("compose.yaml", "compose"),
+        ("compose.yml", "compose"),
+        ("docker-compose.yaml", "compose"),
+        ("docker-compose.yml", "compose"),
+        ("Dockerfile", "docker"),
         (".git", "git"),
     ];
     let mut out = Vec::new();
     for entry in walkdir::WalkDir::new(root)
         .max_depth(max_depth)
+        .follow_links(false)
         .into_iter()
+        .filter_entry(|entry| should_scan_workspace_entry(entry.path()))
         .filter_map(|entry| entry.ok())
     {
         if out.len() >= max_results {
@@ -3721,8 +4222,8 @@ fn discover_projects_with_limits(
             continue;
         }
         for (marker, kind) in markers {
-            if path.join(marker).exists() {
-                let rendered = path.to_string_lossy().to_string();
+            if workspace_marker_exists(path, marker) {
+                let rendered = clean_display_path(&path.to_string_lossy());
                 if out.iter().any(|item: &JsonValue| {
                     item.get("path")
                         .and_then(|value| value.as_str())
@@ -3743,16 +4244,91 @@ fn discover_projects_with_limits(
     out
 }
 
+fn should_scan_workspace_entry(path: &std::path::Path) -> bool {
+    let Some(name) = path.file_name().and_then(|value| value.to_str()) else {
+        return true;
+    };
+    !matches!(
+        name,
+        ".git"
+            | ".hg"
+            | ".svn"
+            | ".venv"
+            | "venv"
+            | "__pycache__"
+            | "node_modules"
+            | "dist"
+            | "build"
+            | "target"
+            | ".cargo"
+            | ".npm"
+            | ".yarn"
+            | ".next"
+            | ".nuxt"
+            | "coverage"
+            | "Library"
+            | "AppData"
+    )
+}
+
+fn workspace_marker_exists(path: &std::path::Path, marker: &str) -> bool {
+    if let Some(suffix) = marker.strip_prefix("*.") {
+        return std::fs::read_dir(path)
+            .ok()
+            .into_iter()
+            .flat_map(|entries| entries.flatten())
+            .any(|entry| {
+                entry
+                    .path()
+                    .extension()
+                    .and_then(|value| value.to_str())
+                    .map(|ext| ext.eq_ignore_ascii_case(suffix))
+                    .unwrap_or(false)
+            });
+    }
+    path.join(marker).exists()
+}
+
+fn clean_display_path(path: &str) -> String {
+    if let Some(rest) = path.strip_prefix(r"\\?\UNC\") {
+        format!(r"\\{rest}")
+    } else if let Some(rest) = path.strip_prefix(r"\\?\") {
+        rest.to_string()
+    } else {
+        path.to_string()
+    }
+}
+
 fn inspect_workspace_project(path: &std::path::Path) -> JsonValue {
     let exists = path.exists();
     let is_dir = path.is_dir();
     let mut entries = Vec::new();
     let mut markers = Vec::new();
     for marker in [
-        "Cargo.toml",
+        "pnpm-workspace.yaml",
         "package.json",
+        "yarn.lock",
+        "package-lock.json",
         "pyproject.toml",
+        "requirements.txt",
+        "setup.py",
+        "Pipfile",
+        "poetry.lock",
+        "Cargo.toml",
         "go.mod",
+        "composer.json",
+        "Gemfile",
+        "pom.xml",
+        "build.gradle",
+        "build.gradle.kts",
+        "Makefile",
+        "compose.yaml",
+        "compose.yml",
+        "docker-compose.yaml",
+        "docker-compose.yml",
+        "Dockerfile",
+        ".env",
+        ".env.example",
         ".git",
     ] {
         if path.join(marker).exists() {
@@ -3771,10 +4347,13 @@ fn inspect_workspace_project(path: &std::path::Path) -> JsonValue {
         }
     }
     json!({
-        "path": path.to_string_lossy().to_string(),
+        "path": clean_display_path(&path.to_string_lossy()),
         "exists": exists,
         "is_dir": is_dir,
         "markers": markers,
+        "has_compose": markers.iter().any(|name| matches!(name.as_str(), "compose.yaml" | "compose.yml" | "docker-compose.yaml" | "docker-compose.yml")),
+        "has_dockerfile": markers.iter().any(|name| name == "Dockerfile"),
+        "has_env_file": markers.iter().any(|name| matches!(name.as_str(), ".env" | ".env.example")),
         "entries": entries,
     })
 }
@@ -3915,6 +4494,7 @@ enabled = false
             }),
             config: Arc::new(RwLock::new(config)),
             collectors: CollectorRuntime::default(),
+            scanner_cache: Arc::new(RwLock::new(ScannerCache::default())),
             ui_dist,
         }
     }
@@ -4323,6 +4903,13 @@ enabled = false
             .is_some());
         assert!(collectors.get("queue_depth").is_some());
 
+        let scanner = get_json(app.clone(), "/api/scanner/status").await;
+        assert!(scanner.get("scanner").and_then(|v| v.as_object()).is_some());
+        assert!(scanner
+            .get("scanner")
+            .and_then(|v| v.get("workspace"))
+            .is_some());
+
         let workspace_map = get_json(app.clone(), "/api/workspace/map").await;
         assert!(workspace_map.get("enabled").is_some());
         assert!(workspace_map
@@ -4652,6 +5239,58 @@ enabled = false
             Some(&JsonValue::String("what changed most recently?".into()))
         );
         assert_eq!(payload.get("used_ai"), Some(&JsonValue::Bool(false)));
+    }
+
+    #[tokio::test]
+    async fn ai_ask_workspace_app_scope_does_not_require_service_row() {
+        let state = test_state("ai-ask-workspace-app-scope", false);
+        let app_root = state.paths.config_path.parent().unwrap().join("inferra");
+        std::fs::create_dir_all(&app_root).expect("create app root");
+        std::fs::write(
+            app_root.join("package.json"),
+            r#"{"name":"inferra","dependencies":{"next":"latest"}}"#,
+        )
+        .expect("write package");
+        std::fs::write(
+            &state.paths.config_path,
+            format!(
+                r#"
+[storage]
+data_dir = "data"
+
+[ai]
+enabled = false
+
+[workspace]
+roots = ["{}"]
+"#,
+                app_root.to_string_lossy().replace('\\', "\\\\")
+            ),
+        )
+        .expect("write config");
+        let parsed = load_merged_config(&state.paths.config_path).expect("reload config");
+        *state.config.write().await = parsed;
+
+        let app = app_router(state);
+        let response = app
+            .oneshot(
+                Request::builder()
+                    .method("POST")
+                    .uri("/api/ai/ask")
+                    .header(header::CONTENT_TYPE, "application/json")
+                    .body(Body::from(
+                        serde_json::to_vec(&json!({
+                            "scope": "workspace_app:inferra",
+                            "question": "Monitor this workspace app.",
+                            "monitor_seconds": 0,
+                        }))
+                        .expect("serialize request"),
+                    ))
+                    .expect("build request"),
+            )
+            .await
+            .expect("ai ask response");
+        assert_eq!(response.status(), StatusCode::OK);
     }
 
     #[tokio::test]

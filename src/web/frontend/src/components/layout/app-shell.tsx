@@ -4,6 +4,7 @@ import { NavLink } from "react-router-dom";
 
 import type { Mode } from "@/lib/experience";
 import type { Theme } from "@/lib/theme";
+import { formatDisplayValue, formatModeLabel } from "@/lib/format";
 import { cn } from "@/lib/utils";
 import { Badge } from "@/components/ui/badge";
 import { Button } from "@/components/ui/button";
@@ -36,7 +37,7 @@ export function AppShell({
   const [open, setOpen] = useState(false);
 
   return (
-    <div className="min-h-screen lg:grid lg:h-screen lg:grid-cols-[300px_minmax(0,1fr)] lg:overflow-hidden">
+    <div className="min-h-screen lg:grid lg:h-screen lg:grid-cols-[288px_minmax(0,1fr)] lg:overflow-hidden">
       <div className="flex items-center justify-between border-b border-border/70 bg-background/70 px-4 py-3 backdrop-blur lg:hidden">
         <div>
           <p className="text-sm font-semibold uppercase tracking-[0.28em] text-primary/80">Inferra</p>
@@ -60,11 +61,11 @@ export function AppShell({
 
       <aside
         className={cn(
-          "fixed inset-y-0 left-0 z-40 w-[300px] transform border-r border-border/80 bg-background/90 p-5 shadow-2xl backdrop-blur-xl transition-transform duration-200 lg:static lg:h-screen lg:translate-x-0 lg:overflow-hidden",
+          "fixed inset-y-0 left-0 z-40 w-[288px] transform border-r border-border/80 bg-background/95 p-4 shadow-2xl backdrop-blur-xl transition-transform duration-200 lg:static lg:h-screen lg:translate-x-0 lg:overflow-hidden",
           open ? "translate-x-0" : "-translate-x-full lg:translate-x-0",
         )}
       >
-        <div className="glass-panel flex h-full max-h-full flex-col overflow-hidden rounded-[28px] border border-border/70 p-5">
+        <div className="glass-panel flex h-full max-h-full flex-col overflow-hidden rounded-2xl border border-border/70 p-4">
           <div className="space-y-2">
             <p className="text-sm font-semibold uppercase tracking-[0.32em] text-primary/90">Inferra</p>
             <div>
@@ -73,12 +74,12 @@ export function AppShell({
             </div>
           </div>
 
-          <div className="mt-6 space-y-4">
+          <div className="mt-6 space-y-4 rounded-2xl border border-border/60 bg-background/35 p-3">
             <div className="flex items-center justify-between">
               <p className="text-xs font-semibold uppercase tracking-[0.25em] text-muted-foreground">Experience</p>
-              <Badge variant="outline">{mode}</Badge>
+              <Badge variant="outline">{formatModeLabel(mode)}</Badge>
             </div>
-            <div className="grid grid-cols-3 gap-2">
+            <div className="grid grid-cols-3 gap-1.5">
               {MODES.map((value) => (
                 <Button
                   key={value}
@@ -88,15 +89,15 @@ export function AppShell({
                   aria-pressed={value === mode}
                   onClick={() => onModeChange(value)}
                 >
-                  {value}
+                  {formatModeLabel(value)}
                 </Button>
               ))}
             </div>
             <div className="flex items-center justify-between">
               <p className="text-xs font-semibold uppercase tracking-[0.25em] text-muted-foreground">Appearance</p>
-              <Badge variant="outline">{theme}</Badge>
+              <Badge variant="outline">{formatDisplayValue(theme)}</Badge>
             </div>
-            <div className="grid grid-cols-2 gap-2">
+            <div className="grid grid-cols-2 gap-1.5">
               <Button
                 variant={theme === "light" ? "default" : "outline"}
                 size="sm"
@@ -132,9 +133,9 @@ export function AppShell({
                   to={item.to}
                   className={({ isActive }) =>
                     cn(
-                      "flex items-center gap-3 rounded-2xl px-4 py-3 text-sm font-medium transition hover:bg-secondary/80 hover:text-foreground",
+                      "flex items-center gap-3 rounded-xl px-3.5 py-2.5 text-sm font-medium transition hover:bg-secondary/80 hover:text-foreground",
                       isActive
-                        ? "bg-gradient-to-r from-sky-400/15 via-sky-400/8 to-transparent text-foreground shadow-[inset_0_0_0_1px_rgba(125,211,252,0.22)]"
+                        ? "bg-primary/10 text-foreground shadow-[inset_0_0_0_1px_var(--ring)]"
                         : "text-muted-foreground",
                     )
                   }
@@ -157,7 +158,7 @@ export function AppShell({
       {open ? <button type="button" aria-label="Close navigation overlay" className="fixed inset-0 z-30 bg-black/40 lg:hidden" onClick={() => setOpen(false)} /> : null}
 
       <main className="min-w-0 px-4 py-5 md:px-6 lg:h-screen lg:overflow-hidden lg:px-8 lg:py-8">
-        <div className="glass-panel mx-auto h-full max-w-[1600px] overflow-hidden rounded-[32px] border border-border/70 p-4 shadow-[0_24px_90px_-48px_rgba(15,23,42,0.55)] md:p-5">
+        <div className="mx-auto h-full max-w-[1680px] overflow-hidden rounded-2xl border border-border/70 bg-background/70 p-4 shadow-[0_24px_90px_-56px_rgba(15,23,42,0.55)] backdrop-blur md:p-5">
           <div className="h-full overflow-y-auto pr-1">
             <div className="mx-auto max-w-[1520px] pb-4">{children}</div>
           </div>
@@ -166,4 +167,3 @@ export function AppShell({
     </div>
   );
 }
-

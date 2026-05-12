@@ -153,6 +153,59 @@ pub struct WorkspaceProject {
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct WorkspaceRuntimeApp {
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub pid: Option<u32>,
+    pub name: String,
+    pub runtime: String,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub language: Option<String>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub process_kind: Option<String>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub framework: Option<String>,
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    pub libraries: Vec<String>,
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    pub log_hints: Vec<String>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub manager: Option<String>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub status: Option<String>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub cwd: Option<String>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub script: Option<String>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub command: Option<String>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub project_path: Option<String>,
+    pub confidence: f64,
+    pub source: String,
+    pub signals: Vec<WorkspaceMappingSignal>,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct WorkspaceSupportItem {
+    pub id: String,
+    pub label: String,
+    pub support_type: String,
+    pub detects: Vec<String>,
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    pub log_hints: Vec<String>,
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    pub children: Vec<WorkspaceSupportItem>,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct WorkspaceSupportLayer {
+    pub layer: String,
+    pub title: String,
+    pub description: String,
+    pub items: Vec<WorkspaceSupportItem>,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct OverviewResponse {
     pub quick_analysis: QuickAnalysis,
     pub dashboard: DashboardPayload,
@@ -244,7 +297,11 @@ pub struct WorkspaceMapping {
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct WorkspaceMapResponse {
     pub enabled: bool,
+    #[serde(default)]
+    pub support_layers: Vec<WorkspaceSupportLayer>,
     pub projects: Vec<WorkspaceProject>,
+    #[serde(default)]
+    pub runtime_apps: Vec<WorkspaceRuntimeApp>,
     pub service_mappings: Vec<WorkspaceMapping>,
     pub unmapped_services: Vec<String>,
     pub config_mappings: Vec<WorkspaceMapping>,

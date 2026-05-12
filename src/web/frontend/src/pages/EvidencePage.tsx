@@ -1,4 +1,4 @@
-import { Filter, RefreshCcw } from "lucide-react";
+import { AlertTriangle, Filter, RadioTower, RefreshCcw, Search } from "lucide-react";
 import { useMemo, useState } from "react";
 
 import type { AnomalyStatus, EventDetailResponse, EventRow } from "@/api";
@@ -11,8 +11,10 @@ import { Td, Th, Table, TableWrap } from "@/components/ui/table";
 import { PageHeader } from "@/components/layout/page-header";
 import { EmptyState, ErrorState, LoadingState } from "@/components/feedback/states";
 import type { Mode } from "@/lib/experience";
-import { formatRiskTone, formatRelativeDate, formatSeverity, summarizeEvent } from "@/lib/format";
+import { formatDisplayValue, formatRiskTone, formatRelativeDate, formatSeverity, formatSeverityLabel, summarizeEvent } from "@/lib/format";
 import { useApiQuery } from "@/lib/query";
+import { SeverityDistribution } from "@/components/inferra/charts";
+import { RuntimeStatusCard } from "@/components/inferra/health";
 
 export function EvidencePage({ mode }: { mode: Mode }) {
   const [service, setService] = useState("");
@@ -30,12 +32,19 @@ export function EvidencePage({ mode }: { mode: Mode }) {
   }, [search, service, severity]);
 
   const logs = useApiQuery<{ logs: EventRow[] }>(path, { deps: [path] });
-  const selectedEvent = useApiQuery<EventDetailResponse>(selectedEventId ? `/api/events/${selectedEventId}` : null, { deps: [selectedEventId] });
+  const selectedEvent = useApiQuery<EventDetailResponse>(selectedEventId ? `/api/events/${encodeURIComponent(selectedEventId)}` : null, { deps: [selectedEventId] });
   const anomalyService = service.trim() || selectedEvent.data?.event.service_id || "";
   const anomaly = useApiQuery<AnomalyStatus>(
     anomalyService ? `/api/anomaly/${encodeURIComponent(anomalyService)}/status` : null,
     { deps: [anomalyService] },
   );
+  const rows = logs.data?.logs ?? [];
+  const severityCounts = rows.reduce<Record<string, number>>((acc, event) => {
+    const key = formatSeverity(event.severity);
+    acc[key] = (acc[key] ?? 0) + 1;
+    return acc;
+  }, {});
+  const servicesSeen = new Set(rows.map((event) => event.service_id).filter(Boolean)).size;
 
   return (
     <div className="space-y-6">
@@ -50,6 +59,13 @@ export function EvidencePage({ mode }: { mode: Mode }) {
           </Button>
         }
       />
+
+      <div className="dashboard-grid">
+        <RuntimeStatusCard icon={RadioTower} label="Stream window" value={String(rows.length)} tone="info" detail="Normalized events currently loaded." />
+        <RuntimeStatusCard icon={AlertTriangle} label="Errors" value={String((severityCounts.error ?? 0) + (severityCounts.critical ?? 0))} tone={(severityCounts.error ?? 0) + (severityCounts.critical ?? 0) ? "warning" : "success"} detail="Events at error severity or above." />
+        <RuntimeStatusCard icon={Search} label="Services seen" value={String(servicesSeen)} tone="info" detail="Unique services represented by the current filters." />
+        <RuntimeStatusCard icon={Filter} label="Filter mode" value={service || severity || search ? "Scoped" : "All"} tone={service || severity || search ? "warning" : "secondary"} detail="Filters apply server-side where supported." />
+      </div>
 
       <Card>
         <CardHeader>
@@ -113,10 +129,10 @@ export function EvidencePage({ mode }: { mode: Mode }) {
                     >
                       <Td className="text-muted-foreground">{formatRelativeDate(event.timestamp)}</Td>
                       <Td>
-                        <Badge variant={formatRiskTone(formatSeverity(event.severity))}>{formatSeverity(event.severity)}</Badge>
+                        <Badge variant={formatRiskTone(formatSeverity(event.severity))}>{formatSeverityLabel(event.severity)}</Badge>
                       </Td>
                       <Td>{event.service_id ?? "unknown"}</Td>
-                      <Td className="text-muted-foreground">{event.source_ref?.source_type ?? "unknown"}</Td>
+                      <Td className="text-muted-foreground">{formatDisplayValue(event.source_ref?.source_type ?? "unknown")}</Td>
                       <Td className="max-w-[520px]">{summarizeEvent(event)}</Td>
                     </tr>
                   ))}
@@ -127,6 +143,15 @@ export function EvidencePage({ mode }: { mode: Mode }) {
             <div className="space-y-4">
               <Card>
                 <CardHeader>
+                  <CardTitle>Current severity mix</CardTitle>
+                </CardHeader>
+                <CardContent>
+                  <SeverityDistribution counts={severityCounts} />
+                </CardContent>
+              </Card>
+
+              <Card>
+                <CardHeader>
                   <CardTitle>Selected event</CardTitle>
                 </CardHeader>
                 <CardContent className="space-y-3 text-sm">
@@ -134,7 +159,7 @@ export function EvidencePage({ mode }: { mode: Mode }) {
                     <>
                       <div className="flex flex-wrap items-center gap-2">
                         <Badge variant={formatRiskTone(formatSeverity(selectedEvent.data.event.severity))}>
-                          {formatSeverity(selectedEvent.data.event.severity)}
+                          {formatSeverityLabel(selectedEvent.data.event.severity)}
                         </Badge>
                         <span className="text-muted-foreground">{formatRelativeDate(selectedEvent.data.event.timestamp)}</span>
                       </div>
@@ -164,7 +189,7 @@ export function EvidencePage({ mode }: { mode: Mode }) {
                   {anomaly.data ? (
                     <>
                       <div className="flex flex-wrap items-center gap-2">
-                        <Badge variant={formatRiskTone(anomaly.data.status)}>{anomaly.data.status}</Badge>
+                        <Badge variant={formatRiskTone(anomaly.data.status)}>{formatDisplayValue(anomaly.data.status)}</Badge>
                         <span className="text-muted-foreground">{anomaly.data.service_id}</span>
                       </div>
                       <p className="text-muted-foreground">
@@ -187,4 +212,3 @@ export function EvidencePage({ mode }: { mode: Mode }) {
     </div>
   );
 }
-

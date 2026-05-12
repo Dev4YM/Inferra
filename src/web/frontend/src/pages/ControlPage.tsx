@@ -1,8 +1,8 @@
-import { Play, RefreshCcw, Square } from "lucide-react";
+import { DatabaseZap, Play, RefreshCcw, Square } from "lucide-react";
 import { useCallback } from "react";
 import { toast } from "sonner";
 
-import type { AiDoctorResponse, AiStatus, CollectorRow } from "@/api";
+import type { AiDoctorResponse, AiStatus, CollectorRow, EventRow, ScannerStatusResponse } from "@/api";
 import { postJson } from "@/api";
 import { Alert, AlertDescription, AlertTitle } from "@/components/ui/alert";
 import { Button } from "@/components/ui/button";
@@ -12,12 +12,17 @@ import { PageHeader } from "@/components/layout/page-header";
 import { ErrorState, LoadingState } from "@/components/feedback/states";
 import type { Mode } from "@/lib/experience";
 import { useApiMutation, useApiQuery } from "@/lib/query";
+import { formatDisplayValue } from "@/lib/format";
+import { TimelineView } from "@/components/inferra/timeline";
 
 export function ControlPage({ mode }: { mode: Mode }) {
   const collectors = useApiQuery<{ collectors: CollectorRow[]; queue_depth: number }>("/api/collectors");
   const ai = useApiQuery<AiStatus>("/api/ai/status");
   const doctor = useApiQuery<AiDoctorResponse>("/api/ai/doctor");
+  const scanner = useApiQuery<ScannerStatusResponse>("/api/scanner/status", { staleTime: 15_000 });
+  const collectorLogs = useApiQuery<{ logs: EventRow[] }>("/api/logs?search=collector&limit=25", { staleTime: 20_000 });
   const action = useApiMutation(async (verb: "start" | "stop") => postJson(`/api/collectors/${verb}`, {}));
+  const scannerRun = useApiMutation(async () => postJson("/api/scanner/run", {}));
   const aiMetric = ai.data?.enabled ? (ai.data.available ? "ready" : "degraded") : "disabled";
   const aiMetricNote = ai.data?.enabled ? (ai.data?.resolved_model ?? ai.data?.model ?? "No model") : "AI is disabled in config";
 
@@ -27,6 +32,7 @@ export function ControlPage({ mode }: { mode: Mode }) {
         await action.run(verb);
         toast.success(`Collectors ${verb === "start" ? "started" : "stopped"}.`);
         void collectors.reload({ silent: true });
+        void collectorLogs.reload({ silent: true });
       } catch (error) {
         toast.error(`Could not ${verb} collectors`, { description: error instanceof Error ? error.message : String(error) });
       }
@@ -100,10 +106,10 @@ export function ControlPage({ mode }: { mode: Mode }) {
                   <div className="flex items-center justify-between gap-3">
                     <div>
                       <p className="font-medium">{collector.collector_id}</p>
-                      <p className="text-sm text-muted-foreground">{collector.source_type ?? "unknown source"}</p>
+                      <p className="text-sm text-muted-foreground">{formatDisplayValue(collector.source_type ?? "unknown source")}</p>
                     </div>
                     <Badge variant={collector.is_running ? "success" : "secondary"}>
-                      {collector.is_running ? "running" : collector.status ?? "idle"}
+                      {collector.is_running ? "Running" : formatDisplayValue(collector.status ?? "idle")}
                     </Badge>
                   </div>
                   <div className="mt-3 grid gap-2 text-sm text-muted-foreground md:grid-cols-2">
@@ -125,6 +131,64 @@ export function ControlPage({ mode }: { mode: Mode }) {
                 </div>
               ))}
             </div>
+          </CardContent>
+        </Card>
+
+        <Card>
+          <CardHeader>
+            <CardTitle>Scanner service</CardTitle>
+          </CardHeader>
+          <CardContent className="space-y-4 text-sm">
+            <Button
+              variant="outline"
+              onClick={async () => {
+                try {
+                  await scannerRun.run(undefined);
+                  toast.success("Scanner refreshed");
+                  void scanner.reload({ silent: true });
+                } catch (error) {
+                  toast.error("Scanner refresh failed", { description: error instanceof Error ? error.message : String(error) });
+                }
+              }}
+              disabled={scannerRun.isPending}
+            >
+              <DatabaseZap className="size-4" />
+              Refresh workspace scan
+            </Button>
+            <div className="space-y-3">
+              {Object.entries(scanner.data?.scanner ?? {}).map(([key, row]) => (
+                <div key={key} className="rounded-2xl border border-border/60 bg-background/30 p-4">
+                  <div className="flex items-start justify-between gap-3">
+                    <div>
+                      <p className="font-medium">{formatDisplayValue(row.data_type)}</p>
+                      <p className="text-sm text-muted-foreground">{formatDisplayValue(row.mode)}</p>
+                    </div>
+                    {row.interval_seconds ? <Badge variant="outline">{row.interval_seconds}s</Badge> : null}
+                  </div>
+                  {row.last_scanned_at ? (
+                    <p className="mt-2 text-sm text-muted-foreground">
+                      Last scan {row.last_scanned_at}; next in {row.next_scan_in_seconds ?? 0}s.
+                    </p>
+                  ) : null}
+                  {row.min_interval_seconds && row.max_interval_seconds ? (
+                    <p className="mt-1 text-xs text-muted-foreground">
+                      Customizable via config between {row.min_interval_seconds}s and {row.max_interval_seconds}s.
+                    </p>
+                  ) : null}
+                </div>
+              ))}
+            </div>
+          </CardContent>
+        </Card>
+      </div>
+
+      <div className="grid gap-4 xl:grid-cols-[minmax(0,1.1fr)_minmax(360px,0.9fr)]">
+        <Card>
+          <CardHeader>
+            <CardTitle>Collector logs</CardTitle>
+          </CardHeader>
+          <CardContent>
+            <TimelineView events={collectorLogs.data?.logs ?? []} limit={10} compact />
           </CardContent>
         </Card>
 
@@ -194,4 +258,3 @@ function StatusRow({ label, value }: { label: string; value: string }) {
     </div>
   );
 }
-

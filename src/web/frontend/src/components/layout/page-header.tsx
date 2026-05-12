@@ -1,6 +1,7 @@
 import type { ReactNode } from "react";
 
 import { Badge } from "@/components/ui/badge";
+import { formatDisplayValue } from "@/lib/format";
 import { cn } from "@/lib/utils";
 
 export function PageHeader({
@@ -27,7 +28,7 @@ export function PageHeader({
               variant={mode === "operator" ? "success" : mode === "expert" ? "warning" : "info"}
               className={cn("px-3 py-1 text-[10px]")}
             >
-              {mode} mode
+              {formatDisplayValue(`${mode} mode`)}
             </Badge>
           ) : null}
         </div>
@@ -37,4 +38,3 @@ export function PageHeader({
     </div>
   );
 }
-

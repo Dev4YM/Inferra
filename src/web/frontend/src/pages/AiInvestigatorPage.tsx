@@ -15,6 +15,7 @@ import { ErrorState, LoadingState } from "@/components/feedback/states";
 import { InvestigationView } from "@/components/investigation/investigation-view";
 import type { Mode } from "@/lib/experience";
 import { isAdvancedMode } from "@/lib/experience";
+import { formatDisplayValue } from "@/lib/format";
 import { useApiMutation, useApiQuery } from "@/lib/query";
 
 export function AiInvestigatorPage({ mode }: { mode: Mode }) {
@@ -35,7 +36,7 @@ export function AiInvestigatorPage({ mode }: { mode: Mode }) {
   );
   const reportMutation = useApiMutation(
     async ({ incidentId, monitor_seconds }: { incidentId: string; monitor_seconds: number }) =>
-      fetchJson<InvestigationResponse>(`/api/ai/report/${incidentId}?mode=${mode}&monitor_seconds=${monitor_seconds}`),
+      fetchJson<InvestigationResponse>(`/api/ai/report/${encodeURIComponent(incidentId)}?mode=${mode}&monitor_seconds=${monitor_seconds}`),
   );
 
   const ask = useCallback(async () => {
@@ -134,7 +135,7 @@ export function AiInvestigatorPage({ mode }: { mode: Mode }) {
           <div className="space-y-2">
             <AlertTitle>Provider health</AlertTitle>
             <AlertDescription>
-              {doctor.data.provider} · {doctor.data.base_url} · status model {doctor.data.model}
+              {formatDisplayValue(doctor.data.provider)} · {doctor.data.base_url} · status model {doctor.data.model}
               {doctor.data.investigate_model && doctor.data.investigate_model !== doctor.data.model
                 ? ` · investigate model ${doctor.data.investigate_model}`
                 : ""}{" "}
@@ -252,4 +253,3 @@ export function AiInvestigatorPage({ mode }: { mode: Mode }) {
     </div>
   );
 }
-

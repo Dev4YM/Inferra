@@ -1,4 +1,4 @@
-import { RefreshCcw } from "lucide-react";
+import { Activity, AlertTriangle, Gauge, RefreshCcw, ServerCog } from "lucide-react";
 import { Link, useParams } from "react-router-dom";
 
 import type {
@@ -18,8 +18,10 @@ import { EmptyState, ErrorState, LoadingState } from "@/components/feedback/stat
 import { InvestigationView } from "@/components/investigation/investigation-view";
 import type { Mode } from "@/lib/experience";
 import { isAdvancedMode } from "@/lib/experience";
-import { formatRiskTone, formatRelativeDate, summarizeEvent } from "@/lib/format";
+import { formatDisplayValue, formatRiskTone, formatRelativeDate, formatSeverityLabel, summarizeEvent } from "@/lib/format";
 import { useApiQuery } from "@/lib/query";
+import { RuntimeIdentity, RuntimeStatusCard, ServiceHealthBadge, riskTone } from "@/components/inferra/health";
+import { Sparkline } from "@/components/inferra/charts";
 
 export function SystemsPage({ mode }: { mode: Mode }) {
   const services = useApiQuery<{ services: ServiceRow[] }>("/api/services");
@@ -43,6 +45,9 @@ export function SystemsPage({ mode }: { mode: Mode }) {
   }
 
   const rows = services.data?.services ?? [];
+  const degraded = rows.filter((service) => ["critical", "degraded", "elevated"].includes(service.status));
+  const totalEvents = rows.reduce((sum, service) => sum + (service.event_count ?? 0), 0);
+  const totalErrors = rows.reduce((sum, service) => sum + (service.error_count ?? 0), 0);
 
   return (
     <div className="space-y-6">
@@ -58,39 +63,81 @@ export function SystemsPage({ mode }: { mode: Mode }) {
         }
       />
 
+      <div className="dashboard-grid">
+        <RuntimeStatusCard icon={ServerCog} label="Services" value={String(rows.length)} tone="info" detail="Observed services with normalized runtime events." />
+        <RuntimeStatusCard icon={AlertTriangle} label="Needs attention" value={String(degraded.length)} tone={degraded.length ? "warning" : "success"} detail="Critical, degraded, or elevated services." />
+        <RuntimeStatusCard icon={Activity} label="Events" value={String(totalEvents)} tone="info" detail="Total events attached to service rows." />
+        <RuntimeStatusCard icon={Gauge} label="Errors" value={String(totalErrors)} tone={totalErrors ? "warning" : "success"} detail="Current known error count across services." />
+      </div>
+
       {rows.length === 0 ? (
         <EmptyState title="No services observed yet" description="Start collectors or ingest runtime events to populate the systems view." />
       ) : (
-        <TableWrap>
-          <Table>
-            <thead>
-              <tr>
-                <Th>Service</Th>
-                <Th>Status</Th>
-                <Th>Events</Th>
-                <Th>Errors</Th>
-                <Th>Last event</Th>
-              </tr>
-            </thead>
-            <tbody>
-              {rows.map((service) => (
-                <tr key={service.service_id} className="transition hover:bg-secondary/50">
-                  <Td>
-                    <Link className="font-medium" to={`/systems/${service.service_id}`}>
-                      {service.service_id}
-                    </Link>
-                  </Td>
-                  <Td>
-                    <Badge variant={formatRiskTone(service.status)}>{service.status}</Badge>
-                  </Td>
-                  <Td>{service.event_count ?? 0}</Td>
-                  <Td>{service.error_count ?? 0}</Td>
-                  <Td className="text-muted-foreground">{formatRelativeDate(service.last_event_at)}</Td>
+        <div className="space-y-4">
+          <div className="grid gap-4 xl:grid-cols-3">
+            {rows.slice(0, 6).map((service) => (
+              <Link
+                key={service.service_id}
+                to={`/systems/${service.service_id}`}
+                className="rounded-2xl border border-border/70 bg-card/75 p-4 text-foreground shadow-sm transition hover:-translate-y-0.5 hover:border-primary/30 hover:opacity-100"
+              >
+                <div className="flex items-start justify-between gap-3">
+                  <RuntimeIdentity service={service.service_id} runtime="service" latency={service.last_event_at ? `last ${formatRelativeDate(service.last_event_at)}` : null} />
+                  <ServiceHealthBadge status={service.status} />
+                </div>
+                <div className="mt-4 grid grid-cols-2 gap-3 text-sm">
+                  <div className="rounded-xl border border-border/60 bg-background/35 p-3">
+                    <p className="text-xs text-muted-foreground">Events</p>
+                    <p className="mt-1 text-lg font-semibold">{service.event_count ?? 0}</p>
+                  </div>
+                  <div className="rounded-xl border border-border/60 bg-background/35 p-3">
+                    <p className="text-xs text-muted-foreground">Errors</p>
+                    <p className="mt-1 text-lg font-semibold">{service.error_count ?? 0}</p>
+                  </div>
+                </div>
+                <div className="mt-4">
+                  <Sparkline
+                    values={[1, 2, service.event_count ?? 0, service.error_count ?? 0, Math.max(1, service.event_count ?? 0)]}
+                    tone={riskTone(service.status) === "destructive" ? "critical" : riskTone(service.status) === "warning" ? "warning" : "success"}
+                  />
+                </div>
+              </Link>
+            ))}
+          </div>
+
+          <TableWrap>
+            <Table>
+              <thead>
+                <tr>
+                  <Th>Service</Th>
+                  <Th>Status</Th>
+                  <Th>Events</Th>
+                  <Th>Errors</Th>
+                  <Th>Error rate</Th>
+                  <Th>Last event</Th>
                 </tr>
-              ))}
-            </tbody>
-          </Table>
-        </TableWrap>
+              </thead>
+              <tbody>
+                {rows.map((service) => (
+                  <tr key={service.service_id} className="transition hover:bg-secondary/50">
+                    <Td>
+                      <Link className="font-medium" to={`/systems/${service.service_id}`}>
+                        {service.service_id}
+                      </Link>
+                    </Td>
+                    <Td>
+                      <ServiceHealthBadge status={service.status} />
+                    </Td>
+                    <Td>{service.event_count ?? 0}</Td>
+                    <Td>{service.error_count ?? 0}</Td>
+                    <Td>{typeof service.error_ratio === "number" ? `${Math.round(service.error_ratio * 100)}%` : "-"}</Td>
+                    <Td className="text-muted-foreground">{formatRelativeDate(service.last_event_at)}</Td>
+                  </tr>
+                ))}
+              </tbody>
+            </Table>
+          </TableWrap>
+        </div>
       )}
     </div>
   );
@@ -98,12 +145,12 @@ export function SystemsPage({ mode }: { mode: Mode }) {
 
 export function ServiceDetailPage({ mode }: { mode: Mode }) {
   const { serviceId } = useParams();
-  const detail = useApiQuery<ServiceDetailResponse>(serviceId ? `/api/services/${serviceId}` : null, { deps: [serviceId] });
+  const detail = useApiQuery<ServiceDetailResponse>(serviceId ? `/api/services/${encodeURIComponent(serviceId)}` : null, { deps: [serviceId] });
   const investigation = useApiQuery<InvestigationResponse>(
-    serviceId ? `/api/investigate/service/${serviceId}?mode=${mode}` : null,
+    serviceId ? `/api/investigate/service/${encodeURIComponent(serviceId)}?mode=${mode}` : null,
     { deps: [serviceId, mode] },
   );
-  const anomaly = useApiQuery<AnomalyStatus>(serviceId ? `/api/anomaly/${serviceId}/status` : null, { deps: [serviceId] });
+  const anomaly = useApiQuery<AnomalyStatus>(serviceId ? `/api/anomaly/${encodeURIComponent(serviceId)}/status` : null, { deps: [serviceId] });
   const topology = useApiQuery<{ edges: TopologyEdge[] }>("/api/topology");
   const workspace = useApiQuery<WorkspaceMapResponse>("/api/workspace/map");
 
@@ -120,7 +167,7 @@ export function ServiceDetailPage({ mode }: { mode: Mode }) {
     <div className="space-y-6">
       <PageHeader
         title={`Service ${serviceId}`}
-        subtitle={`status ${detail.data.service.status || "unknown"}`}
+        subtitle={`Status ${formatDisplayValue(detail.data.service.status || "unknown")}`}
         mode={mode}
         actions={
           <Button
@@ -174,7 +221,7 @@ export function ServiceDetailPage({ mode }: { mode: Mode }) {
               {anomaly.data ? (
                 <div className="rounded-2xl border border-border/60 bg-background/30 p-4">
                   <div className="flex flex-wrap items-center gap-2">
-                    <Badge variant={formatRiskTone(anomaly.data.status)}>{anomaly.data.status}</Badge>
+                    <Badge variant={formatRiskTone(anomaly.data.status)}>{formatDisplayValue(anomaly.data.status)}</Badge>
                     <span className="text-muted-foreground">{anomaly.data.event_count} events in {anomaly.data.window_hours}h</span>
                   </div>
                   <p className="mt-2 text-muted-foreground">
@@ -190,7 +237,7 @@ export function ServiceDetailPage({ mode }: { mode: Mode }) {
                   {topologyEdges.map((edge, index) => (
                     <div key={`${edge.source}-${edge.target}-${index}`} className="rounded-2xl border border-border/60 bg-background/30 p-4">
                       <p className="font-medium">
-                        {edge.source} {edge.relation_type ?? edge.type ?? "relates_to"} {edge.target}
+                        {edge.source} {formatDisplayValue(edge.relation_type ?? edge.type ?? "relates_to")} {edge.target}
                       </p>
                       {edge.notes ? <p className="mt-1 text-muted-foreground">{edge.notes}</p> : null}
                     </div>
@@ -212,7 +259,7 @@ export function ServiceDetailPage({ mode }: { mode: Mode }) {
                   <div key={`${mapping.service_id}-${mapping.project_path}`} className="rounded-2xl border border-border/60 bg-background/30 p-4">
                     <p className="font-medium">{mapping.project_path}</p>
                     <p className="mt-1 text-muted-foreground">
-                      confidence {(mapping.confidence * 100).toFixed(0)}% via {mapping.source}
+                      Confidence {(mapping.confidence * 100).toFixed(0)}% via {formatDisplayValue(mapping.source)}
                     </p>
                     {mapping.notes ? <p className="mt-2 text-muted-foreground">{mapping.notes}</p> : null}
                   </div>
@@ -235,7 +282,7 @@ export function ServiceDetailPage({ mode }: { mode: Mode }) {
                       <Link className="font-medium" to={`/incidents/${incident.incident_id}`}>
                         {incident.incident_id}
                       </Link>
-                      <Badge variant={formatRiskTone(String(incident.severity))}>sev {incident.severity}</Badge>
+                      <Badge variant={formatRiskTone(String(incident.severity))}>Sev {formatSeverityLabel(incident.severity)}</Badge>
                     </div>
                   </div>
                 ))
@@ -255,7 +302,7 @@ export function ServiceDetailPage({ mode }: { mode: Mode }) {
                   <div key={event.event_id} className="rounded-2xl border border-border/60 bg-background/30 p-4">
                     <div className="flex flex-wrap items-center justify-between gap-2">
                       <Badge variant={formatRiskTone(event.severity ? String(event.severity) : serviceStatus)}>
-                        {event.severity ?? "event"}
+                        {event.severity == null ? "Event" : formatSeverityLabel(event.severity)}
                       </Badge>
                       <span className="text-xs text-muted-foreground">{formatRelativeDate(event.timestamp)}</span>
                     </div>
@@ -272,4 +319,3 @@ export function ServiceDetailPage({ mode }: { mode: Mode }) {
     </div>
   );
 }
-

@@ -7,6 +7,32 @@ export function formatSeverity(value: number | string | null | undefined): strin
   return String(value ?? "unknown").toLowerCase();
 }
 
+export function formatDisplayValue(value: string | number | boolean | null | undefined): string {
+  if (value === null || value === undefined || value === "") return "Unknown";
+  if (typeof value === "boolean") return value ? "Enabled" : "Disabled";
+  if (typeof value === "number") return String(value);
+  return value
+    .replace(/[_-]+/g, " ")
+    .replace(/\s+/g, " ")
+    .trim()
+    .split(" ")
+    .map((part) => {
+      if (!part) return part;
+      if (/^[A-Z0-9.]+$/.test(part)) return part;
+      if (/^(ai|api|llm|cpu|gpu|id|os|ui|url)$/i.test(part)) return part.toUpperCase();
+      return `${part.charAt(0).toUpperCase()}${part.slice(1).toLowerCase()}`;
+    })
+    .join(" ");
+}
+
+export function formatSeverityLabel(value: number | string | null | undefined): string {
+  return formatDisplayValue(formatSeverity(value));
+}
+
+export function formatModeLabel(value: string | null | undefined): string {
+  return formatDisplayValue(value);
+}
+
 export function formatRiskTone(value: string | null | undefined): "success" | "warning" | "destructive" | "secondary" {
   switch ((value ?? "").toLowerCase()) {
     case "low":
@@ -45,4 +71,3 @@ export function investigationHasSignal(output: InvestigationOutput | null | unde
       output.next_steps.length,
   );
 }
-

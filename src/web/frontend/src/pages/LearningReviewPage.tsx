@@ -46,7 +46,7 @@ import { JsonInspector } from "@/components/ui/json-inspector";
 import { Table, TableWrap, Td, Th } from "@/components/ui/table";
 import { Textarea } from "@/components/ui/textarea";
 import type { Mode } from "@/lib/experience";
-import { formatRelativeDate } from "@/lib/format";
+import { formatDisplayValue, formatRelativeDate } from "@/lib/format";
 import { useApiMutation, useApiQuery } from "@/lib/query";
 
 type ArtifactDetail = AdaptiveDetector | AdaptiveTemplate | AdaptiveComposition | AdaptiveEdgeProfile;
@@ -555,7 +555,7 @@ export function LearningReviewPage({ mode }: { mode: Mode }) {
                         </Td>
                         <Td>
                           <div className="flex flex-wrap gap-2">
-                            <Badge variant={reviewVariant(row.review_status)}>{row.review_status}</Badge>
+                            <Badge variant={reviewVariant(row.review_status)}>{formatDisplayValue(row.review_status)}</Badge>
                             {row.attention ? <Badge variant="warning">attention</Badge> : null}
                             {(row.review_status === "unreviewed" || row.review_status === "watch") ? (
                               <Badge variant={agingVariant(row.aging_bucket)}>{row.aging_bucket}</Badge>
@@ -721,10 +721,10 @@ export function LearningReviewPage({ mode }: { mode: Mode }) {
                       subtitle={`${humanizeKind(item.artifact_kind)} · ${item.confirmations} confirmations · ${item.false_positives} false positives`}
                       badges={[
                         <Badge key="status" variant={statusVariant(item.status)}>
-                          {item.status}
+                          {formatDisplayValue(item.status)}
                         </Badge>,
                         <Badge key="review" variant={reviewVariant(item.review_status)}>
-                          {item.review_status}
+                          {formatDisplayValue(item.review_status)}
                         </Badge>,
                       ]}
                       onClick={() => setSelectedKey(key)}
@@ -756,7 +756,7 @@ export function LearningReviewPage({ mode }: { mode: Mode }) {
                       subtitle={`${humanizeKind(record.kind)} · ${record.confirmations} confirmations · ${record.falsePositives} false positives`}
                       badges={[
                         <Badge key="status" variant={statusVariant(record.status)}>
-                          {record.status}
+                          {formatDisplayValue(record.status)}
                         </Badge>,
                         <Badge key="review" variant={reviewVariant(record.reviewStatus)}>
                           {record.reviewStatus}
@@ -836,7 +836,7 @@ export function LearningReviewPage({ mode }: { mode: Mode }) {
                       </p>
                     </div>
                     <div className="flex flex-wrap gap-2">
-                      <Badge variant={statusVariant(selectedArtifact.status)}>{selectedArtifact.status}</Badge>
+                      <Badge variant={statusVariant(selectedArtifact.status)}>{formatDisplayValue(selectedArtifact.status)}</Badge>
                       <Badge variant={reviewVariant(selectedArtifact.reviewStatus)}>{selectedArtifact.reviewStatus}</Badge>
                       {attentionKeys.has(selectedArtifact.key) ? <Badge variant="warning">attention</Badge> : null}
                     </div>
@@ -992,7 +992,7 @@ export function LearningReviewPage({ mode }: { mode: Mode }) {
                       <div className="flex flex-wrap items-center gap-2">
                         <Badge variant="outline">{entry.artifact_kind}</Badge>
                         <Badge variant={reviewVariant(entry.review_status_after ?? "unreviewed")}>
-                          {entry.review_status_after ?? entry.action}
+                          {formatDisplayValue(entry.review_status_after ?? entry.action)}
                         </Badge>
                       </div>
                       <p className="mt-2 text-sm font-medium">{entry.artifact_id}</p>
@@ -1021,7 +1021,7 @@ export function LearningReviewPage({ mode }: { mode: Mode }) {
                             {item.incident_id}
                           </Link>
                           <p className="text-sm text-muted-foreground">
-                            {item.primary_service || "unknown service"} · {item.state || "unknown state"}
+                            {item.primary_service || "Unknown Service"} · {formatDisplayValue(item.state || "unknown state")}
                           </p>
                         </div>
                         <Badge variant="info">{item.learning.influenced_hypotheses} influenced hypotheses</Badge>
@@ -1152,7 +1152,7 @@ function ArtifactCohort({
                   </p>
                 </div>
                 <div className="flex flex-wrap gap-2">
-                  <Badge variant={reviewVariant(row.review_status)}>{row.review_status}</Badge>
+                  <Badge variant={reviewVariant(row.review_status)}>{formatDisplayValue(row.review_status)}</Badge>
                   <Badge variant="outline">{row.active_incident_count} incidents</Badge>
                 </div>
               </div>

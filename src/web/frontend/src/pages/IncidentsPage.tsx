@@ -1,4 +1,4 @@
-import { Activity, CheckCircle2, CircleOff, Eye, RefreshCcw, ThumbsDown, Undo2 } from "lucide-react";
+import { Activity, AlertTriangle, CheckCircle2, CircleOff, Eye, RefreshCcw, Sparkles, ThumbsDown, Undo2 } from "lucide-react";
 import { useMemo, useState } from "react";
 import { Link, useParams } from "react-router-dom";
 import { toast } from "sonner";
@@ -23,9 +23,12 @@ import { Textarea } from "@/components/ui/textarea";
 import { PageHeader } from "@/components/layout/page-header";
 import { EmptyState, ErrorState, LoadingState } from "@/components/feedback/states";
 import { InvestigationView } from "@/components/investigation/investigation-view";
+import { AlternativeHypotheses, HypothesisPanel, SuggestedChecks } from "@/components/inferra/incident";
+import { IncidentStateTimeline } from "@/components/inferra/timeline";
+import { RuntimeStatusCard } from "@/components/inferra/health";
 import type { Mode } from "@/lib/experience";
 import { isAdvancedMode } from "@/lib/experience";
-import { formatRiskTone, formatSeverity, formatRelativeDate, summarizeEvent } from "@/lib/format";
+import { formatDisplayValue, formatRiskTone, formatSeverity, formatSeverityLabel, formatRelativeDate, summarizeEvent } from "@/lib/format";
 import { useApiMutation, useApiQuery } from "@/lib/query";
 
 export function IncidentsPage({ mode }: { mode: Mode }) {
@@ -88,9 +91,9 @@ export function IncidentsPage({ mode }: { mode: Mode }) {
                       {incident.incident_id}
                     </Link>
                   </Td>
-                  <Td>{incident.state}</Td>
+                  <Td>{formatDisplayValue(incident.state)}</Td>
                   <Td>
-                    <Badge variant={formatRiskTone(formatSeverity(incident.severity))}>{formatSeverity(incident.severity)}</Badge>
+                    <Badge variant={formatRiskTone(formatSeverity(incident.severity))}>{formatSeverityLabel(incident.severity)}</Badge>
                   </Td>
                   <Td>{incident.primary_service || "—"}</Td>
                   <Td>{incident.event_count ?? 0}</Td>
@@ -107,9 +110,9 @@ export function IncidentsPage({ mode }: { mode: Mode }) {
 
 export function IncidentDetailPage({ mode }: { mode: Mode }) {
   const { incidentId } = useParams();
-  const detail = useApiQuery<IncidentDetailResponse>(incidentId ? `/api/incidents/${incidentId}` : null, { deps: [incidentId] });
+  const detail = useApiQuery<IncidentDetailResponse>(incidentId ? `/api/incidents/${encodeURIComponent(incidentId)}` : null, { deps: [incidentId] });
   const investigation = useApiQuery<InvestigationResponse>(
-    incidentId ? `/api/investigate/incident/${incidentId}?mode=${mode}` : null,
+    incidentId ? `/api/investigate/incident/${encodeURIComponent(incidentId)}?mode=${mode}` : null,
     { deps: [incidentId, mode] },
   );
   const adaptive = useApiQuery<AdaptiveLearningSummaryResponse>(
@@ -137,6 +140,7 @@ export function IncidentDetailPage({ mode }: { mode: Mode }) {
   if (!detail.data) return <EmptyState title="No incident data" description="Inferra could not load the incident details." />;
 
   const incident = detail.data.incident;
+  const incidentEvents = detail.data.events;
   const investigationMissing = investigation.error?.status === 404;
 
   const runArtifactReview = async (artifact: IncidentAdaptiveArtifact, decision: AdaptiveReviewDecision) => {
@@ -192,7 +196,7 @@ export function IncidentDetailPage({ mode }: { mode: Mode }) {
     <div className="space-y-6">
       <PageHeader
         title={`Incident ${incident.incident_id}`}
-        subtitle={`${incident.primary_service || "unknown"} · severity ${incident.severity} · ${incident.state}`}
+        subtitle={`${incident.primary_service || "Unknown"} · Severity ${incident.severity} · ${formatDisplayValue(incident.state)}`}
         mode={mode}
         actions={
           <Button variant="outline" size="sm" onClick={() => { void detail.reload({ silent: true }); void investigation.reload({ silent: true }); }}>
@@ -202,8 +206,64 @@ export function IncidentDetailPage({ mode }: { mode: Mode }) {
         }
       />
 
+      <div className="dashboard-grid">
+        <RuntimeStatusCard
+          icon={AlertTriangle}
+          label="Severity"
+          value={`sev ${incident.severity}`}
+          tone={incident.severity >= 4 ? "destructive" : incident.severity >= 3 ? "warning" : "info"}
+          detail={incident.primary_service || "No primary service recorded."}
+        />
+        <RuntimeStatusCard
+          icon={Activity}
+          label="Correlated events"
+          value={String(detail.data.events.length)}
+          tone={detail.data.events.length ? "info" : "secondary"}
+          detail="Evidence currently attached to this incident."
+        />
+        <RuntimeStatusCard
+          icon={Sparkles}
+          label="Hypotheses"
+          value={String(detail.data.hypotheses.length)}
+          tone={detail.data.hypotheses.length ? "success" : "secondary"}
+          detail="Ranked explanations generated from observed evidence."
+        />
+        <RuntimeStatusCard
+          icon={Eye}
+          label="Affected services"
+          value={String(incident.affected_services?.length ?? (incident.primary_service ? 1 : 0))}
+          tone="info"
+          detail={(incident.affected_services ?? [incident.primary_service]).filter(Boolean).slice(0, 3).join(", ") || "Unknown scope"}
+        />
+      </div>
+
       <div className="content-grid">
         <div className="space-y-4">
+          <Card>
+            <CardHeader>
+              <CardTitle>Ranked hypotheses</CardTitle>
+              <CardDescription>
+                Compare likely causes by confidence, supporting evidence, contradictions, and suggested checks.
+              </CardDescription>
+            </CardHeader>
+            <CardContent className="space-y-3">
+              {detail.data.hypotheses.length ? (
+                detail.data.hypotheses.map((hypothesis, index) => (
+                  <HypothesisPanel
+                    key={hypothesis.hypothesis_id}
+                    hypothesis={hypothesis}
+                    rank={index + 1}
+                    events={incidentEvents}
+                    defaultOpen={index === 0}
+                    advanced={isAdvancedMode(mode)}
+                  />
+                ))
+              ) : (
+                <p className="text-sm text-muted-foreground">No hypotheses recorded yet.</p>
+              )}
+            </CardContent>
+          </Card>
+
           {investigation.data ? (
             <InvestigationView result={investigation.data} showRaw={isAdvancedMode(mode)} onRefresh={() => void investigation.reload({ silent: true })} />
           ) : investigation.errorMessage ? (
@@ -224,6 +284,24 @@ export function IncidentDetailPage({ mode }: { mode: Mode }) {
         <div className="space-y-4">
           <Card>
             <CardHeader>
+              <CardTitle>Suggested checks</CardTitle>
+            </CardHeader>
+            <CardContent>
+              <SuggestedChecks checks={investigation.data?.output.next_steps ?? []} />
+            </CardContent>
+          </Card>
+
+          <Card>
+            <CardHeader>
+              <CardTitle>Alternative hypotheses</CardTitle>
+            </CardHeader>
+            <CardContent>
+              <AlternativeHypotheses items={detail.data.explanation?.alternatives ?? investigation.data?.output.uncertainty ?? []} />
+            </CardContent>
+          </Card>
+
+          <Card>
+            <CardHeader>
               <CardTitle>Correlation clusters</CardTitle>
             </CardHeader>
             <CardContent className="space-y-3">
@@ -237,7 +315,7 @@ export function IncidentDetailPage({ mode }: { mode: Mode }) {
                     <div key={String(data?.cluster_id ?? index)} className="rounded-2xl border border-border/60 bg-background/30 p-4">
                       <div className="flex flex-wrap items-center gap-2">
                         <p className="font-medium">{String(data?.cluster_id ?? `cluster-${index + 1}`)}</p>
-                        {data?.source_type ? <Badge variant="outline">{String(data.source_type)}</Badge> : null}
+                        {data?.source_type ? <Badge variant="outline">{formatDisplayValue(String(data.source_type))}</Badge> : null}
                         {typeof data?.event_count === "number" ? <Badge variant="outline">{data.event_count} events</Badge> : null}
                       </div>
                       {affectedServices.length ? (
@@ -270,7 +348,7 @@ export function IncidentDetailPage({ mode }: { mode: Mode }) {
               {detail.data.explanation ? (
                 <>
                   <div className="flex flex-wrap items-center gap-2">
-                    <Badge variant="outline">{detail.data.explanation.quality}</Badge>
+                    <Badge variant="outline">{formatDisplayValue(detail.data.explanation.quality)}</Badge>
                     <Badge variant="outline">{detail.data.explanation.model_used}</Badge>
                     <span className="text-muted-foreground">{formatRelativeDate(detail.data.explanation.created_at)}</span>
                   </div>
@@ -339,8 +417,8 @@ export function IncidentDetailPage({ mode }: { mode: Mode }) {
                             </p>
                           </div>
                           <div className="flex flex-wrap gap-2">
-                            <Badge variant={adaptiveStatusVariant(artifact.status)}>{artifact.status}</Badge>
-                            <Badge variant={adaptiveReviewVariant(artifact.reviewStatus)}>{artifact.reviewStatus}</Badge>
+                            <Badge variant={adaptiveStatusVariant(artifact.status)}>{formatDisplayValue(artifact.status)}</Badge>
+                            <Badge variant={adaptiveReviewVariant(artifact.reviewStatus)}>{formatDisplayValue(artifact.reviewStatus)}</Badge>
                             <Badge variant="outline">
                               {artifact.impactMetric === "matched_events" ? "matched events" : artifact.impactMetric || "impact"}{" "}
                               {artifact.impactValue.toFixed(2)}
@@ -449,41 +527,6 @@ export function IncidentDetailPage({ mode }: { mode: Mode }) {
 
           <Card>
             <CardHeader>
-              <CardTitle>Hypotheses</CardTitle>
-            </CardHeader>
-            <CardContent className="space-y-3">
-              {detail.data.hypotheses.length ? (
-                detail.data.hypotheses.map((hypothesis) => (
-                  <div key={hypothesis.hypothesis_id} className="rounded-2xl border border-border/60 bg-background/30 p-4">
-                    <div className="flex flex-wrap items-center gap-2">
-                      <p className="font-medium">{hypothesis.cause_type}</p>
-                      {hypothesis.confidence_label ? <Badge variant="outline">{hypothesis.confidence_label}</Badge> : null}
-                      {hypothesis.provenance?.has_learned_influence ? (
-                        <Badge variant="info">
-                          learned impact {hypothesis.provenance.estimated_total_impact?.toFixed(2) ?? "0.00"}
-                        </Badge>
-                      ) : null}
-                    </div>
-                    {hypothesis.description ? <p className="mt-2 text-sm text-muted-foreground">{hypothesis.description}</p> : null}
-                    {hypothesis.provenance?.artifacts?.length ? (
-                      <div className="mt-3 flex flex-wrap gap-2">
-                        {hypothesis.provenance.artifacts.map((artifact, index) => (
-                          <Badge key={`${artifact.artifact_id ?? artifact.label ?? index}`} variant="outline">
-                            {artifact.label ?? artifact.artifact_id ?? "learned artifact"}
-                          </Badge>
-                        ))}
-                      </div>
-                    ) : null}
-                  </div>
-                ))
-              ) : (
-                <p className="text-sm text-muted-foreground">No hypotheses recorded yet.</p>
-              )}
-            </CardContent>
-          </Card>
-
-          <Card>
-            <CardHeader>
               <CardTitle>Correlated events</CardTitle>
             </CardHeader>
             <CardContent className="space-y-3">
@@ -491,7 +534,7 @@ export function IncidentDetailPage({ mode }: { mode: Mode }) {
                 detail.data.events.slice(0, 12).map((event) => (
                   <div key={event.event_id} className="rounded-2xl border border-border/60 bg-background/30 p-4">
                     <div className="flex flex-wrap items-center justify-between gap-2">
-                      <Badge variant={formatRiskTone(formatSeverity(event.severity))}>{formatSeverity(event.severity)}</Badge>
+                      <Badge variant={formatRiskTone(formatSeverity(event.severity))}>{formatSeverityLabel(event.severity)}</Badge>
                       <span className="text-xs text-muted-foreground">{formatRelativeDate(event.timestamp)}</span>
                     </div>
                     <p className="mt-2 text-sm">{summarizeEvent(event)}</p>
@@ -508,6 +551,7 @@ export function IncidentDetailPage({ mode }: { mode: Mode }) {
               <CardTitle>Incident audit</CardTitle>
             </CardHeader>
             <CardContent className="space-y-3 text-sm">
+              <IncidentStateTimeline states={detail.data.state_log} />
               {detail.data.latest_trace ? (
                 <div className="rounded-2xl border border-border/60 bg-background/30 p-4">
                   <div className="flex flex-wrap items-center gap-2">
@@ -523,9 +567,9 @@ export function IncidentDetailPage({ mode }: { mode: Mode }) {
                 detail.data.state_log.slice(0, 5).map((entry, index) => (
                   <div key={`${entry.changed_at ?? "audit"}-${index}`} className="rounded-2xl border border-border/60 bg-background/30 p-4">
                     <div className="flex flex-wrap items-center gap-2">
-                      <Badge variant="outline">{entry.old_state ?? "?"}</Badge>
+                      <Badge variant="outline">{formatDisplayValue(entry.old_state ?? "?")}</Badge>
                       <span className="text-muted-foreground">to</span>
-                      <Badge variant="outline">{entry.new_state ?? "?"}</Badge>
+                      <Badge variant="outline">{formatDisplayValue(entry.new_state ?? "?")}</Badge>
                     </div>
                     {entry.reason ? <p className="mt-2 text-muted-foreground">{entry.reason}</p> : null}
                     <p className="mt-1 text-xs text-muted-foreground">{formatRelativeDate(entry.changed_at)}</p>
@@ -718,4 +762,3 @@ function asRecord(value: unknown): Record<string, unknown> | null {
 function arrayOfStrings(value: unknown): string[] {
   return Array.isArray(value) ? value.filter((item): item is string => typeof item === "string") : [];
 }
-

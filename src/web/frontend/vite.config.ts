@@ -16,7 +16,13 @@ export default defineConfig({
     sourcemap: false,
     rollupOptions: {
       output: {
-        manualChunks: undefined,
+        manualChunks(id) {
+          if (!id.includes("node_modules")) return undefined;
+          if (id.includes("recharts") || id.includes("d3-")) return "charts";
+          if (id.includes("@xyflow") || id.includes("zustand")) return "graph";
+          if (id.includes("@tanstack")) return "query";
+          return "vendor";
+        },
       },
     },
   },
