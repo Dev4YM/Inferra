@@ -22,15 +22,15 @@ use inferra_contracts::{
     SeverityValue, WorkspaceMapResponse,
 };
 use inferra_core::{
-    adaptive_learning_audit_log, adaptive_learning_history, adaptive_learning_review_summary,
-    adaptive_learning_bulk_review_artifacts, adaptive_learning_bulk_set_artifact_state,
-    adaptive_learning_review_artifact, adaptive_learning_set_artifact_state,
-    adaptive_learning_delete_review_view, adaptive_learning_save_review_view,
-    adaptive_learning_touch_review_view, AdaptiveArtifactSelection, AdaptiveSavedReviewViewDraft,
-    adaptive_learning_summary, ai_status_from_config,
+    adaptive_learning_audit_log, adaptive_learning_bulk_review_artifacts,
+    adaptive_learning_bulk_set_artifact_state, adaptive_learning_delete_review_view,
+    adaptive_learning_history, adaptive_learning_review_artifact, adaptive_learning_review_summary,
+    adaptive_learning_save_review_view, adaptive_learning_set_artifact_state,
+    adaptive_learning_summary, adaptive_learning_touch_review_view, ai_status_from_config,
     build_overview, build_overview_with_runtime_signals, build_workspace_map,
     collect_host_resources_snapshot, collect_runtime_monitor_window, refresh_incident_reasoning,
-    try_collect_gpu_summary, OverviewRuntimeSignals,
+    try_collect_gpu_summary, AdaptiveArtifactSelection, AdaptiveSavedReviewViewDraft,
+    OverviewRuntimeSignals,
 };
 use inferra_storage::{
     initialize_databases, AdaptiveLearningAuditQuery, AdaptiveLearningHistoryQuery, EventsStore,
@@ -253,14 +253,38 @@ pub fn app_router(state: AppState) -> Router {
             post(api_incident_feedback),
         )
         .route("/api/learning/adaptive", get(api_adaptive_learning))
-        .route("/api/learning/adaptive/audit", get(api_adaptive_learning_audit))
-        .route("/api/learning/adaptive/history", get(api_adaptive_learning_history))
-        .route("/api/learning/adaptive/review", get(api_adaptive_learning_review))
-        .route("/api/learning/adaptive/views", post(api_adaptive_learning_save_view))
-        .route("/api/learning/adaptive/views/{view_id}", delete(api_adaptive_learning_delete_view))
-        .route("/api/learning/adaptive/views/{view_id}/use", post(api_adaptive_learning_use_view))
-        .route("/api/learning/adaptive/bulk/review", post(api_adaptive_learning_bulk_review_action))
-        .route("/api/learning/adaptive/bulk/state", post(api_adaptive_learning_bulk_state_action))
+        .route(
+            "/api/learning/adaptive/audit",
+            get(api_adaptive_learning_audit),
+        )
+        .route(
+            "/api/learning/adaptive/history",
+            get(api_adaptive_learning_history),
+        )
+        .route(
+            "/api/learning/adaptive/review",
+            get(api_adaptive_learning_review),
+        )
+        .route(
+            "/api/learning/adaptive/views",
+            post(api_adaptive_learning_save_view),
+        )
+        .route(
+            "/api/learning/adaptive/views/{view_id}",
+            delete(api_adaptive_learning_delete_view),
+        )
+        .route(
+            "/api/learning/adaptive/views/{view_id}/use",
+            post(api_adaptive_learning_use_view),
+        )
+        .route(
+            "/api/learning/adaptive/bulk/review",
+            post(api_adaptive_learning_bulk_review_action),
+        )
+        .route(
+            "/api/learning/adaptive/bulk/state",
+            post(api_adaptive_learning_bulk_state_action),
+        )
         .route(
             "/api/learning/adaptive/{artifact_kind}/{artifact_id}/review",
             post(api_adaptive_learning_review_action),
@@ -275,8 +299,14 @@ pub fn app_router(state: AppState) -> Router {
         .route("/api/ai/status", get(api_ai_status))
         .route("/api/ai/doctor", get(api_ai_doctor))
         .route("/api/ai/ask", post(api_ai_ask))
-        .route("/api/ai/investigate-stream", post(api_ai_investigate_stream))
-        .route("/api/ai/context", get(api_ai_context_get).put(api_ai_context_put))
+        .route(
+            "/api/ai/investigate-stream",
+            post(api_ai_investigate_stream),
+        )
+        .route(
+            "/api/ai/context",
+            get(api_ai_context_get).put(api_ai_context_put),
+        )
         .route("/api/ai/report/{incident_id}", get(api_ai_report))
         .route("/api/investigate/now", get(api_investigate_now))
         .route(
@@ -760,7 +790,12 @@ async fn api_incident_feedback(
     let cfg = state.config.read().await.clone();
     let store = IncidentsStore::open(&state.paths.incidents_db)
         .map_err(|e| (StatusCode::INTERNAL_SERVER_ERROR, e.to_string()))?
-        .ok_or_else(|| (StatusCode::NOT_FOUND, "Incident store not found".to_string()))?;
+        .ok_or_else(|| {
+            (
+                StatusCode::NOT_FOUND,
+                "Incident store not found".to_string(),
+            )
+        })?;
     let Some(_incident) = store
         .get_incident(&incident_id)
         .map_err(|e| (StatusCode::INTERNAL_SERVER_ERROR, e.to_string()))?
@@ -773,7 +808,10 @@ async fn api_incident_feedback(
         .unwrap_or("skipped")
         .trim()
         .to_string();
-    if !matches!(feedback_type.as_str(), "confirmed" | "none_correct" | "skipped") {
+    if !matches!(
+        feedback_type.as_str(),
+        "confirmed" | "none_correct" | "skipped"
+    ) {
         return Err((
             StatusCode::BAD_REQUEST,
             "feedback_type must be one of confirmed, none_correct, skipped".to_string(),
@@ -860,15 +898,27 @@ async fn api_adaptive_learning_audit(
         &cfg,
         state.paths.as_ref(),
         &AdaptiveLearningAuditQuery {
-            artifact_kind: params.get("artifact_kind").cloned().filter(|value| !value.is_empty()),
-            artifact_id: params.get("artifact_id").cloned().filter(|value| !value.is_empty()),
-            action: params.get("action").cloned().filter(|value| !value.is_empty()),
-            review_status_after: params.get("review_status").cloned().filter(|value| !value.is_empty()),
+            artifact_kind: params
+                .get("artifact_kind")
+                .cloned()
+                .filter(|value| !value.is_empty()),
+            artifact_id: params
+                .get("artifact_id")
+                .cloned()
+                .filter(|value| !value.is_empty()),
+            action: params
+                .get("action")
+                .cloned()
+                .filter(|value| !value.is_empty()),
+            review_status_after: params
+                .get("review_status")
+                .cloned()
+                .filter(|value| !value.is_empty()),
             limit,
             offset,
         },
     )
-        .map_err(|e| (StatusCode::INTERNAL_SERVER_ERROR, e.to_string()))?;
+    .map_err(|e| (StatusCode::INTERNAL_SERVER_ERROR, e.to_string()))?;
     Ok(Json(payload))
 }
 
@@ -893,15 +943,27 @@ async fn api_adaptive_learning_history(
         &cfg,
         state.paths.as_ref(),
         &AdaptiveLearningHistoryQuery {
-            artifact_kind: params.get("artifact_kind").cloned().filter(|value| !value.is_empty()),
-            artifact_id: params.get("artifact_id").cloned().filter(|value| !value.is_empty()),
-            incident_id: params.get("incident_id").cloned().filter(|value| !value.is_empty()),
-            cause_type: params.get("cause_type").cloned().filter(|value| !value.is_empty()),
+            artifact_kind: params
+                .get("artifact_kind")
+                .cloned()
+                .filter(|value| !value.is_empty()),
+            artifact_id: params
+                .get("artifact_id")
+                .cloned()
+                .filter(|value| !value.is_empty()),
+            incident_id: params
+                .get("incident_id")
+                .cloned()
+                .filter(|value| !value.is_empty()),
+            cause_type: params
+                .get("cause_type")
+                .cloned()
+                .filter(|value| !value.is_empty()),
             limit,
             offset,
         },
     )
-        .map_err(|e| (StatusCode::INTERNAL_SERVER_ERROR, e.to_string()))?;
+    .map_err(|e| (StatusCode::INTERNAL_SERVER_ERROR, e.to_string()))?;
     Ok(Json(payload))
 }
 
@@ -1135,7 +1197,8 @@ fn parse_adaptive_review_view_draft(
         .get("artifacts")
         .and_then(JsonValue::as_array)
         .map(|items| {
-            items.iter()
+            items
+                .iter()
                 .filter_map(|item| {
                     Some(AdaptiveArtifactSelection {
                         artifact_kind: item
@@ -1215,8 +1278,12 @@ fn aggregate_hypothesis_provenance(
             for item in items {
                 let key = format!(
                     "{}:{}",
-                    item.get("kind").and_then(JsonValue::as_str).unwrap_or("unknown"),
-                    item.get("artifact_id").and_then(JsonValue::as_str).unwrap_or("unknown"),
+                    item.get("kind")
+                        .and_then(JsonValue::as_str)
+                        .unwrap_or("unknown"),
+                    item.get("artifact_id")
+                        .and_then(JsonValue::as_str)
+                        .unwrap_or("unknown"),
                 );
                 let impact = item
                     .get("impact_value")
@@ -1430,7 +1497,10 @@ async fn api_ai_doctor(
         enabled,
         provider: probe.provider,
         base_url: probe.base_url,
-        model: probe.resolved_model.clone().unwrap_or_else(|| probe.model.clone()),
+        model: probe
+            .resolved_model
+            .clone()
+            .unwrap_or_else(|| probe.model.clone()),
         investigate_model: Some(inv),
         allow_remote,
         token_env_set: !token_env.is_empty(),
@@ -1452,16 +1522,10 @@ async fn api_investigate_now(
     let mode = current_mode(&cfg, params.get("mode").map(String::as_str));
     let focus = "overview".to_string();
     let monitor = resolve_monitor_seconds(&cfg, params.get("monitor_seconds"), None);
-    let bundle = investigation_bundle_enriched(
-        state.paths.as_ref(),
-        &cfg,
-        &focus,
-        "",
-        &mode,
-        monitor,
-    )
-    .await
-    .map_err(|e| (investigation_status(&e), e.to_string()))?;
+    let bundle =
+        investigation_bundle_enriched(state.paths.as_ref(), &cfg, &focus, "", &mode, monitor)
+            .await
+            .map_err(|e| (investigation_status(&e), e.to_string()))?;
     investigation_response_for_bundle(
         state.paths.as_ref(),
         &cfg,
@@ -1528,16 +1592,10 @@ async fn api_investigate_incident(
     let mode = current_mode(&cfg, params.get("mode").map(String::as_str));
     let focus = format!("incident:{incident_id}");
     let monitor = resolve_monitor_seconds(&cfg, params.get("monitor_seconds"), None);
-    let bundle = investigation_bundle_enriched(
-        state.paths.as_ref(),
-        &cfg,
-        &focus,
-        "",
-        &mode,
-        monitor,
-    )
-    .await
-    .map_err(|e| (investigation_status(&e), e.to_string()))?;
+    let bundle =
+        investigation_bundle_enriched(state.paths.as_ref(), &cfg, &focus, "", &mode, monitor)
+            .await
+            .map_err(|e| (investigation_status(&e), e.to_string()))?;
     investigation_response_for_bundle(
         state.paths.as_ref(),
         &cfg,
@@ -1559,16 +1617,10 @@ async fn api_investigate_service(
     let mode = current_mode(&cfg, params.get("mode").map(String::as_str));
     let focus = format!("service:{service_id}");
     let monitor = resolve_monitor_seconds(&cfg, params.get("monitor_seconds"), None);
-    let bundle = investigation_bundle_enriched(
-        state.paths.as_ref(),
-        &cfg,
-        &focus,
-        "",
-        &mode,
-        monitor,
-    )
-    .await
-    .map_err(|e| (investigation_status(&e), e.to_string()))?;
+    let bundle =
+        investigation_bundle_enriched(state.paths.as_ref(), &cfg, &focus, "", &mode, monitor)
+            .await
+            .map_err(|e| (investigation_status(&e), e.to_string()))?;
     investigation_response_for_bundle(
         state.paths.as_ref(),
         &cfg,
@@ -1590,16 +1642,10 @@ async fn api_ai_report(
     let mode = current_mode(&cfg, params.get("mode").map(String::as_str));
     let focus = format!("incident:{incident_id}");
     let monitor = resolve_monitor_seconds(&cfg, params.get("monitor_seconds"), None);
-    let bundle = investigation_bundle_enriched(
-        state.paths.as_ref(),
-        &cfg,
-        &focus,
-        "",
-        &mode,
-        monitor,
-    )
-    .await
-    .map_err(|e| (investigation_status(&e), e.to_string()))?;
+    let bundle =
+        investigation_bundle_enriched(state.paths.as_ref(), &cfg, &focus, "", &mode, monitor)
+            .await
+            .map_err(|e| (investigation_status(&e), e.to_string()))?;
     investigation_response_for_bundle(
         state.paths.as_ref(),
         &cfg,
@@ -1659,7 +1705,12 @@ async fn api_ai_context_get(
         .get("scope")
         .map(String::as_str)
         .filter(|s| !s.is_empty())
-        .ok_or_else(|| (StatusCode::BAD_REQUEST, "scope query parameter is required".into()))?;
+        .ok_or_else(|| {
+            (
+                StatusCode::BAD_REQUEST,
+                "scope query parameter is required".into(),
+            )
+        })?;
     initialize_databases(&state.paths.events_db, &state.paths.incidents_db)
         .map_err(|e| (StatusCode::INTERNAL_SERVER_ERROR, e.to_string()))?;
     let store = IncidentsStore::open(&state.paths.incidents_db)
@@ -1848,7 +1899,7 @@ async fn api_ai_investigate_stream(
                 {
                     if !p.is_empty() {
                         assembled.push_str(p);
-                        yield Ok(Event::default().event("delta").data(p.to_string()));
+                        yield Ok(Event::default().event("delta").data(p));
                     }
                 }
             }
@@ -2247,7 +2298,7 @@ async fn api_workspace_add_mapping(
         .to_string();
 
     let mut config = state.config.read().await.clone();
-    let mappings = ensure_toml_array_path(&mut config, &["workspace", "service_mappings"]);
+    let mappings = ensure_toml_array_path(&mut config, &["workspace", "service_mappings"])?;
     mappings.retain(|value| {
         let Some(table) = value.as_table() else {
             return true;
@@ -2332,7 +2383,7 @@ async fn api_topology_add_edge(
         .to_string();
 
     let mut config = state.config.read().await.clone();
-    let edges = ensure_toml_array_path(&mut config, &["topology", "edges"]);
+    let edges = ensure_toml_array_path(&mut config, &["topology", "edges"])?;
     let exists = edges.iter().any(|value| {
         let Some(table) = value.as_table() else {
             return false;
@@ -2438,7 +2489,9 @@ async fn run_investigation_response(
                 if let Some(mut output) = parsed.and_then(normalize_investigation_output) {
                     if output_has_signal(&output) {
                         let grounding = apply_output_grounding(&mut output, &redacted_bundle);
-                        if let Some(w) = hypothesis_rank_alignment_warning(&output, &redacted_bundle) {
+                        if let Some(w) =
+                            hypothesis_rank_alignment_warning(&output, &redacted_bundle)
+                        {
                             warnings.push(w);
                         }
                         return Ok(json!({
@@ -3059,10 +3112,7 @@ fn operator_memory_scope_keys(focus: &str) -> Vec<String> {
 }
 
 fn load_operator_memory(paths: &Paths, focus: &str) -> JsonValue {
-    let Some(store) = (match IncidentsStore::open(&paths.incidents_db) {
-        Ok(s) => s,
-        Err(_) => None,
-    }) else {
+    let Ok(Some(store)) = IncidentsStore::open(&paths.incidents_db) else {
         return json!({});
     };
     let mut out = serde_json::Map::new();
@@ -3093,7 +3143,7 @@ fn build_fleet_evidence_digest(events: &EventsStore, limit: usize) -> Result<Jso
         *sev_counts.entry(sev_label).or_insert(0) += 1;
     }
     let mut top: Vec<(String, u64)> = by_service.into_iter().collect();
-    top.sort_by(|a, b| b.1.cmp(&a.1));
+    top.sort_by_key(|(_, count)| std::cmp::Reverse(*count));
     top.truncate(12);
     Ok(json!({
         "window_events_sampled": rows.len(),
@@ -3137,7 +3187,7 @@ fn score_similar_incidents(current: &IncidentRow, candidates: Vec<IncidentRow>) 
             (s, c)
         })
         .collect();
-    rows.sort_by(|a, b| b.0.cmp(&a.0));
+    rows.sort_by_key(|(score, _)| std::cmp::Reverse(*score));
     rows.into_iter()
         .take(6)
         .filter(|(s, _)| *s > 0)
@@ -3199,7 +3249,9 @@ async fn investigation_bundle_enriched(
     Ok(bundle)
 }
 
-fn collect_allowed_ids_from_bundle(bundle: &JsonValue) -> (HashSet<String>, HashSet<String>, HashSet<String>) {
+fn collect_allowed_ids_from_bundle(
+    bundle: &JsonValue,
+) -> (HashSet<String>, HashSet<String>, HashSet<String>) {
     let mut events = HashSet::new();
     let mut services = HashSet::new();
     let mut incidents = HashSet::new();
@@ -3222,7 +3274,10 @@ fn collect_allowed_ids_from_bundle(bundle: &JsonValue) -> (HashSet<String>, Hash
             }
         }
     }
-    if let Some(arr) = bundle.get("similar_incidents").and_then(JsonValue::as_array) {
+    if let Some(arr) = bundle
+        .get("similar_incidents")
+        .and_then(JsonValue::as_array)
+    {
         for s in arr {
             if let Some(id) = s.get("incident_id").and_then(JsonValue::as_str) {
                 incidents.insert(id.to_string());
@@ -3253,10 +3308,14 @@ fn apply_output_grounding(output: &mut JsonValue, bundle: &JsonValue) -> JsonVal
             ok || id.is_empty()
         });
     }
-    if let Some(arr) = output.get_mut("citations").and_then(JsonValue::as_array_mut) {
+    if let Some(arr) = output
+        .get_mut("citations")
+        .and_then(JsonValue::as_array_mut)
+    {
         arr.retain(|c| {
             let id = c.as_str().unwrap_or("");
-            let ok = allowed_ev.contains(id) || allowed_svc.contains(id) || allowed_inc.contains(id);
+            let ok =
+                allowed_ev.contains(id) || allowed_svc.contains(id) || allowed_inc.contains(id);
             if !ok && !id.is_empty() {
                 removed_citations.push(id.to_string());
             }
@@ -3786,7 +3845,13 @@ fn deterministic_investigation_response(
             .unwrap_or(events.len() as u64);
         let severe_events = events
             .iter()
-            .filter(|event| event.get("severity").and_then(JsonValue::as_i64).unwrap_or_default() >= 3)
+            .filter(|event| {
+                event
+                    .get("severity")
+                    .and_then(JsonValue::as_i64)
+                    .unwrap_or_default()
+                    >= 3
+            })
             .count();
         risk_level = if severe_events > 0 { "medium" } else { "low" }.to_string();
         headline_parts.push(format!(
@@ -4161,16 +4226,19 @@ fn guess_mime(ext: Option<&str>) -> HeaderValue {
 fn severity_value_to_i64(value: &inferra_contracts::SeverityValue) -> Option<i64> {
     match value {
         inferra_contracts::SeverityValue::Level(level) => Some(*level),
-        inferra_contracts::SeverityValue::Label(label) => label.parse::<i64>().ok().or_else(|| {
-            match label.trim().to_ascii_lowercase().as_str() {
-                "trace" | "debug" => Some(0),
-                "info" | "informational" => Some(1),
-                "warn" | "warning" => Some(2),
-                "error" => Some(3),
-                "critical" | "fatal" | "panic" => Some(4),
-                _ => None,
-            }
-        }),
+        inferra_contracts::SeverityValue::Label(label) => {
+            label
+                .parse::<i64>()
+                .ok()
+                .or_else(|| match label.trim().to_ascii_lowercase().as_str() {
+                    "trace" | "debug" => Some(0),
+                    "info" | "informational" => Some(1),
+                    "warn" | "warning" => Some(2),
+                    "error" => Some(3),
+                    "critical" | "fatal" | "panic" => Some(4),
+                    _ => None,
+                })
+        }
     }
 }
 
@@ -4358,7 +4426,16 @@ fn inspect_workspace_project(path: &std::path::Path) -> JsonValue {
     })
 }
 
-fn ensure_toml_array_path<'a>(root: &'a mut TomlValue, path: &[&str]) -> &'a mut Vec<TomlValue> {
+fn ensure_toml_array_path<'a>(
+    root: &'a mut TomlValue,
+    path: &[&str],
+) -> Result<&'a mut Vec<TomlValue>, (StatusCode, String)> {
+    if path.is_empty() {
+        return Err((
+            StatusCode::INTERNAL_SERVER_ERROR,
+            "config path must not be empty".into(),
+        ));
+    }
     let mut current = root;
     for segment in path.iter().take(path.len().saturating_sub(1)) {
         let table = match current {
@@ -4367,7 +4444,12 @@ fn ensure_toml_array_path<'a>(root: &'a mut TomlValue, path: &[&str]) -> &'a mut
                 *current = TomlValue::Table(toml::map::Map::new());
                 match current {
                     TomlValue::Table(table) => table,
-                    _ => unreachable!(),
+                    _ => {
+                        return Err((
+                            StatusCode::INTERNAL_SERVER_ERROR,
+                            "failed to normalize config table".into(),
+                        ));
+                    }
                 }
             }
         };
@@ -4375,14 +4457,19 @@ fn ensure_toml_array_path<'a>(root: &'a mut TomlValue, path: &[&str]) -> &'a mut
             .entry((*segment).to_string())
             .or_insert_with(|| TomlValue::Table(toml::map::Map::new()));
     }
-    let last = path.last().expect("non-empty path");
+    let last = path.last().copied().unwrap();
     let table = match current {
         TomlValue::Table(table) => table,
         _ => {
             *current = TomlValue::Table(toml::map::Map::new());
             match current {
                 TomlValue::Table(table) => table,
-                _ => unreachable!(),
+                _ => {
+                    return Err((
+                        StatusCode::INTERNAL_SERVER_ERROR,
+                        "failed to normalize config table".into(),
+                    ));
+                }
             }
         }
     };
@@ -4393,8 +4480,11 @@ fn ensure_toml_array_path<'a>(root: &'a mut TomlValue, path: &[&str]) -> &'a mut
         *slot = TomlValue::Array(Vec::new());
     }
     match slot {
-        TomlValue::Array(array) => array,
-        _ => unreachable!(),
+        TomlValue::Array(array) => Ok(array),
+        _ => Err((
+            StatusCode::INTERNAL_SERVER_ERROR,
+            "failed to allocate config array".into(),
+        )),
     }
 }
 
@@ -4584,7 +4674,8 @@ enabled = false
     }
 
     fn write_adaptive_learning_history_fixture(paths: &Paths) {
-        initialize_databases(&paths.events_db, &paths.incidents_db).expect("initialize adaptive history fixture tables");
+        initialize_databases(&paths.events_db, &paths.incidents_db)
+            .expect("initialize adaptive history fixture tables");
         let mut incidents = IncidentsStore::open(&paths.incidents_db)
             .expect("open incidents db")
             .expect("incidents store");
@@ -4631,14 +4722,20 @@ enabled = false
     fn write_legacy_adaptive_learning_history_fixture(paths: &Paths) {
         std::fs::write(
             paths.data_dir.join("adaptive_learning_history.jsonl"),
-            concat!(
-                "{\"entry_id\":\"hist-legacy-1\",\"artifact_kind\":\"detector\",\"artifact_id\":\"det-legacy\",\"artifact_label\":\"legacy_detector\",\"incident_id\":\"inc-1\",\"cause_type\":\"database\",\"hypothesis_id\":\"hyp-1\",\"observed_at\":\"2026-05-08T09:55:00Z\",\"score\":0.58,\"rank\":2,\"estimated_impact\":1.2,\"impact_metric\":\"matched_events\",\"score_delta\":0.08,\"rank_delta\":1,\"edge_delta\":null}\n"
-            ),
+            "{\"entry_id\":\"hist-legacy-1\",\"artifact_kind\":\"detector\",\"artifact_id\":\"det-legacy\",\"artifact_label\":\"legacy_detector\",\"incident_id\":\"inc-1\",\"cause_type\":\"database\",\"hypothesis_id\":\"hyp-1\",\"observed_at\":\"2026-05-08T09:55:00Z\",\"score\":0.58,\"rank\":2,\"estimated_impact\":1.2,\"impact_metric\":\"matched_events\",\"score_delta\":0.08,\"rank_delta\":1,\"edge_delta\":null}\n",
         )
         .expect("write legacy adaptive learning history fixture");
     }
 
     fn seed_test_databases(paths: &Paths) {
+        let now = time::OffsetDateTime::now_utc();
+        let fmt = time::format_description::well_known::Rfc3339;
+        let ts_evt1 = (now - time::Duration::hours(2))
+            .format(&fmt)
+            .expect("format evt1 timestamp");
+        let ts_evt2 = (now - time::Duration::hours(1))
+            .format(&fmt)
+            .expect("format evt2 timestamp");
         let events = Connection::open(&paths.events_db).expect("open test events db");
         events
             .execute_batch(
@@ -4659,7 +4756,7 @@ enabled = false
                  VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7)",
                 rusqlite::params![
                     "evt-1",
-                    "2026-05-07T09:00:00Z",
+                    ts_evt1.as_str(),
                     3,
                     "api",
                     "timeout calling postgres",
@@ -4674,7 +4771,7 @@ enabled = false
                  VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7)",
                 rusqlite::params![
                     "evt-2",
-                    "2026-05-07T09:05:00Z",
+                    ts_evt2.as_str(),
                     4,
                     "api",
                     "connection refused from postgres",
@@ -4735,8 +4832,8 @@ enabled = false
                     3,
                     "api",
                     "[\"api\"]",
-                    "2026-05-07T09:00:00Z",
-                    "2026-05-07T09:05:00Z",
+                    ts_evt1.as_str(),
+                    ts_evt2.as_str(),
                     2
                 ],
             )
@@ -4744,13 +4841,13 @@ enabled = false
         incidents
             .execute(
                 "INSERT INTO incident_events (incident_id, event_id, added_at) VALUES (?1, ?2, ?3)",
-                rusqlite::params!["inc-1", "evt-1", "2026-05-07T09:00:00Z"],
+                rusqlite::params!["inc-1", "evt-1", ts_evt1.as_str()],
             )
             .expect("insert incident event 1");
         incidents
             .execute(
                 "INSERT INTO incident_events (incident_id, event_id, added_at) VALUES (?1, ?2, ?3)",
-                rusqlite::params!["inc-1", "evt-2", "2026-05-07T09:05:00Z"],
+                rusqlite::params!["inc-1", "evt-2", ts_evt2.as_str()],
             )
             .expect("insert incident event 2");
         incidents
@@ -5180,7 +5277,11 @@ enabled = false
             .expect("enable native ai");
         }
         let app = app_router(state);
-        let payload = get_json(app.clone(), "/api/investigate/incident/inc-1?monitor_seconds=0").await;
+        let payload = get_json(
+            app.clone(),
+            "/api/investigate/incident/inc-1?monitor_seconds=0",
+        )
+        .await;
         assert!(payload
             .get("audit")
             .and_then(|audit| audit.get("explanation"))
@@ -5362,7 +5463,10 @@ roots = ["{}"]
         )
         .await;
         assert_eq!(status, StatusCode::OK);
-        assert_eq!(payload.get("stored").and_then(JsonValue::as_bool), Some(true));
+        assert_eq!(
+            payload.get("stored").and_then(JsonValue::as_bool),
+            Some(true)
+        );
         assert!(payload
             .get("feedback")
             .and_then(JsonValue::as_array)
@@ -5471,12 +5575,14 @@ roots = ["{}"]
         )
         .await;
         assert_eq!(status, StatusCode::OK);
-        let payload = get_json(app, "/api/learning/adaptive/audit?action=disable&artifact_kind=detector&offset=0&limit=10").await;
+        let payload = get_json(
+            app,
+            "/api/learning/adaptive/audit?action=disable&artifact_kind=detector&offset=0&limit=10",
+        )
+        .await;
         assert_eq!(payload.get("count").and_then(JsonValue::as_u64), Some(1));
         assert_eq!(
-            payload["query"]
-                .get("action")
-                .and_then(JsonValue::as_str),
+            payload["query"].get("action").and_then(JsonValue::as_str),
             Some("disable")
         );
     }
@@ -5524,8 +5630,7 @@ roots = ["{}"]
         let app = app_router(state.clone());
         let payload = get_json(app.clone(), "/api/learning/adaptive/review").await;
         assert_eq!(
-            payload["active_incident_influence"][0]["incident_id"]
-                .as_str(),
+            payload["active_incident_influence"][0]["incident_id"].as_str(),
             Some("inc-1")
         );
         assert!(payload["history_summary"]["count"]
@@ -5569,9 +5674,7 @@ roots = ["{}"]
         let app = app_router(state.clone());
         let initial = get_json(app.clone(), "/api/learning/adaptive/review").await;
         assert_eq!(
-            initial["review_queue"]
-                .as_array()
-                .map(|items| items.len()),
+            initial["review_queue"].as_array().map(|items| items.len()),
             Some(1)
         );
 
@@ -5634,7 +5737,10 @@ roots = ["{}"]
         )
         .await;
         assert_eq!(status, StatusCode::OK);
-        assert_eq!(payload.get("updated_count").and_then(JsonValue::as_u64), Some(2));
+        assert_eq!(
+            payload.get("updated_count").and_then(JsonValue::as_u64),
+            Some(2)
+        );
         assert_eq!(
             payload["review"]["review_counts"]
                 .get("watch")
@@ -5677,7 +5783,10 @@ roots = ["{}"]
         )
         .await;
         assert_eq!(status, StatusCode::OK);
-        assert_eq!(payload.get("updated_count").and_then(JsonValue::as_u64), Some(2));
+        assert_eq!(
+            payload.get("updated_count").and_then(JsonValue::as_u64),
+            Some(2)
+        );
         assert!(payload["review"]["artifacts_requiring_attention"]
             .as_array()
             .map(|items| !items.is_empty())
@@ -5761,7 +5870,8 @@ roots = ["{}"]
         let delete_body = axum::body::to_bytes(delete_response.into_body(), usize::MAX)
             .await
             .expect("read delete body");
-        let delete_payload: JsonValue = serde_json::from_slice(&delete_body).expect("parse delete json");
+        let delete_payload: JsonValue =
+            serde_json::from_slice(&delete_body).expect("parse delete json");
         assert_eq!(
             delete_payload["review"]["saved_views"]
                 .as_array()

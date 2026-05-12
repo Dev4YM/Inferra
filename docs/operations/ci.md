@@ -4,7 +4,7 @@ Reference runners (documented 2026-05): GitHub Actions `ubuntu-latest` / `window
 
 ## Default gate
 
-- Install Python support tooling: `python -m pip install -e ".[dev]"`.
+- Install Python support tooling: `python -m pip install -e ".[dev,legacy]"` (the `legacy` extra pulls archived `deprecated/` runtime deps used by pytest).
 - Frontend build: `npm ci && npm run build` in `src/web/frontend`.
 - Docs: `python -m pip install -e ".[docs,dev]"` then `mkdocs build --strict`.
 - Rust checks: `cargo fmt --manifest-path src/Cargo.toml --all --check`, `cargo clippy --manifest-path src/Cargo.toml --workspace --all-targets -- -D warnings`, `cargo test --manifest-path src/Cargo.toml --workspace`.

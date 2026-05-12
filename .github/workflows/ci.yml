@@ -22,7 +22,7 @@ jobs:
         with:
           python-version: ${{ matrix.python-version }}
       - name: Install
-        run: python -m pip install -e ".[dev]"
+        run: python -m pip install -e ".[dev,legacy]"
       - name: Compile
         run: python -m compileall tests deploy deprecated
       - name: Ruff
@@ -63,6 +63,28 @@ jobs:
       - name: Build frontend
         working-directory: src/web/frontend
         run: npm run build
+      - name: Verify committed ui_dist matches frontend build
+        run: git diff --exit-code src/web/ui_dist
+
+  rust-coverage:
+    name: Rust coverage (llvm-cov)
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: dtolnay/rust-toolchain@stable
+        with:
+          components: llvm-tools-preview
+      - uses: taiki-e/install-action@v2
+        with:
+          tool: cargo-llvm-cov
+      - name: Generate LCOV and enforce minimum line coverage
+        run: cargo llvm-cov test --manifest-path src/Cargo.toml --workspace --lcov --output-path lcov.info --fail-under-lines 22
+      - name: Print coverage summary
+        run: cargo llvm-cov report --manifest-path src/Cargo.toml --summary-only
+      - uses: actions/upload-artifact@v4
+        with:
+          name: rust-lcov
+          path: lcov.info
 
   docs:
     name: Docs strict build
@@ -105,7 +127,7 @@ jobs:
         with:
           python-version: "3.11"
       - name: Install
-        run: python -m pip install -e ".[dev]"
+        run: python -m pip install -e ".[dev,legacy]"
       - name: Chaos
         run: python -m pytest -q -m chaos --tb=short
 
@@ -118,7 +140,7 @@ jobs:
         with:
           python-version: "3.11"
       - name: Install
-        run: python -m pip install -e ".[dev]"
+        run: python -m pip install -e ".[dev,legacy]"
       - name: Perf
         env:
           PERF_REPORT_PATH: ${{ github.workspace }}/perf_report.json

@@ -17,8 +17,8 @@ use inferra_contracts::{
 use inferra_storage::{
     AdaptiveLearningAuditQuery, AdaptiveLearningHistoryQuery, EventsStore, GovernanceSummary,
     IncidentRecord, IncidentsStore, ServiceStats, StoredAdaptiveLearningAuditEntry,
-    StoredAdaptiveLearningHistoryEntry, StoredAdaptiveReviewView, StoredAdaptiveReviewViewSelection,
-    StoredHypothesis, StoredInferenceGraphSnapshot,
+    StoredAdaptiveLearningHistoryEntry, StoredAdaptiveReviewView,
+    StoredAdaptiveReviewViewSelection, StoredHypothesis, StoredInferenceGraphSnapshot,
 };
 use serde::{Deserialize, Serialize};
 use std::path::{Path, PathBuf};
@@ -477,7 +477,8 @@ pub fn build_overview_with_runtime_signals(
         } else if let Some(reason) = runtime_signals.ai_reason.as_deref() {
             summary_parts.push(format!("AI enabled but unavailable: {reason}."));
         } else {
-            summary_parts.push("AI enabled; availability is resolved by the active runtime.".into());
+            summary_parts
+                .push("AI enabled; availability is resolved by the active runtime.".into());
         }
     }
 
@@ -767,7 +768,8 @@ pub fn reconcile_new_events(
         if recent.is_empty() {
             continue;
         }
-        let incident_events = trim_incident_events(&recent, max_events_per_incident, enable_auto_split);
+        let incident_events =
+            trim_incident_events(&recent, max_events_per_incident, enable_auto_split);
         let domain_metrics = analyze_domain_events(config, &incident_events);
         let max_severity = incident_events
             .iter()
@@ -821,11 +823,7 @@ pub fn reconcile_new_events(
                 .iter()
                 .filter_map(|event| event.event_id.clone())
                 .collect::<Vec<_>>();
-            let cluster_payloads = build_clusters(
-                config,
-                &primary_service,
-                &incident_events,
-            );
+            let cluster_payloads = build_clusters(config, &primary_service, &incident_events);
             let cluster_ids = cluster_payloads
                 .iter()
                 .filter_map(|cluster| {
@@ -884,10 +882,12 @@ pub fn reconcile_new_events(
                     incidents.upsert_cluster(&incident_id, cluster_id, &cluster)?;
                 }
             }
-            let inference_graph = build_inference_graph_with_learning(config, &incident_events, &learning);
+            let inference_graph =
+                build_inference_graph_with_learning(config, &incident_events, &learning);
             incidents.upsert_inference_graph_snapshot(&StoredInferenceGraphSnapshot {
                 incident_id: incident_id.clone(),
-                graph_data: serde_json::to_value(&inference_graph).unwrap_or_else(|_| serde_json::json!({})),
+                graph_data: serde_json::to_value(&inference_graph)
+                    .unwrap_or_else(|_| serde_json::json!({})),
                 created_at: updated_at.clone(),
                 event_count: incident_event_ids.len() as i64,
             })?;
@@ -941,7 +941,12 @@ pub fn refresh_incident_reasoning(
     let Some(mut incidents) = IncidentsStore::open(&paths.incidents_db)? else {
         return Ok(false);
     };
-    let learning = sync_learning_artifacts(config, &paths.events_db, &paths.incidents_db, &mut incidents)?;
+    let learning = sync_learning_artifacts(
+        config,
+        &paths.events_db,
+        &paths.incidents_db,
+        &mut incidents,
+    )?;
     refresh_single_incident_reasoning(
         config,
         &paths.incidents_db,
@@ -965,7 +970,12 @@ pub fn adaptive_learning_summary(config: &TomlValue, paths: &Paths) -> Result<se
     };
     ensure_adaptive_learning_storage_imported(config, &paths.incidents_db, &mut incidents)?;
     let audit = read_adaptive_learning_audit(&incidents, 25)?;
-    let learning = sync_learning_artifacts(config, &paths.events_db, &paths.incidents_db, &mut incidents)?;
+    let learning = sync_learning_artifacts(
+        config,
+        &paths.events_db,
+        &paths.incidents_db,
+        &mut incidents,
+    )?;
     Ok(adaptive_learning_summary_payload(
         &learning.adaptive,
         &adaptive_storage,
@@ -1064,7 +1074,12 @@ pub fn adaptive_learning_review_summary(
     };
     ensure_adaptive_learning_storage_imported(config, &paths.incidents_db, &mut incidents)?;
     let audit = read_adaptive_learning_audit(&incidents, 50)?;
-    let learning = sync_learning_artifacts(config, &paths.events_db, &paths.incidents_db, &mut incidents)?;
+    let learning = sync_learning_artifacts(
+        config,
+        &paths.events_db,
+        &paths.incidents_db,
+        &mut incidents,
+    )?;
     let history_summary = adaptive_learning_history_summary(config, paths, 500)?;
     let trend_drilldowns = adaptive_learning_trend_drilldowns(&incidents, 2000, 8)?;
     let active_incident_influence = incidents
@@ -1091,8 +1106,11 @@ pub fn adaptive_learning_review_summary(
                 > 0
         })
         .collect::<Vec<_>>();
-    let comparison_rows =
-        adaptive_review_comparison_rows(&learning.adaptive, &history_summary, &active_incident_influence);
+    let comparison_rows = adaptive_review_comparison_rows(
+        &learning.adaptive,
+        &history_summary,
+        &active_incident_influence,
+    );
     let saved_views = adaptive_review_saved_views(&incidents, &comparison_rows);
     Ok(serde_json::json!({
         "summary": adaptive_learning_summary_payload(
@@ -1189,7 +1207,8 @@ pub fn adaptive_learning_history_summary(
     };
     ensure_adaptive_learning_storage_imported(config, &paths.incidents_db, &mut incidents)?;
     let entries = read_adaptive_learning_history(&incidents, limit)?;
-    let mut by_artifact = std::collections::BTreeMap::<(String, String), Vec<AdaptiveLearningHistoryEntry>>::new();
+    let mut by_artifact =
+        std::collections::BTreeMap::<(String, String), Vec<AdaptiveLearningHistoryEntry>>::new();
     for entry in entries {
         by_artifact
             .entry((entry.artifact_kind.clone(), entry.artifact_id.clone()))
@@ -1287,7 +1306,9 @@ struct AdaptiveArtifactMutationRecord {
     refresh_reasoning: bool,
 }
 
-fn adaptive_artifact_mutation_record_json(record: &AdaptiveArtifactMutationRecord) -> serde_json::Value {
+fn adaptive_artifact_mutation_record_json(
+    record: &AdaptiveArtifactMutationRecord,
+) -> serde_json::Value {
     serde_json::json!({
         "artifact_kind": record.artifact_kind,
         "artifact_id": record.artifact_id,
@@ -1315,7 +1336,12 @@ pub fn adaptive_learning_set_artifact_state(
         return Err(anyhow::anyhow!("incident store not found"));
     };
     ensure_adaptive_learning_storage_imported(config, &paths.incidents_db, &mut incidents)?;
-    let learning = sync_learning_artifacts(config, &paths.events_db, &paths.incidents_db, &mut incidents)?;
+    let learning = sync_learning_artifacts(
+        config,
+        &paths.events_db,
+        &paths.incidents_db,
+        &mut incidents,
+    )?;
     let mut adaptive = learning.adaptive;
     let normalized_kind = artifact_kind.trim().to_ascii_lowercase();
     let normalized_action = action.trim().to_ascii_lowercase();
@@ -1340,7 +1366,8 @@ pub fn adaptive_learning_set_artifact_state(
         disable,
         &status_reason,
         &updated_at,
-    )? else {
+    )?
+    else {
         return Err(anyhow::anyhow!(
             "adaptive learning artifact '{artifact_id}' not found in kind '{artifact_kind}'"
         ));
@@ -1365,9 +1392,19 @@ pub fn adaptive_learning_set_artifact_state(
         created_at: adaptive.last_updated.clone().unwrap_or_else(now_iso),
     };
     append_adaptive_learning_audit(&incidents, &audit_entry)?;
-    refresh_active_incident_reasoning(config, &paths.events_db, &paths.incidents_db, &mut incidents)?;
+    refresh_active_incident_reasoning(
+        config,
+        &paths.events_db,
+        &paths.incidents_db,
+        &mut incidents,
+    )?;
     let audit = read_adaptive_learning_audit(&incidents, 25)?;
-    Ok(adaptive_learning_summary_payload(&adaptive, &adaptive_storage, &audit_storage, &audit))
+    Ok(adaptive_learning_summary_payload(
+        &adaptive,
+        &adaptive_storage,
+        &audit_storage,
+        &audit,
+    ))
 }
 
 pub fn adaptive_learning_review_artifact(
@@ -1382,7 +1419,12 @@ pub fn adaptive_learning_review_artifact(
         return Err(anyhow::anyhow!("incident store not found"));
     };
     ensure_adaptive_learning_storage_imported(config, &paths.incidents_db, &mut incidents)?;
-    let learning = sync_learning_artifacts(config, &paths.events_db, &paths.incidents_db, &mut incidents)?;
+    let learning = sync_learning_artifacts(
+        config,
+        &paths.events_db,
+        &paths.incidents_db,
+        &mut incidents,
+    )?;
     let mut adaptive = learning.adaptive;
     let normalized_kind = artifact_kind.trim().to_ascii_lowercase();
     let normalized_decision = decision.trim().to_ascii_lowercase();
@@ -1398,7 +1440,8 @@ pub fn adaptive_learning_review_artifact(
         &normalized_decision,
         &review_reason,
         &reviewed_at,
-    )? else {
+    )?
+    else {
         return Err(anyhow::anyhow!(
             "adaptive learning artifact '{artifact_id}' not found in kind '{artifact_kind}'"
         ));
@@ -1424,7 +1467,12 @@ pub fn adaptive_learning_review_artifact(
     };
     append_adaptive_learning_audit(&incidents, &audit_entry)?;
     if mutation.refresh_reasoning {
-        refresh_active_incident_reasoning(config, &paths.events_db, &paths.incidents_db, &mut incidents)?;
+        refresh_active_incident_reasoning(
+            config,
+            &paths.events_db,
+            &paths.incidents_db,
+            &mut incidents,
+        )?;
     }
     adaptive_learning_review_summary(config, paths)
 }
@@ -1440,10 +1488,17 @@ pub fn adaptive_learning_bulk_review_artifacts(
         return Err(anyhow::anyhow!("incident store not found"));
     };
     if artifacts.is_empty() {
-        return Err(anyhow::anyhow!("no adaptive learning artifacts were selected"));
+        return Err(anyhow::anyhow!(
+            "no adaptive learning artifacts were selected"
+        ));
     }
     ensure_adaptive_learning_storage_imported(config, &paths.incidents_db, &mut incidents)?;
-    let learning = sync_learning_artifacts(config, &paths.events_db, &paths.incidents_db, &mut incidents)?;
+    let learning = sync_learning_artifacts(
+        config,
+        &paths.events_db,
+        &paths.incidents_db,
+        &mut incidents,
+    )?;
     let mut adaptive = learning.adaptive;
     let normalized_decision = decision.trim().to_ascii_lowercase();
     let review_reason = reason
@@ -1455,7 +1510,8 @@ pub fn adaptive_learning_bulk_review_artifacts(
     let mut updates = Vec::new();
     let mut refresh_reasoning = false;
     for selection in artifacts {
-        let normalized_kind = normalize_adaptive_artifact_kind(&selection.artifact_kind)?.to_string();
+        let normalized_kind =
+            normalize_adaptive_artifact_kind(&selection.artifact_kind)?.to_string();
         let dedup_key = (normalized_kind.clone(), selection.artifact_id.clone());
         if !seen.insert(dedup_key) {
             continue;
@@ -1467,7 +1523,8 @@ pub fn adaptive_learning_bulk_review_artifacts(
             &normalized_decision,
             &review_reason,
             &reviewed_at,
-        )? else {
+        )?
+        else {
             return Err(anyhow::anyhow!(
                 "adaptive learning artifact '{}' not found in kind '{}'",
                 selection.artifact_id,
@@ -1478,7 +1535,9 @@ pub fn adaptive_learning_bulk_review_artifacts(
         updates.push(update);
     }
     if updates.is_empty() {
-        return Err(anyhow::anyhow!("no adaptive learning artifacts were selected"));
+        return Err(anyhow::anyhow!(
+            "no adaptive learning artifacts were selected"
+        ));
     }
     adaptive.last_updated = Some(reviewed_at.clone());
     incidents.replace_adaptive_learning_model(&stored_adaptive_learning_model(&adaptive))?;
@@ -1506,7 +1565,12 @@ pub fn adaptive_learning_bulk_review_artifacts(
         )?;
     }
     if refresh_reasoning {
-        refresh_active_incident_reasoning(config, &paths.events_db, &paths.incidents_db, &mut incidents)?;
+        refresh_active_incident_reasoning(
+            config,
+            &paths.events_db,
+            &paths.incidents_db,
+            &mut incidents,
+        )?;
     }
     Ok(serde_json::json!({
         "updated": true,
@@ -1528,10 +1592,17 @@ pub fn adaptive_learning_bulk_set_artifact_state(
         return Err(anyhow::anyhow!("incident store not found"));
     };
     if artifacts.is_empty() {
-        return Err(anyhow::anyhow!("no adaptive learning artifacts were selected"));
+        return Err(anyhow::anyhow!(
+            "no adaptive learning artifacts were selected"
+        ));
     }
     ensure_adaptive_learning_storage_imported(config, &paths.incidents_db, &mut incidents)?;
-    let learning = sync_learning_artifacts(config, &paths.events_db, &paths.incidents_db, &mut incidents)?;
+    let learning = sync_learning_artifacts(
+        config,
+        &paths.events_db,
+        &paths.incidents_db,
+        &mut incidents,
+    )?;
     let mut adaptive = learning.adaptive;
     let normalized_action = action.trim().to_ascii_lowercase();
     let disable = match normalized_action.as_str() {
@@ -1551,7 +1622,8 @@ pub fn adaptive_learning_bulk_set_artifact_state(
     let mut seen = std::collections::BTreeSet::<(String, String)>::new();
     let mut updates = Vec::new();
     for selection in artifacts {
-        let normalized_kind = normalize_adaptive_artifact_kind(&selection.artifact_kind)?.to_string();
+        let normalized_kind =
+            normalize_adaptive_artifact_kind(&selection.artifact_kind)?.to_string();
         let dedup_key = (normalized_kind.clone(), selection.artifact_id.clone());
         if !seen.insert(dedup_key) {
             continue;
@@ -1563,7 +1635,8 @@ pub fn adaptive_learning_bulk_set_artifact_state(
             disable,
             &status_reason,
             &updated_at,
-        )? else {
+        )?
+        else {
             return Err(anyhow::anyhow!(
                 "adaptive learning artifact '{}' not found in kind '{}'",
                 selection.artifact_id,
@@ -1573,7 +1646,9 @@ pub fn adaptive_learning_bulk_set_artifact_state(
         updates.push(update);
     }
     if updates.is_empty() {
-        return Err(anyhow::anyhow!("no adaptive learning artifacts were selected"));
+        return Err(anyhow::anyhow!(
+            "no adaptive learning artifacts were selected"
+        ));
     }
     adaptive.last_updated = Some(updated_at.clone());
     incidents.replace_adaptive_learning_model(&stored_adaptive_learning_model(&adaptive))?;
@@ -1600,7 +1675,12 @@ pub fn adaptive_learning_bulk_set_artifact_state(
             },
         )?;
     }
-    refresh_active_incident_reasoning(config, &paths.events_db, &paths.incidents_db, &mut incidents)?;
+    refresh_active_incident_reasoning(
+        config,
+        &paths.events_db,
+        &paths.incidents_db,
+        &mut incidents,
+    )?;
     Ok(serde_json::json!({
         "updated": true,
         "updated_count": updates.len(),
@@ -1644,7 +1724,9 @@ pub fn adaptive_learning_save_review_view(
         .artifact_selections
         .iter()
         .filter_map(|selection| {
-            let kind = normalize_adaptive_artifact_kind(&selection.artifact_kind).ok()?.to_string();
+            let kind = normalize_adaptive_artifact_kind(&selection.artifact_kind)
+                .ok()?
+                .to_string();
             let artifact_id = selection.artifact_id.trim();
             if artifact_id.is_empty() {
                 return None;
@@ -1681,7 +1763,9 @@ pub fn adaptive_learning_save_review_view(
             .filter(|value| !value.is_empty())
             .map(str::to_string),
         artifact_selections,
-        created_at: existing.map(|view| view.created_at.clone()).unwrap_or_else(|| now.clone()),
+        created_at: existing
+            .map(|view| view.created_at.clone())
+            .unwrap_or_else(|| now.clone()),
         updated_at: now.clone(),
         last_used_at: existing.and_then(|view| view.last_used_at.clone()),
     })?;
@@ -2025,12 +2109,8 @@ fn build_hypotheses(
             contradiction_events_for_candidate(config, events, &candidate.cause_type);
         let contradiction_ratio = candidate.contradicting_events.len() as f64
             / candidate.supporting_events.len().max(1) as f64;
-        candidate.scoring = candidate_scoring_components(
-            events,
-            candidate,
-            &domain_metrics,
-            inference_graph,
-        );
+        candidate.scoring =
+            candidate_scoring_components(events, candidate, &domain_metrics, inference_graph);
         candidate.score = candidate_score(
             config,
             max_severity_value,
@@ -2155,7 +2235,8 @@ fn refresh_single_incident_reasoning(
     let inference_graph = build_inference_graph_with_learning(config, &incident_events, learning);
     incidents.upsert_inference_graph_snapshot(&StoredInferenceGraphSnapshot {
         incident_id: incident_id.to_string(),
-        graph_data: serde_json::to_value(&inference_graph).unwrap_or_else(|_| serde_json::json!({})),
+        graph_data: serde_json::to_value(&inference_graph)
+            .unwrap_or_else(|_| serde_json::json!({})),
         created_at: updated_at.clone(),
         event_count: incident_events.len() as i64,
     })?;
@@ -2328,12 +2409,9 @@ fn candidate_score(
         + weights.anomaly_severity * scoring.anomaly_severity;
     let normalized = weighted / weights.total.max(0.0001);
     let contradiction_penalty = contradiction_penalty(config, contradiction_ratio);
-    ((prior * 0.25)
-        + (severity_score * 0.1)
-        + (normalized * 0.45)
-        + (scoring.graph_impact * 0.2)
+    ((prior * 0.25) + (severity_score * 0.1) + (normalized * 0.45) + (scoring.graph_impact * 0.2)
         - contradiction_penalty)
-    .clamp(0.0, 0.98)
+        .clamp(0.0, 0.98)
 }
 
 fn confidence_label(config: &TomlValue, score: f64, calibration: &CalibrationModel) -> String {
@@ -2357,11 +2435,9 @@ fn confidence_label(config: &TomlValue, score: f64, calibration: &CalibrationMod
 }
 
 fn default_confidence_label(config: &TomlValue, score: f64) -> String {
-    let (high_threshold, medium_threshold) = calibration_thresholds(config);
+    let (high_threshold, _medium_threshold) = calibration_thresholds(config);
     if score >= high_threshold {
         "medium".into()
-    } else if score >= medium_threshold {
-        "low".into()
     } else {
         "low".into()
     }
@@ -2395,11 +2471,9 @@ fn related_services(config: &TomlValue, primary_service: &str) -> Vec<String> {
 }
 
 fn event_severity(event: &EventRow) -> Option<i64> {
-    event.severity.as_ref().and_then(|value| {
-        match value {
-            SeverityValue::Level(level) => Some(*level),
-            SeverityValue::Label(label) => severity_label_value(label),
-        }
+    event.severity.as_ref().and_then(|value| match value {
+        SeverityValue::Level(level) => Some(*level),
+        SeverityValue::Label(label) => severity_label_value(label),
     })
 }
 
@@ -2838,14 +2912,22 @@ fn trim_incident_events(
 }
 
 fn last_event_timestamp(events: &[EventRow]) -> Option<String> {
-    events.iter().filter_map(|event| event.timestamp.clone()).max()
+    events
+        .iter()
+        .filter_map(|event| event.timestamp.clone())
+        .max()
 }
 
 fn run_incident_lifecycle_maintenance(paths: &Paths, config: &TomlValue) -> Result<()> {
     let Some(mut incidents) = IncidentsStore::open(&paths.incidents_db)? else {
         return Ok(());
     };
-    let _ = sync_learning_artifacts(config, &paths.events_db, &paths.incidents_db, &mut incidents)?;
+    let _ = sync_learning_artifacts(
+        config,
+        &paths.events_db,
+        &paths.incidents_db,
+        &mut incidents,
+    )?;
     run_incident_lifecycle_maintenance_with_store(
         config,
         &paths.events_db,
@@ -2902,9 +2984,10 @@ fn sync_learning_artifacts(
     let events = EventsStore::open(events_db)?;
     let mut calibration =
         load_json_file::<CalibrationModel>(&calibration_path)?.unwrap_or_else(|| {
-            let mut model = CalibrationModel::default();
-            model.buckets = default_calibration_buckets(calibration_bucket_count(config));
-            model
+            CalibrationModel {
+                buckets: default_calibration_buckets(calibration_bucket_count(config)),
+                ..Default::default()
+            }
         });
     if calibration.buckets.is_empty() {
         calibration.buckets = default_calibration_buckets(calibration_bucket_count(config));
@@ -3334,7 +3417,10 @@ fn build_adaptive_learning_history_entries(
         let Some(provenance) = hypothesis.score_breakdown.get("provenance") else {
             continue;
         };
-        let Some(artifacts) = provenance.get("artifacts").and_then(serde_json::Value::as_array) else {
+        let Some(artifacts) = provenance
+            .get("artifacts")
+            .and_then(serde_json::Value::as_array)
+        else {
             continue;
         };
         for artifact in artifacts {
@@ -3416,8 +3502,11 @@ fn previous_artifact_observation(
                 .and_then(serde_json::Value::as_array)
                 .map(|items| {
                     items.iter().any(|artifact| {
-                        artifact.get("kind").and_then(serde_json::Value::as_str) == Some(artifact_kind)
-                            && artifact.get("artifact_id").and_then(serde_json::Value::as_str)
+                        artifact.get("kind").and_then(serde_json::Value::as_str)
+                            == Some(artifact_kind)
+                            && artifact
+                                .get("artifact_id")
+                                .and_then(serde_json::Value::as_str)
                                 == Some(artifact_id)
                     })
                 })
@@ -3686,57 +3775,138 @@ trait ReviewableAdaptiveArtifact {
 }
 
 impl ReviewableAdaptiveArtifact for LearnedDetector {
-    fn manually_disabled(&self) -> bool { self.manually_disabled }
-    fn manually_disabled_mut(&mut self) -> &mut bool { &mut self.manually_disabled }
-    fn status_reason_mut(&mut self) -> &mut Option<String> { &mut self.status_reason }
-    fn confirmations(&self) -> u64 { self.confirmations }
-    fn false_positives(&self) -> u64 { self.false_positives }
-    fn review_status(&self) -> &str { &self.review_status }
-    fn review_status_mut(&mut self) -> &mut String { &mut self.review_status }
-    fn review_reason_mut(&mut self) -> &mut Option<String> { &mut self.review_reason }
-    fn last_reviewed_at_mut(&mut self) -> &mut Option<String> { &mut self.last_reviewed_at }
-    fn updated_at_mut(&mut self) -> &mut String { &mut self.updated_at }
+    fn manually_disabled(&self) -> bool {
+        self.manually_disabled
+    }
+    fn manually_disabled_mut(&mut self) -> &mut bool {
+        &mut self.manually_disabled
+    }
+    fn status_reason_mut(&mut self) -> &mut Option<String> {
+        &mut self.status_reason
+    }
+    fn confirmations(&self) -> u64 {
+        self.confirmations
+    }
+    fn false_positives(&self) -> u64 {
+        self.false_positives
+    }
+    fn review_status(&self) -> &str {
+        &self.review_status
+    }
+    fn review_status_mut(&mut self) -> &mut String {
+        &mut self.review_status
+    }
+    fn review_reason_mut(&mut self) -> &mut Option<String> {
+        &mut self.review_reason
+    }
+    fn last_reviewed_at_mut(&mut self) -> &mut Option<String> {
+        &mut self.last_reviewed_at
+    }
+    fn updated_at_mut(&mut self) -> &mut String {
+        &mut self.updated_at
+    }
 }
 
 impl ReviewableAdaptiveArtifact for LearnedTemplate {
-    fn manually_disabled(&self) -> bool { self.manually_disabled }
-    fn manually_disabled_mut(&mut self) -> &mut bool { &mut self.manually_disabled }
-    fn status_reason_mut(&mut self) -> &mut Option<String> { &mut self.status_reason }
-    fn confirmations(&self) -> u64 { self.confirmations }
-    fn false_positives(&self) -> u64 { self.false_positives }
-    fn review_status(&self) -> &str { &self.review_status }
-    fn review_status_mut(&mut self) -> &mut String { &mut self.review_status }
-    fn review_reason_mut(&mut self) -> &mut Option<String> { &mut self.review_reason }
-    fn last_reviewed_at_mut(&mut self) -> &mut Option<String> { &mut self.last_reviewed_at }
-    fn updated_at_mut(&mut self) -> &mut String { &mut self.updated_at }
+    fn manually_disabled(&self) -> bool {
+        self.manually_disabled
+    }
+    fn manually_disabled_mut(&mut self) -> &mut bool {
+        &mut self.manually_disabled
+    }
+    fn status_reason_mut(&mut self) -> &mut Option<String> {
+        &mut self.status_reason
+    }
+    fn confirmations(&self) -> u64 {
+        self.confirmations
+    }
+    fn false_positives(&self) -> u64 {
+        self.false_positives
+    }
+    fn review_status(&self) -> &str {
+        &self.review_status
+    }
+    fn review_status_mut(&mut self) -> &mut String {
+        &mut self.review_status
+    }
+    fn review_reason_mut(&mut self) -> &mut Option<String> {
+        &mut self.review_reason
+    }
+    fn last_reviewed_at_mut(&mut self) -> &mut Option<String> {
+        &mut self.last_reviewed_at
+    }
+    fn updated_at_mut(&mut self) -> &mut String {
+        &mut self.updated_at
+    }
 }
 
 impl ReviewableAdaptiveArtifact for LearnedComposition {
-    fn manually_disabled(&self) -> bool { self.manually_disabled }
-    fn manually_disabled_mut(&mut self) -> &mut bool { &mut self.manually_disabled }
-    fn status_reason_mut(&mut self) -> &mut Option<String> { &mut self.status_reason }
-    fn confirmations(&self) -> u64 { self.confirmations }
-    fn false_positives(&self) -> u64 { self.false_positives }
-    fn review_status(&self) -> &str { &self.review_status }
-    fn review_status_mut(&mut self) -> &mut String { &mut self.review_status }
-    fn review_reason_mut(&mut self) -> &mut Option<String> { &mut self.review_reason }
-    fn last_reviewed_at_mut(&mut self) -> &mut Option<String> { &mut self.last_reviewed_at }
-    fn updated_at_mut(&mut self) -> &mut String { &mut self.updated_at }
+    fn manually_disabled(&self) -> bool {
+        self.manually_disabled
+    }
+    fn manually_disabled_mut(&mut self) -> &mut bool {
+        &mut self.manually_disabled
+    }
+    fn status_reason_mut(&mut self) -> &mut Option<String> {
+        &mut self.status_reason
+    }
+    fn confirmations(&self) -> u64 {
+        self.confirmations
+    }
+    fn false_positives(&self) -> u64 {
+        self.false_positives
+    }
+    fn review_status(&self) -> &str {
+        &self.review_status
+    }
+    fn review_status_mut(&mut self) -> &mut String {
+        &mut self.review_status
+    }
+    fn review_reason_mut(&mut self) -> &mut Option<String> {
+        &mut self.review_reason
+    }
+    fn last_reviewed_at_mut(&mut self) -> &mut Option<String> {
+        &mut self.last_reviewed_at
+    }
+    fn updated_at_mut(&mut self) -> &mut String {
+        &mut self.updated_at
+    }
 }
 
 impl ReviewableAdaptiveArtifact for LearnedEdgeProfile {
-    fn manually_disabled(&self) -> bool { self.manually_disabled }
-    fn manually_disabled_mut(&mut self) -> &mut bool { &mut self.manually_disabled }
-    fn status_reason_mut(&mut self) -> &mut Option<String> { &mut self.status_reason }
-    fn confirmations(&self) -> u64 { self.confirmations }
-    fn false_positives(&self) -> u64 { self.false_positives }
-    fn review_status(&self) -> &str { &self.review_status }
-    fn review_status_mut(&mut self) -> &mut String { &mut self.review_status }
-    fn review_reason_mut(&mut self) -> &mut Option<String> { &mut self.review_reason }
-    fn last_reviewed_at_mut(&mut self) -> &mut Option<String> { &mut self.last_reviewed_at }
-    fn updated_at_mut(&mut self) -> &mut String { &mut self.updated_at }
+    fn manually_disabled(&self) -> bool {
+        self.manually_disabled
+    }
+    fn manually_disabled_mut(&mut self) -> &mut bool {
+        &mut self.manually_disabled
+    }
+    fn status_reason_mut(&mut self) -> &mut Option<String> {
+        &mut self.status_reason
+    }
+    fn confirmations(&self) -> u64 {
+        self.confirmations
+    }
+    fn false_positives(&self) -> u64 {
+        self.false_positives
+    }
+    fn review_status(&self) -> &str {
+        &self.review_status
+    }
+    fn review_status_mut(&mut self) -> &mut String {
+        &mut self.review_status
+    }
+    fn review_reason_mut(&mut self) -> &mut Option<String> {
+        &mut self.review_reason
+    }
+    fn last_reviewed_at_mut(&mut self) -> &mut Option<String> {
+        &mut self.last_reviewed_at
+    }
+    fn updated_at_mut(&mut self) -> &mut String {
+        &mut self.updated_at
+    }
 }
 
+#[allow(clippy::too_many_arguments)]
 fn apply_review_decision_to_artifact<T: ReviewableAdaptiveArtifact>(
     item: &mut T,
     decision: &str,
@@ -3749,11 +3919,14 @@ fn apply_review_decision_to_artifact<T: ReviewableAdaptiveArtifact>(
     runtime_effect: &mut Option<String>,
     refresh_reasoning: &mut bool,
 ) -> Result<()> {
-    *previous_status = Some(adaptive_artifact_status(
-        item.manually_disabled(),
-        item.confirmations(),
-        item.false_positives(),
-    ).to_string());
+    *previous_status = Some(
+        adaptive_artifact_status(
+            item.manually_disabled(),
+            item.confirmations(),
+            item.false_positives(),
+        )
+        .to_string(),
+    );
     *review_status_before = Some(item.review_status().to_string());
     match decision {
         "approve" => {
@@ -3783,15 +3956,19 @@ fn apply_review_decision_to_artifact<T: ReviewableAdaptiveArtifact>(
                     *item.status_reason_mut() = reason.clone();
                 }
                 *refresh_reasoning = true;
-                *runtime_effect = Some("artifact rejected, disabled, and reasoning refreshed".into());
+                *runtime_effect =
+                    Some("artifact rejected, disabled, and reasoning refreshed".into());
             } else {
                 *runtime_effect = Some("artifact rejected; already disabled".into());
             }
-            *new_status = Some(adaptive_artifact_status(
-                item.manually_disabled(),
-                item.confirmations(),
-                item.false_positives(),
-            ).to_string());
+            *new_status = Some(
+                adaptive_artifact_status(
+                    item.manually_disabled(),
+                    item.confirmations(),
+                    item.false_positives(),
+                )
+                .to_string(),
+            );
         }
         "reset" => {
             *item.review_status_mut() = default_review_status();
@@ -3989,7 +4166,8 @@ fn apply_review_decision_to_selected_artifact(
                 let mut new_status = None::<String>;
                 let mut review_status_before = None::<String>;
                 let mut review_status_after = None::<String>;
-                let mut runtime_effect = Some("review recorded without runtime state change".to_string());
+                let mut runtime_effect =
+                    Some("review recorded without runtime state change".to_string());
                 let mut refresh_reasoning = false;
                 apply_review_decision_to_artifact(
                     item,
@@ -4003,18 +4181,20 @@ fn apply_review_decision_to_selected_artifact(
                     &mut runtime_effect,
                     &mut refresh_reasoning,
                 )?;
-                Ok::<AdaptiveArtifactMutationRecord, anyhow::Error>(AdaptiveArtifactMutationRecord {
-                    artifact_kind: "detector".into(),
-                    artifact_id: artifact_id.to_string(),
-                    label: item.requirement_name.clone(),
-                    previous_status: previous_status.unwrap_or_else(|| "unknown".into()),
-                    new_status: new_status.unwrap_or_else(|| "unknown".into()),
-                    review_status_before,
-                    review_status_after,
-                    runtime_effect,
-                    updated_at: reviewed_at.to_string(),
-                    refresh_reasoning,
-                })
+                Ok::<AdaptiveArtifactMutationRecord, anyhow::Error>(
+                    AdaptiveArtifactMutationRecord {
+                        artifact_kind: "detector".into(),
+                        artifact_id: artifact_id.to_string(),
+                        label: item.requirement_name.clone(),
+                        previous_status: previous_status.unwrap_or_else(|| "unknown".into()),
+                        new_status: new_status.unwrap_or_else(|| "unknown".into()),
+                        review_status_before,
+                        review_status_after,
+                        runtime_effect,
+                        updated_at: reviewed_at.to_string(),
+                        refresh_reasoning,
+                    },
+                )
             })
             .transpose()?,
         "template" => adaptive
@@ -4026,7 +4206,8 @@ fn apply_review_decision_to_selected_artifact(
                 let mut new_status = None::<String>;
                 let mut review_status_before = None::<String>;
                 let mut review_status_after = None::<String>;
-                let mut runtime_effect = Some("review recorded without runtime state change".to_string());
+                let mut runtime_effect =
+                    Some("review recorded without runtime state change".to_string());
                 let mut refresh_reasoning = false;
                 apply_review_decision_to_artifact(
                     item,
@@ -4040,18 +4221,20 @@ fn apply_review_decision_to_selected_artifact(
                     &mut runtime_effect,
                     &mut refresh_reasoning,
                 )?;
-                Ok::<AdaptiveArtifactMutationRecord, anyhow::Error>(AdaptiveArtifactMutationRecord {
-                    artifact_kind: "template".into(),
-                    artifact_id: artifact_id.to_string(),
-                    label: item.template_name.clone(),
-                    previous_status: previous_status.unwrap_or_else(|| "unknown".into()),
-                    new_status: new_status.unwrap_or_else(|| "unknown".into()),
-                    review_status_before,
-                    review_status_after,
-                    runtime_effect,
-                    updated_at: reviewed_at.to_string(),
-                    refresh_reasoning,
-                })
+                Ok::<AdaptiveArtifactMutationRecord, anyhow::Error>(
+                    AdaptiveArtifactMutationRecord {
+                        artifact_kind: "template".into(),
+                        artifact_id: artifact_id.to_string(),
+                        label: item.template_name.clone(),
+                        previous_status: previous_status.unwrap_or_else(|| "unknown".into()),
+                        new_status: new_status.unwrap_or_else(|| "unknown".into()),
+                        review_status_before,
+                        review_status_after,
+                        runtime_effect,
+                        updated_at: reviewed_at.to_string(),
+                        refresh_reasoning,
+                    },
+                )
             })
             .transpose()?,
         "composition" => adaptive
@@ -4063,7 +4246,8 @@ fn apply_review_decision_to_selected_artifact(
                 let mut new_status = None::<String>;
                 let mut review_status_before = None::<String>;
                 let mut review_status_after = None::<String>;
-                let mut runtime_effect = Some("review recorded without runtime state change".to_string());
+                let mut runtime_effect =
+                    Some("review recorded without runtime state change".to_string());
                 let mut refresh_reasoning = false;
                 apply_review_decision_to_artifact(
                     item,
@@ -4077,18 +4261,20 @@ fn apply_review_decision_to_selected_artifact(
                     &mut runtime_effect,
                     &mut refresh_reasoning,
                 )?;
-                Ok::<AdaptiveArtifactMutationRecord, anyhow::Error>(AdaptiveArtifactMutationRecord {
-                    artifact_kind: "composition".into(),
-                    artifact_id: artifact_id.to_string(),
-                    label: item.composition_name.clone(),
-                    previous_status: previous_status.unwrap_or_else(|| "unknown".into()),
-                    new_status: new_status.unwrap_or_else(|| "unknown".into()),
-                    review_status_before,
-                    review_status_after,
-                    runtime_effect,
-                    updated_at: reviewed_at.to_string(),
-                    refresh_reasoning,
-                })
+                Ok::<AdaptiveArtifactMutationRecord, anyhow::Error>(
+                    AdaptiveArtifactMutationRecord {
+                        artifact_kind: "composition".into(),
+                        artifact_id: artifact_id.to_string(),
+                        label: item.composition_name.clone(),
+                        previous_status: previous_status.unwrap_or_else(|| "unknown".into()),
+                        new_status: new_status.unwrap_or_else(|| "unknown".into()),
+                        review_status_before,
+                        review_status_after,
+                        runtime_effect,
+                        updated_at: reviewed_at.to_string(),
+                        refresh_reasoning,
+                    },
+                )
             })
             .transpose()?,
         "edge_profile" => adaptive
@@ -4100,7 +4286,8 @@ fn apply_review_decision_to_selected_artifact(
                 let mut new_status = None::<String>;
                 let mut review_status_before = None::<String>;
                 let mut review_status_after = None::<String>;
-                let mut runtime_effect = Some("review recorded without runtime state change".to_string());
+                let mut runtime_effect =
+                    Some("review recorded without runtime state change".to_string());
                 let mut refresh_reasoning = false;
                 apply_review_decision_to_artifact(
                     item,
@@ -4114,18 +4301,20 @@ fn apply_review_decision_to_selected_artifact(
                     &mut runtime_effect,
                     &mut refresh_reasoning,
                 )?;
-                Ok::<AdaptiveArtifactMutationRecord, anyhow::Error>(AdaptiveArtifactMutationRecord {
-                    artifact_kind: "edge_profile".into(),
-                    artifact_id: artifact_id.to_string(),
-                    label: item.profile_id.clone(),
-                    previous_status: previous_status.unwrap_or_else(|| "unknown".into()),
-                    new_status: new_status.unwrap_or_else(|| "unknown".into()),
-                    review_status_before,
-                    review_status_after,
-                    runtime_effect,
-                    updated_at: reviewed_at.to_string(),
-                    refresh_reasoning,
-                })
+                Ok::<AdaptiveArtifactMutationRecord, anyhow::Error>(
+                    AdaptiveArtifactMutationRecord {
+                        artifact_kind: "edge_profile".into(),
+                        artifact_id: artifact_id.to_string(),
+                        label: item.profile_id.clone(),
+                        previous_status: previous_status.unwrap_or_else(|| "unknown".into()),
+                        new_status: new_status.unwrap_or_else(|| "unknown".into()),
+                        review_status_before,
+                        review_status_after,
+                        runtime_effect,
+                        updated_at: reviewed_at.to_string(),
+                        refresh_reasoning,
+                    },
+                )
             })
             .transpose()?,
         _ => None,
@@ -4139,9 +4328,24 @@ fn adaptive_review_counts(adaptive: &AdaptiveLearningModel) -> serde_json::Value
         .learned_detectors
         .iter()
         .map(|item| item.review_status.as_str())
-        .chain(adaptive.learned_templates.iter().map(|item| item.review_status.as_str()))
-        .chain(adaptive.learned_compositions.iter().map(|item| item.review_status.as_str()))
-        .chain(adaptive.learned_edge_profiles.iter().map(|item| item.review_status.as_str()))
+        .chain(
+            adaptive
+                .learned_templates
+                .iter()
+                .map(|item| item.review_status.as_str()),
+        )
+        .chain(
+            adaptive
+                .learned_compositions
+                .iter()
+                .map(|item| item.review_status.as_str()),
+        )
+        .chain(
+            adaptive
+                .learned_edge_profiles
+                .iter()
+                .map(|item| item.review_status.as_str()),
+        )
     {
         *counts.entry(status.to_string()).or_default() += 1;
     }
@@ -4239,7 +4443,10 @@ fn adaptive_review_queue(adaptive: &AdaptiveLearningModel) -> Vec<serde_json::Va
     queue
 }
 
-fn recent_review_activity(audit: &[AdaptiveLearningAuditEntry], limit: usize) -> Vec<serde_json::Value> {
+fn recent_review_activity(
+    audit: &[AdaptiveLearningAuditEntry],
+    limit: usize,
+) -> Vec<serde_json::Value> {
     audit
         .iter()
         .filter(|entry| entry.review_status_after.is_some())
@@ -4253,14 +4460,18 @@ fn adaptive_review_comparison_rows(
     history_summary: &serde_json::Value,
     active_incident_influence: &[serde_json::Value],
 ) -> Vec<serde_json::Value> {
-    let mut history_index = std::collections::BTreeMap::<(String, String), serde_json::Value>::new();
+    let mut history_index =
+        std::collections::BTreeMap::<(String, String), serde_json::Value>::new();
     for item in history_summary
         .get("artifacts")
         .and_then(serde_json::Value::as_array)
         .into_iter()
         .flatten()
     {
-        let Some(kind) = item.get("artifact_kind").and_then(serde_json::Value::as_str) else {
+        let Some(kind) = item
+            .get("artifact_kind")
+            .and_then(serde_json::Value::as_str)
+        else {
             continue;
         };
         let Some(artifact_id) = item.get("artifact_id").and_then(serde_json::Value::as_str) else {
@@ -4268,7 +4479,8 @@ fn adaptive_review_comparison_rows(
         };
         history_index.insert((kind.to_string(), artifact_id.to_string()), item.clone());
     }
-    let mut influence_index = std::collections::BTreeMap::<(String, String), (u64, f64, Vec<String>)>::new();
+    let mut influence_index =
+        std::collections::BTreeMap::<(String, String), (u64, f64, Vec<String>)>::new();
     for incident in active_incident_influence {
         let incident_id = incident
             .get("incident_id")
@@ -4285,7 +4497,10 @@ fn adaptive_review_comparison_rows(
             let Some(kind) = artifact.get("kind").and_then(serde_json::Value::as_str) else {
                 continue;
             };
-            let Some(artifact_id) = artifact.get("artifact_id").and_then(serde_json::Value::as_str) else {
+            let Some(artifact_id) = artifact
+                .get("artifact_id")
+                .and_then(serde_json::Value::as_str)
+            else {
                 continue;
             };
             let cumulative_impact = artifact
@@ -4323,7 +4538,11 @@ fn adaptive_review_comparison_rows(
             "detector",
             &detector.detector_id,
             &detector.requirement_name,
-            adaptive_artifact_status(detector.manually_disabled, detector.confirmations, detector.false_positives),
+            adaptive_artifact_status(
+                detector.manually_disabled,
+                detector.confirmations,
+                detector.false_positives,
+            ),
             &detector.review_status,
             detector.confirmations,
             detector.false_positives,
@@ -4340,7 +4559,11 @@ fn adaptive_review_comparison_rows(
             "template",
             &template.template_id,
             &template.template_name,
-            adaptive_artifact_status(template.manually_disabled, template.confirmations, template.false_positives),
+            adaptive_artifact_status(
+                template.manually_disabled,
+                template.confirmations,
+                template.false_positives,
+            ),
             &template.review_status,
             template.confirmations,
             template.false_positives,
@@ -4378,7 +4601,11 @@ fn adaptive_review_comparison_rows(
             "edge_profile",
             &profile.profile_id,
             &profile.profile_id,
-            adaptive_artifact_status(profile.manually_disabled, profile.confirmations, profile.false_positives),
+            adaptive_artifact_status(
+                profile.manually_disabled,
+                profile.confirmations,
+                profile.false_positives,
+            ),
             &profile.review_status,
             profile.confirmations,
             profile.false_positives,
@@ -4413,14 +4640,21 @@ fn adaptive_review_comparison_rows(
                 right_confirmations.cmp(&left_confirmations)
             })
             .then_with(|| {
-                let left_label = left.get("label").and_then(serde_json::Value::as_str).unwrap_or("");
-                let right_label = right.get("label").and_then(serde_json::Value::as_str).unwrap_or("");
+                let left_label = left
+                    .get("label")
+                    .and_then(serde_json::Value::as_str)
+                    .unwrap_or("");
+                let right_label = right
+                    .get("label")
+                    .and_then(serde_json::Value::as_str)
+                    .unwrap_or("");
                 left_label.cmp(right_label)
             })
     });
     rows
 }
 
+#[allow(clippy::too_many_arguments)]
 fn adaptive_review_comparison_row(
     artifact_kind: &str,
     artifact_id: &str,
@@ -4506,24 +4740,34 @@ fn adaptive_review_analytics(comparison_rows: &[serde_json::Value]) -> serde_jso
         if row.get("review_status").and_then(serde_json::Value::as_str) == Some("unreviewed") {
             entry.1 += 1;
         }
-        if row.get("attention").and_then(serde_json::Value::as_bool).unwrap_or(false) {
+        if row
+            .get("attention")
+            .and_then(serde_json::Value::as_bool)
+            .unwrap_or(false)
+        {
             entry.2 += 1;
         }
-        if row.get("manually_disabled").and_then(serde_json::Value::as_bool).unwrap_or(false) {
+        if row
+            .get("manually_disabled")
+            .and_then(serde_json::Value::as_bool)
+            .unwrap_or(false)
+        {
             entry.3 += 1;
         }
     }
     let kind_breakdown = by_kind
         .into_iter()
-        .map(|(artifact_kind, (total, unreviewed, attention, manually_disabled))| {
-            serde_json::json!({
-                "artifact_kind": artifact_kind,
-                "total": total,
-                "unreviewed": unreviewed,
-                "attention": attention,
-                "manually_disabled": manually_disabled,
-            })
-        })
+        .map(
+            |(artifact_kind, (total, unreviewed, attention, manually_disabled))| {
+                serde_json::json!({
+                    "artifact_kind": artifact_kind,
+                    "total": total,
+                    "unreviewed": unreviewed,
+                    "attention": attention,
+                    "manually_disabled": manually_disabled,
+                })
+            },
+        )
         .collect::<Vec<_>>();
     serde_json::json!({
         "kind_breakdown": kind_breakdown,
@@ -4568,7 +4812,8 @@ fn adaptive_review_saved_views(
     let Ok(views) = incidents.list_adaptive_review_views() else {
         return Vec::new();
     };
-    views.into_iter()
+    views
+        .into_iter()
         .map(|view| adaptive_review_saved_view_json(&view, comparison_rows))
         .collect()
 }
@@ -4584,29 +4829,49 @@ fn adaptive_review_saved_view_json(
         .collect::<Vec<_>>();
     let pending_review_count = matches
         .iter()
-        .filter(|row| row.get("review_status").and_then(serde_json::Value::as_str) == Some("unreviewed"))
+        .filter(|row| {
+            row.get("review_status").and_then(serde_json::Value::as_str) == Some("unreviewed")
+        })
         .count();
     let attention_count = matches
         .iter()
-        .filter(|row| row.get("attention").and_then(serde_json::Value::as_bool).unwrap_or(false))
+        .filter(|row| {
+            row.get("attention")
+                .and_then(serde_json::Value::as_bool)
+                .unwrap_or(false)
+        })
         .count();
     let active_incident_count = matches
         .iter()
-        .map(|row| row.get("active_incident_count").and_then(serde_json::Value::as_u64).unwrap_or(0))
+        .map(|row| {
+            row.get("active_incident_count")
+                .and_then(serde_json::Value::as_u64)
+                .unwrap_or(0)
+        })
         .sum::<u64>();
     let active_cumulative_impact = matches
         .iter()
-        .map(|row| row.get("active_cumulative_impact").and_then(serde_json::Value::as_f64).unwrap_or(0.0))
+        .map(|row| {
+            row.get("active_cumulative_impact")
+                .and_then(serde_json::Value::as_f64)
+                .unwrap_or(0.0)
+        })
         .sum::<f64>();
     let oldest_pending = matches
         .iter()
         .filter_map(|row| {
             Some((
                 row.get("pending_review_age_hours")?.as_f64()?,
-                row.get("label").and_then(serde_json::Value::as_str).unwrap_or("unknown artifact"),
+                row.get("label")
+                    .and_then(serde_json::Value::as_str)
+                    .unwrap_or("unknown artifact"),
             ))
         })
-        .max_by(|left, right| left.0.partial_cmp(&right.0).unwrap_or(std::cmp::Ordering::Equal));
+        .max_by(|left, right| {
+            left.0
+                .partial_cmp(&right.0)
+                .unwrap_or(std::cmp::Ordering::Equal)
+        });
     serde_json::json!({
         "view_id": view.view_id,
         "name": view.name,
@@ -4634,12 +4899,21 @@ fn adaptive_review_saved_view_json(
     })
 }
 
-fn adaptive_row_matches_saved_view(row: &serde_json::Value, view: &StoredAdaptiveReviewView) -> bool {
+fn adaptive_row_matches_saved_view(
+    row: &serde_json::Value,
+    view: &StoredAdaptiveReviewView,
+) -> bool {
     let key_matches = if view.artifact_selections.is_empty() {
         true
     } else {
-        let row_kind = row.get("artifact_kind").and_then(serde_json::Value::as_str).unwrap_or("");
-        let row_id = row.get("artifact_id").and_then(serde_json::Value::as_str).unwrap_or("");
+        let row_kind = row
+            .get("artifact_kind")
+            .and_then(serde_json::Value::as_str)
+            .unwrap_or("");
+        let row_id = row
+            .get("artifact_id")
+            .and_then(serde_json::Value::as_str)
+            .unwrap_or("");
         view.artifact_selections
             .iter()
             .any(|selection| selection.artifact_kind == row_kind && selection.artifact_id == row_id)
@@ -4647,16 +4921,31 @@ fn adaptive_row_matches_saved_view(row: &serde_json::Value, view: &StoredAdaptiv
     if !key_matches {
         return false;
     }
-    let Some(search) = view.search_text.as_ref().map(|value| value.trim()).filter(|value| !value.is_empty()) else {
+    let Some(search) = view
+        .search_text
+        .as_ref()
+        .map(|value| value.trim())
+        .filter(|value| !value.is_empty())
+    else {
         return true;
     };
     let needle = search.to_ascii_lowercase();
     [
-        row.get("label").and_then(serde_json::Value::as_str).unwrap_or(""),
-        row.get("artifact_id").and_then(serde_json::Value::as_str).unwrap_or(""),
-        row.get("artifact_kind").and_then(serde_json::Value::as_str).unwrap_or(""),
-        row.get("status").and_then(serde_json::Value::as_str).unwrap_or(""),
-        row.get("review_status").and_then(serde_json::Value::as_str).unwrap_or(""),
+        row.get("label")
+            .and_then(serde_json::Value::as_str)
+            .unwrap_or(""),
+        row.get("artifact_id")
+            .and_then(serde_json::Value::as_str)
+            .unwrap_or(""),
+        row.get("artifact_kind")
+            .and_then(serde_json::Value::as_str)
+            .unwrap_or(""),
+        row.get("status")
+            .and_then(serde_json::Value::as_str)
+            .unwrap_or(""),
+        row.get("review_status")
+            .and_then(serde_json::Value::as_str)
+            .unwrap_or(""),
     ]
     .join(" ")
     .to_ascii_lowercase()
@@ -4668,7 +4957,8 @@ fn adaptive_learning_trend_drilldowns(
     limit: usize,
     per_artifact_limit: usize,
 ) -> Result<Vec<serde_json::Value>> {
-    let mut by_artifact = std::collections::BTreeMap::<(String, String), Vec<AdaptiveLearningHistoryEntry>>::new();
+    let mut by_artifact =
+        std::collections::BTreeMap::<(String, String), Vec<AdaptiveLearningHistoryEntry>>::new();
     for entry in read_adaptive_learning_history(incidents, limit)? {
         by_artifact
             .entry((entry.artifact_kind.clone(), entry.artifact_id.clone()))
@@ -4689,22 +4979,27 @@ fn adaptive_learning_trend_drilldowns(
                 .collect::<Vec<_>>()
                 .into_iter()
                 .rev()
-                .map(|entry| serde_json::json!({
-                    "observed_at": entry.observed_at,
-                    "incident_id": entry.incident_id,
-                    "hypothesis_id": entry.hypothesis_id,
-                    "score": entry.score,
-                    "rank": entry.rank,
-                    "estimated_impact": entry.estimated_impact,
-                    "impact_metric": entry.impact_metric,
-                    "score_delta": entry.score_delta,
-                    "rank_delta": entry.rank_delta,
-                    "edge_delta": entry.edge_delta,
-                }))
+                .map(|entry| {
+                    serde_json::json!({
+                        "observed_at": entry.observed_at,
+                        "incident_id": entry.incident_id,
+                        "hypothesis_id": entry.hypothesis_id,
+                        "score": entry.score,
+                        "rank": entry.rank,
+                        "estimated_impact": entry.estimated_impact,
+                        "impact_metric": entry.impact_metric,
+                        "score_delta": entry.score_delta,
+                        "rank_delta": entry.rank_delta,
+                        "edge_delta": entry.edge_delta,
+                    })
+                })
                 .collect::<Vec<_>>();
             let total_abs_delta = entries
                 .iter()
-                .map(|entry| entry.score_delta.unwrap_or_default().abs() + entry.edge_delta.unwrap_or_default().abs())
+                .map(|entry| {
+                    entry.score_delta.unwrap_or_default().abs()
+                        + entry.edge_delta.unwrap_or_default().abs()
+                })
                 .sum::<f64>();
             serde_json::json!({
                 "artifact_kind": artifact_kind,
@@ -4717,11 +5012,13 @@ fn adaptive_learning_trend_drilldowns(
         })
         .collect::<Vec<_>>();
     drilldowns.sort_by(|left, right| {
-        right.get("total_abs_delta")
+        right
+            .get("total_abs_delta")
             .and_then(serde_json::Value::as_f64)
             .unwrap_or_default()
             .partial_cmp(
-                &left.get("total_abs_delta")
+                &left
+                    .get("total_abs_delta")
                     .and_then(serde_json::Value::as_f64)
                     .unwrap_or_default(),
             )
@@ -4865,8 +5162,8 @@ fn apply_feedback_to_calibration(
             {
                 bucket.correct_predictions += 1;
             }
-            bucket.accuracy = bucket.correct_predictions as f64
-                / bucket.total_predictions.max(1) as f64;
+            bucket.accuracy =
+                bucket.correct_predictions as f64 / bucket.total_predictions.max(1) as f64;
             bucket.sample_confidence = if bucket.total_predictions >= min_samples {
                 "sufficient"
             } else {
@@ -4907,7 +5204,9 @@ fn apply_feedback_to_weights(
     {
         return;
     }
-    weights.processed_feedback_ids.push(feedback.feedback_id.clone());
+    weights
+        .processed_feedback_ids
+        .push(feedback.feedback_id.clone());
     if hypotheses.is_empty() || feedback.feedback_type == "skipped" {
         return;
     }
@@ -4926,7 +5225,8 @@ fn apply_feedback_to_weights(
     match feedback.feedback_type.as_str() {
         "confirmed" => {
             let Some(correct) = hypotheses.iter().find(|item| {
-                item.get("hypothesis_id").and_then(serde_json::Value::as_str)
+                item.get("hypothesis_id")
+                    .and_then(serde_json::Value::as_str)
                     == feedback.correct_hypothesis_id.as_deref()
             }) else {
                 return;
@@ -4934,7 +5234,8 @@ fn apply_feedback_to_weights(
             let competitors = hypotheses
                 .iter()
                 .filter(|item| {
-                    item.get("hypothesis_id").and_then(serde_json::Value::as_str)
+                    item.get("hypothesis_id")
+                        .and_then(serde_json::Value::as_str)
                         != feedback.correct_hypothesis_id.as_deref()
                 })
                 .collect::<Vec<_>>();
@@ -4970,7 +5271,12 @@ fn apply_feedback_to_weights(
         }
         _ => {}
     }
-    clamp_learned_weights(&mut weights.effective_weights, &defaults, max_drift, min_weight);
+    clamp_learned_weights(
+        &mut weights.effective_weights,
+        &defaults,
+        max_drift,
+        min_weight,
+    );
     renormalize_weights(&mut weights.effective_weights, defaults.values().sum());
     weights.last_updated = Some(
         feedback
@@ -5025,16 +5331,20 @@ fn apply_feedback_to_adaptive_learning(
     match feedback.feedback_type.as_str() {
         "confirmed" => {
             let Some(correct) = hypotheses.iter().find(|item| {
-                item.get("hypothesis_id").and_then(serde_json::Value::as_str)
+                item.get("hypothesis_id")
+                    .and_then(serde_json::Value::as_str)
                     == feedback.correct_hypothesis_id.as_deref()
             }) else {
                 return Ok(());
             };
-            let supporting_event_ids = parse_json_string_array_value(correct.get("supporting_events"));
+            let supporting_event_ids =
+                parse_json_string_array_value(correct.get("supporting_events"));
             let supporting_events = if supporting_event_ids.is_empty() {
                 incident_events.clone()
             } else {
-                events.get_events(&supporting_event_ids).unwrap_or_else(|_| incident_events.clone())
+                events
+                    .get_events(&supporting_event_ids)
+                    .unwrap_or_else(|_| incident_events.clone())
             };
             if supporting_events.is_empty() {
                 return Ok(());
@@ -5209,10 +5519,7 @@ fn learned_composition_profile(
     })
 }
 
-fn matched_requirement_names(
-    events: &[EventRow],
-    adaptive: &AdaptiveLearningModel,
-) -> Vec<String> {
+fn matched_requirement_names(events: &[EventRow], adaptive: &AdaptiveLearningModel) -> Vec<String> {
     let learning = LearningArtifacts {
         adaptive: adaptive.clone(),
         ..LearningArtifacts::default()
@@ -5259,7 +5566,8 @@ fn preferred_edge_types_for_support(
         .edges
         .iter()
         .filter(|edge| {
-            support_ids.contains(&edge.source_event_id) || support_ids.contains(&edge.target_event_id)
+            support_ids.contains(&edge.source_event_id)
+                || support_ids.contains(&edge.target_event_id)
         })
         .map(|edge| edge.edge_type.clone())
         .collect::<Vec<_>>();
@@ -5283,11 +5591,7 @@ fn stable_learning_terms(events: &[EventRow]) -> Vec<String> {
         .filter(|(_, count)| *count >= min_occurrences)
         .collect::<Vec<_>>();
     stable.sort_by(|left, right| right.1.cmp(&left.1).then_with(|| left.0.cmp(&right.0)));
-    stable
-        .into_iter()
-        .map(|(token, _)| token)
-        .take(6)
-        .collect()
+    stable.into_iter().map(|(token, _)| token).take(6).collect()
 }
 
 fn stable_learning_tags(events: &[EventRow]) -> Vec<String> {
@@ -5340,9 +5644,8 @@ fn learning_stopwords() -> &'static std::collections::BTreeSet<&'static str> {
         std::sync::OnceLock::new();
     STOPWORDS.get_or_init(|| {
         std::collections::BTreeSet::from([
-            "after", "before", "calling", "critical", "error", "failed", "from", "host",
-            "into", "local", "process", "runtime", "service", "started", "state", "then",
-            "with", "worker",
+            "after", "before", "calling", "critical", "error", "failed", "from", "host", "into",
+            "local", "process", "runtime", "service", "started", "state", "then", "with", "worker",
         ])
     })
 }
@@ -5524,8 +5827,10 @@ fn upsert_learned_edge_profiles(
         .cloned()
         .collect::<Vec<_>>();
     for edge in candidate_edges {
-        let source_service = graph_node(incident_graph, &edge.source_event_id).map(|node| node.service_id.clone());
-        let target_service = graph_node(incident_graph, &edge.target_event_id).map(|node| node.service_id.clone());
+        let source_service =
+            graph_node(incident_graph, &edge.source_event_id).map(|node| node.service_id.clone());
+        let target_service =
+            graph_node(incident_graph, &edge.target_event_id).map(|node| node.service_id.clone());
         let profile_id = format!(
             "edge_{}_{}_{}_{}",
             edge.edge_type,
@@ -5622,7 +5927,9 @@ fn mark_learned_false_positives(
             &incident_event_ids,
             &composition.preferred_edge_types,
         );
-        if all_requirements_match && (composition.preferred_edge_types.is_empty() || graph_support > 0.0) {
+        if all_requirements_match
+            && (composition.preferred_edge_types.is_empty() || graph_support > 0.0)
+        {
             composition.false_positives += 1;
             composition.updated_at = now_iso();
         }
@@ -5650,7 +5957,8 @@ fn parse_json_string_array_value(value: Option<&serde_json::Value>) -> Vec<Strin
     value
         .and_then(serde_json::Value::as_array)
         .map(|items| {
-            items.iter()
+            items
+                .iter()
                 .filter_map(serde_json::Value::as_str)
                 .map(str::to_string)
                 .collect::<Vec<_>>()
@@ -5673,7 +5981,11 @@ fn learned_rule_graph_support(
     let matching = inference_graph
         .edges
         .iter()
-        .filter(|edge| preferred_edge_types.iter().any(|item| item == &edge.edge_type))
+        .filter(|edge| {
+            preferred_edge_types
+                .iter()
+                .any(|item| item == &edge.edge_type)
+        })
         .filter(|edge| {
             support_ids.is_empty()
                 || support_ids.contains(&edge.source_event_id)
@@ -5691,7 +6003,9 @@ fn detector_artifact_refs_for_requirements(
     requirements: &[String],
     learning: &LearningArtifacts,
 ) -> Vec<LearningArtifactRef> {
-    let requirement_set = requirements.iter().collect::<std::collections::BTreeSet<_>>();
+    let requirement_set = requirements
+        .iter()
+        .collect::<std::collections::BTreeSet<_>>();
     learning
         .adaptive
         .learned_detectors
@@ -5728,14 +6042,22 @@ fn candidate_learning_provenance(
         .filter(|detector| detector_is_active(detector))
     {
         let matched = event_ids_for_requirement(events, &detector.requirement_name, learning);
-        if matched.iter().any(|event_id| support_ids.contains(event_id)) {
+        if matched
+            .iter()
+            .any(|event_id| support_ids.contains(event_id))
+        {
             refs.push(LearningArtifactRef {
                 kind: "detector".into(),
                 artifact_id: detector.detector_id.clone(),
                 label: detector.requirement_name.clone(),
                 reason: "supporting evidence matched learned detector".into(),
                 impact_metric: Some("matched_events".into()),
-                impact_value: Some(matched.iter().filter(|event_id| support_ids.contains(*event_id)).count() as f64),
+                impact_value: Some(
+                    matched
+                        .iter()
+                        .filter(|event_id| support_ids.contains(*event_id))
+                        .count() as f64,
+                ),
             });
         }
     }
@@ -5790,7 +6112,9 @@ fn edge_profile_refs_for_candidate(
                 || candidate
                     .root_cause_event_id
                     .as_ref()
-                    .map(|event_id| event_id == &edge.source_event_id || event_id == &edge.target_event_id)
+                    .map(|event_id| {
+                        event_id == &edge.source_event_id || event_id == &edge.target_event_id
+                    })
                     .unwrap_or(false)
         })
         .collect::<Vec<_>>();
@@ -5848,7 +6172,10 @@ fn edge_profile_refs_for_candidate(
         .collect()
 }
 
-fn candidate_relevant_edge_types(candidate: &Candidate, inference_graph: &InferenceGraph) -> Vec<String> {
+fn candidate_relevant_edge_types(
+    candidate: &Candidate,
+    inference_graph: &InferenceGraph,
+) -> Vec<String> {
     let support_ids = candidate
         .supporting_events
         .iter()
@@ -5863,7 +6190,9 @@ fn candidate_relevant_edge_types(candidate: &Candidate, inference_graph: &Infere
                 || candidate
                     .root_cause_event_id
                     .as_ref()
-                    .map(|event_id| event_id == &edge.source_event_id || event_id == &edge.target_event_id)
+                    .map(|event_id| {
+                        event_id == &edge.source_event_id || event_id == &edge.target_event_id
+                    })
                     .unwrap_or(false)
         })
         .map(|edge| edge.edge_type.clone())
@@ -5873,9 +6202,7 @@ fn candidate_relevant_edge_types(candidate: &Candidate, inference_graph: &Infere
     edge_types
 }
 
-fn dedup_learning_artifact_refs(
-    refs: Vec<LearningArtifactRef>,
-) -> Vec<LearningArtifactRef> {
+fn dedup_learning_artifact_refs(refs: Vec<LearningArtifactRef>) -> Vec<LearningArtifactRef> {
     let mut by_key = std::collections::BTreeMap::<(String, String), LearningArtifactRef>::new();
     for item in refs {
         let key = (item.kind.clone(), item.artifact_id.clone());
@@ -5942,8 +6269,12 @@ fn apply_learned_edge_adjustment(
     graph_events: &[GraphEvent],
     learning: &LearningArtifacts,
 ) {
-    let source = graph_events.iter().find(|event| event.event_id == edge.source_event_id);
-    let target = graph_events.iter().find(|event| event.event_id == edge.target_event_id);
+    let source = graph_events
+        .iter()
+        .find(|event| event.event_id == edge.source_event_id);
+    let target = graph_events
+        .iter()
+        .find(|event| event.event_id == edge.target_event_id);
     let cause_type = cause_type_for_edge(&edge.edge_type);
     let profiles = learning
         .adaptive
@@ -6055,7 +6386,8 @@ fn learned_detector_matches_event(
         .tags
         .iter()
         .filter(|tag| {
-            event.tags
+            event
+                .tags
                 .as_ref()
                 .map(|items| items.iter().any(|item| item.eq_ignore_ascii_case(tag)))
                 .unwrap_or(false)
@@ -6083,10 +6415,7 @@ fn clamp_learned_weights(
     }
 }
 
-fn renormalize_weights(
-    weights: &mut std::collections::BTreeMap<String, f64>,
-    target_total: f64,
-) {
+fn renormalize_weights(weights: &mut std::collections::BTreeMap<String, f64>, target_total: f64) {
     let current_total = weights.values().sum::<f64>().max(0.0001);
     for value in weights.values_mut() {
         *value = (*value / current_total) * target_total;
@@ -6190,11 +6519,7 @@ fn calibration_staleness_status(config: &TomlValue, calibration: &CalibrationMod
         .and_then(TomlValue::as_integer)
         .unwrap_or(30)
         .max(1);
-    let Some(last_updated) = calibration
-        .last_updated
-        .as_deref()
-        .and_then(parse_rfc3339)
-    else {
+    let Some(last_updated) = calibration.last_updated.as_deref().and_then(parse_rfc3339) else {
         return "insufficient_data".into();
     };
     let age = time::OffsetDateTime::now_utc() - last_updated;
@@ -6221,8 +6546,12 @@ fn scoring_learning_rate(config: &TomlValue) -> f64 {
 }
 
 fn scoring_max_drift(config: &TomlValue) -> f64 {
-    table_f64(config, &["scoring", "tuning", "max_drift_from_default"], 0.5)
-        .clamp(0.0, 1.0)
+    table_f64(
+        config,
+        &["scoring", "tuning", "max_drift_from_default"],
+        0.5,
+    )
+    .clamp(0.0, 1.0)
 }
 
 fn scoring_min_weight(config: &TomlValue) -> f64 {
@@ -6271,7 +6600,8 @@ fn candidate_scoring_components(
     inference_graph: &InferenceGraph,
 ) -> CandidateScoring {
     let support_count = candidate.supporting_events.len().max(1);
-    let coverage = (support_count as f64 / domain_metrics.event_count.max(1) as f64).clamp(0.0, 1.0);
+    let coverage =
+        (support_count as f64 / domain_metrics.event_count.max(1) as f64).clamp(0.0, 1.0);
     let related_services = candidate.affected_services.len().max(1);
     let source_types = distinct_source_types(events).len().max(1);
     let base_correlation = (((related_services.saturating_sub(1)).min(4) as f64) / 4.0
@@ -6312,7 +6642,8 @@ fn candidate_tiebreak_ordering(
         .and_then(|value| value.get("tiebreak_order"))
         .and_then(TomlValue::as_array)
         .map(|items| {
-            items.iter()
+            items
+                .iter()
                 .filter_map(TomlValue::as_str)
                 .map(str::to_string)
                 .collect::<Vec<_>>()
@@ -6326,14 +6657,17 @@ fn candidate_tiebreak_ordering(
         });
     for key in order {
         let ordering = match key.as_str() {
-            "evidence_coverage" => cmp_f64_desc(left.scoring.evidence_coverage, right.scoring.evidence_coverage),
+            "evidence_coverage" => cmp_f64_desc(
+                left.scoring.evidence_coverage,
+                right.scoring.evidence_coverage,
+            ),
             "contradicting_events_asc" => left
                 .contradicting_events
                 .len()
                 .cmp(&right.contradicting_events.len()),
-            "root_cause_timestamp_asc" => left
-                .root_cause_timestamp
-                .cmp(&right.root_cause_timestamp),
+            "root_cause_timestamp_asc" => {
+                left.root_cause_timestamp.cmp(&right.root_cause_timestamp)
+            }
             "graph_impact" => cmp_f64_desc(left.scoring.graph_impact, right.scoring.graph_impact),
             _ => std::cmp::Ordering::Equal,
         };
@@ -6422,7 +6756,11 @@ fn support_ids_from_root(graph: &InferenceGraph, root_event_id: &str) -> Vec<Str
     let mut seen = std::collections::BTreeSet::from([root_event_id.to_string()]);
     let mut stack = vec![root_event_id.to_string()];
     while let Some(current) = stack.pop() {
-        for edge in graph.edges.iter().filter(|edge| edge.source_event_id == current) {
+        for edge in graph
+            .edges
+            .iter()
+            .filter(|edge| edge.source_event_id == current)
+        {
             if seen.insert(edge.target_event_id.clone()) {
                 stack.push(edge.target_event_id.clone());
             }
@@ -6441,7 +6779,11 @@ fn graph_origin_impact(graph: &InferenceGraph, root_event_id: &str) -> f64 {
 
 fn dominant_outgoing_edge_type(graph: &InferenceGraph, root_event_id: &str) -> Option<String> {
     let mut counts = std::collections::BTreeMap::<String, usize>::new();
-    for edge in graph.edges.iter().filter(|edge| edge.source_event_id == root_event_id) {
+    for edge in graph
+        .edges
+        .iter()
+        .filter(|edge| edge.source_event_id == root_event_id)
+    {
         *counts.entry(edge.edge_type.clone()).or_default() += 1;
     }
     counts
@@ -6463,7 +6805,8 @@ fn average_outgoing_plausibility(graph: &InferenceGraph, event_id: &str) -> f64 
 }
 
 fn assumptions_for_origin(graph: &InferenceGraph, event_id: &str) -> Vec<String> {
-    graph.edges
+    graph
+        .edges
         .iter()
         .filter(|edge| edge.source_event_id == event_id)
         .flat_map(|edge| edge.requires.iter().cloned())
@@ -6500,8 +6843,8 @@ fn build_inference_graph_with_learning(
         .and_then(TomlValue::as_integer)
         .unwrap_or(500)
         .clamp(10, 5_000) as usize;
-    let plausibility_threshold = table_f64(config, &["inference_graph", "plausibility_threshold"], 0.15)
-        .clamp(0.0, 1.0);
+    let plausibility_threshold =
+        table_f64(config, &["inference_graph", "plausibility_threshold"], 0.15).clamp(0.0, 1.0);
     let max_edges_per_node = config
         .get("inference_graph")
         .and_then(|value| value.get("max_edges_per_node"))
@@ -6794,7 +7137,9 @@ fn resource_preceded_error_edges(
                     &["cpu", "memory", "disk", "oom", "saturation", "resource"],
                 )
         });
-        let error_events = events.iter().filter(|event| event.severity >= SEVERITY_ERROR);
+        let error_events = events
+            .iter()
+            .filter(|event| event.severity >= SEVERITY_ERROR);
         for resource_event in resource_events {
             for error_event in error_events.clone() {
                 if let Some(edge) = make_graph_edge(
@@ -6827,11 +7172,11 @@ fn config_preceded_error_edges(
             )
         });
         for config_event in config_events {
-            for candidate_service in std::iter::once(service_id)
-                .chain(topology.iter().filter_map(|(source, target)| {
-                    (source == service_id).then_some(target)
-                }))
-            {
+            for candidate_service in std::iter::once(service_id).chain(
+                topology
+                    .iter()
+                    .filter_map(|(source, target)| (source == service_id).then_some(target)),
+            ) {
                 if let Some(related_events) = by_service.get(candidate_service.as_str()) {
                     for error_event in related_events
                         .iter()
@@ -6883,7 +7228,8 @@ fn restart_preceded_disconnection_edges(
                 if let Some(dep_events) = by_service.get(*dependent) {
                     for dep_event in dep_events.iter().filter(|event| {
                         has_any_term(
-                            &format!("{} {}", event.summary, event.tags.join(" ")).to_ascii_lowercase(),
+                            &format!("{} {}", event.summary, event.tags.join(" "))
+                                .to_ascii_lowercase(),
                             &["connection refused", "timeout", "unavailable"],
                         )
                     }) {
@@ -6893,7 +7239,9 @@ fn restart_preceded_disconnection_edges(
                             "restart_preceded_disconnection",
                             8.0,
                             30.0,
-                            format!("{service_id} restart preceded dependent failure on {dependent}"),
+                            format!(
+                                "{service_id} restart preceded dependent failure on {dependent}"
+                            ),
                             vec!["restart caused brief unavailability".into()],
                         ) {
                             edges.push(edge);
@@ -7013,7 +7361,13 @@ fn services_for_event_ids(events: &[EventRow], event_ids: &[String]) -> Vec<Stri
     let wanted = event_ids.iter().collect::<std::collections::BTreeSet<_>>();
     events
         .iter()
-        .filter(|event| event.event_id.as_ref().map(|id| wanted.contains(id)).unwrap_or(false))
+        .filter(|event| {
+            event
+                .event_id
+                .as_ref()
+                .map(|id| wanted.contains(id))
+                .unwrap_or(false)
+        })
         .filter_map(|event| event.service_id.clone())
         .collect::<std::collections::BTreeSet<_>>()
         .into_iter()
@@ -7104,7 +7458,8 @@ fn custom_rule_candidates(
                 .get("requires")
                 .and_then(TomlValue::as_array)
                 .map(|items| {
-                    items.iter()
+                    items
+                        .iter()
                         .filter_map(TomlValue::as_str)
                         .map(str::to_string)
                         .collect::<Vec<_>>()
@@ -7225,8 +7580,7 @@ fn custom_rule_candidates(
         }
         supporting.sort();
         supporting.dedup();
-        if rule.requires_same_service && services_in_events(events).len() > 1
-        {
+        if rule.requires_same_service && services_in_events(events).len() > 1 {
             continue;
         }
         if rule.requires_temporal_order
@@ -7234,9 +7588,12 @@ fn custom_rule_candidates(
         {
             continue;
         }
-        let graph_support = learned_rule_graph_support(inference_graph, &supporting, &rule.preferred_edge_types);
+        let graph_support =
+            learned_rule_graph_support(inference_graph, &supporting, &rule.preferred_edge_types);
         let mut provenance_refs = detector_artifact_refs_for_requirements(&requires, learning);
-        if let (Some(kind), Some(artifact_id)) = (rule.artifact_kind.as_deref(), rule.artifact_id.as_deref()) {
+        if let (Some(kind), Some(artifact_id)) =
+            (rule.artifact_kind.as_deref(), rule.artifact_id.as_deref())
+        {
             provenance_refs.push(LearningArtifactRef {
                 kind: kind.to_string(),
                 artifact_id: artifact_id.to_string(),
@@ -7261,12 +7618,13 @@ fn custom_rule_candidates(
         } else {
             (rule.confidence * 0.8).clamp(0.0, 1.0)
         };
-        let rule_prior_contribution =
-            (confidence.max(domain_metrics.anomaly_score * 0.5) - (domain_metrics.anomaly_score * 0.5))
-                .max(0.0);
-        for item in provenance_refs.iter_mut().filter(|item| {
-            matches!(item.kind.as_str(), "template" | "composition")
-        }) {
+        let rule_prior_contribution = (confidence.max(domain_metrics.anomaly_score * 0.5)
+            - (domain_metrics.anomaly_score * 0.5))
+            .max(0.0);
+        for item in provenance_refs
+            .iter_mut()
+            .filter(|item| matches!(item.kind.as_str(), "template" | "composition"))
+        {
             item.impact_metric = Some("prior_contribution".into());
             item.impact_value = Some(rule_prior_contribution);
         }
@@ -7300,7 +7658,8 @@ fn custom_rule_candidates(
             supporting_events: supporting,
             affected_services: all_services.to_vec(),
             contradicting_events: Vec::new(),
-            dependency_proximity: ((source_types.len() > 1) as usize as f64 * 0.2 + 0.5).clamp(0.0, 1.0),
+            dependency_proximity: ((source_types.len() > 1) as usize as f64 * 0.2 + 0.5)
+                .clamp(0.0, 1.0),
             is_valid: true,
             invalidation_reasons: Vec::new(),
             root_cause_event_id,
@@ -7331,33 +7690,49 @@ fn requirement_matches_event(
 ) -> bool {
     let text = event_signal_text(event);
     let normalized = requirement.trim().to_ascii_lowercase();
-    if let Some(detector) = learning
-        .adaptive
-        .learned_detectors
-        .iter()
-        .find(|detector| detector.requirement_name == normalized && detector_is_active(detector))
+    if let Some(detector) =
+        learning.adaptive.learned_detectors.iter().find(|detector| {
+            detector.requirement_name == normalized && detector_is_active(detector)
+        })
     {
         return learned_detector_matches_event(detector, event, &text);
     }
     match normalized.as_str() {
         "connection_failures_outbound" => has_any_term(
             &text,
-            &["timeout", "connection refused", "upstream", "dependency", "dns"],
+            &[
+                "timeout",
+                "connection refused",
+                "upstream",
+                "dependency",
+                "dns",
+            ],
         ),
-        "error_spike" => event_severity(event).unwrap_or(SEVERITY_INFO) >= SEVERITY_ERROR
-            || has_any_term(&text, &["spike", "burst", "error rate"]),
+        "error_spike" => {
+            event_severity(event).unwrap_or(SEVERITY_INFO) >= SEVERITY_ERROR
+                || has_any_term(&text, &["spike", "burst", "error rate"])
+        }
         "resource_pressure" => has_any_term(
             &text,
-            &["cpu", "memory", "disk", "oom", "resource pressure", "saturation"],
+            &[
+                "cpu",
+                "memory",
+                "disk",
+                "oom",
+                "resource pressure",
+                "saturation",
+            ],
         ),
         "restart_loop" => has_any_term(&text, &["restart", "crash", "panic", "backoff"]),
-        "deployment_event" => has_any_term(
-            &text,
-            &["deploy", "deployment", "rollout", "release"],
-        ),
+        "deployment_event" => has_any_term(&text, &["deploy", "deployment", "rollout", "release"]),
         "config_change_event" => has_any_term(
             &text,
-            &["config change", "configuration", "feature flag", "setting updated"],
+            &[
+                "config change",
+                "configuration",
+                "feature flag",
+                "setting updated",
+            ],
         ),
         other => text.contains(other),
     }
@@ -7392,9 +7767,24 @@ fn contradiction_events_for_candidate(
     if !contradictions_enabled(config) {
         return Vec::new();
     }
-    let generic_terms = ["healthy", "recovered", "restored", "back to normal", "stable"];
-    let resource_terms = ["cpu normal", "memory normal", "disk normal", "resource recovered"];
-    let dependency_terms = ["connection restored", "dependency healthy", "upstream healthy"];
+    let generic_terms = [
+        "healthy",
+        "recovered",
+        "restored",
+        "back to normal",
+        "stable",
+    ];
+    let resource_terms = [
+        "cpu normal",
+        "memory normal",
+        "disk normal",
+        "resource recovered",
+    ];
+    let dependency_terms = [
+        "connection restored",
+        "dependency healthy",
+        "upstream healthy",
+    ];
     let instability_terms = ["started successfully", "steady state", "running normally"];
     let terms: &[&str] = match cause_type {
         "resource_pressure" => &resource_terms,
@@ -7458,7 +7848,9 @@ fn contradiction_penalty(config: &TomlValue, contradiction_ratio: f64) -> f64 {
     } else {
         weak
     };
-    (contradiction_ratio * per_ratio).max(multiplier * weak).clamp(0.0, 0.6)
+    (contradiction_ratio * per_ratio)
+        .max(multiplier * weak)
+        .clamp(0.0, 0.6)
 }
 
 fn contradictions_enabled(config: &TomlValue) -> bool {
@@ -7511,7 +7903,14 @@ fn dependency_proximity_score(cause_type: &str, events: &[EventRow]) -> f64 {
         "dependency_failure" => {
             if has_any_term(
                 &text,
-                &["timeout", "upstream", "database", "redis", "dns", "connection refused"],
+                &[
+                    "timeout",
+                    "upstream",
+                    "database",
+                    "redis",
+                    "dns",
+                    "connection refused",
+                ],
             ) {
                 0.95
             } else {
@@ -7526,19 +7925,21 @@ fn dependency_proximity_score(cause_type: &str, events: &[EventRow]) -> f64 {
             }
         }
         "orchestration_change" => {
-            if has_any_term(&text, &["docker", "kubernetes", "container", "pod", "rollout"]) {
+            if has_any_term(
+                &text,
+                &["docker", "kubernetes", "container", "pod", "rollout"],
+            ) {
                 0.85
             } else {
                 0.4
             }
         }
-        "resource_pressure" => {
-            if has_any_term(&text, &["cpu", "memory", "disk", "oom", "saturation"]) {
-                0.8
-            } else {
-                0.35
-            }
+        "resource_pressure"
+            if has_any_term(&text, &["cpu", "memory", "disk", "oom", "saturation"]) =>
+        {
+            0.8
         }
+        "resource_pressure" => 0.35,
         _ => 0.35,
     }
 }
@@ -7574,17 +7975,29 @@ fn anomaly_trigger_threshold(config: &TomlValue) -> f64 {
 }
 
 fn anomaly_weights(config: &TomlValue) -> AnomalyWeights {
-    let error_rate = table_f64(config, &["anomaly_detection", "weights", "error_rate"], 0.35);
-    let event_volume = table_f64(config, &["anomaly_detection", "weights", "event_volume"], 0.2);
+    let error_rate = table_f64(
+        config,
+        &["anomaly_detection", "weights", "error_rate"],
+        0.35,
+    );
+    let event_volume = table_f64(
+        config,
+        &["anomaly_detection", "weights", "event_volume"],
+        0.2,
+    );
     let new_fingerprint_rate = table_f64(
         config,
         &["anomaly_detection", "weights", "new_fingerprint_rate"],
         0.2,
     );
-    let restart_count = table_f64(config, &["anomaly_detection", "weights", "restart_count"], 0.15);
+    let restart_count = table_f64(
+        config,
+        &["anomaly_detection", "weights", "restart_count"],
+        0.15,
+    );
     let warn_rate = table_f64(config, &["anomaly_detection", "weights", "warn_rate"], 0.1);
-    let total = (error_rate + event_volume + new_fingerprint_rate + restart_count + warn_rate)
-        .max(0.0001);
+    let total =
+        (error_rate + event_volume + new_fingerprint_rate + restart_count + warn_rate).max(0.0001);
     AnomalyWeights {
         error_rate: error_rate / total,
         event_volume: event_volume / total,
@@ -7628,9 +8041,14 @@ fn scoring_weights(config: &TomlValue) -> ScoringWeights {
 }
 
 fn calibration_thresholds(config: &TomlValue) -> (f64, f64) {
-    let high = table_f64(config, &["calibration", "defaults", "high_threshold"], 0.75).clamp(0.0, 1.0);
-    let medium = table_f64(config, &["calibration", "defaults", "medium_threshold"], 0.4)
-        .clamp(0.0, high);
+    let high =
+        table_f64(config, &["calibration", "defaults", "high_threshold"], 0.75).clamp(0.0, 1.0);
+    let medium = table_f64(
+        config,
+        &["calibration", "defaults", "medium_threshold"],
+        0.4,
+    )
+    .clamp(0.0, high);
     (high, medium)
 }
 
@@ -8140,7 +8558,10 @@ fn discover_nearest_workspace_project(path: &Path) -> Option<WorkspaceProject> {
 }
 
 fn is_workspace_discovery_boundary(path: &Path) -> bool {
-    let rendered = path.to_string_lossy().replace('/', "\\").to_ascii_lowercase();
+    let rendered = path
+        .to_string_lossy()
+        .replace('/', "\\")
+        .to_ascii_lowercase();
     rendered == "c:\\"
         || rendered == "c:\\windows"
         || rendered == "c:\\windows\\system32"
@@ -8164,14 +8585,31 @@ const LANGUAGE_SIGNATURES: &[WorkspaceSignature] = &[
         id: "python",
         label: "Python",
         support_type: "language",
-        detects: &["python", "py.exe", "uvicorn", "gunicorn", "daphne", "celery", "flask", "django", "manage.py"],
-        log_hints: &["logging", "structlog", "loguru", "uvicorn access/error logs"],
+        detects: &[
+            "python",
+            "py.exe",
+            "uvicorn",
+            "gunicorn",
+            "daphne",
+            "celery",
+            "flask",
+            "django",
+            "manage.py",
+        ],
+        log_hints: &[
+            "logging",
+            "structlog",
+            "loguru",
+            "uvicorn access/error logs",
+        ],
     },
     WorkspaceSignature {
         id: "nodejs",
         label: "Node.js",
         support_type: "language",
-        detects: &["node", "npm", "npx", "pnpm", "yarn", "tsx", "ts-node", "next", "vite", "nuxt", "nest"],
+        detects: &[
+            "node", "npm", "npx", "pnpm", "yarn", "tsx", "ts-node", "next", "vite", "nuxt", "nest",
+        ],
         log_hints: &["console", "pino", "winston", "morgan", "debug"],
     },
     WorkspaceSignature {
@@ -8257,34 +8695,184 @@ const PROCESS_SIGNATURES: &[WorkspaceSignature] = &[
 ];
 
 const FRAMEWORK_SIGNATURES: &[WorkspaceSignature] = &[
-    WorkspaceSignature { id: "uvicorn", label: "Uvicorn", support_type: "framework", detects: &["uvicorn"], log_hints: &["uvicorn access/error logs"] },
-    WorkspaceSignature { id: "gunicorn", label: "Gunicorn", support_type: "framework", detects: &["gunicorn"], log_hints: &["gunicorn access/error logs"] },
-    WorkspaceSignature { id: "django", label: "Django", support_type: "framework", detects: &["manage.py", "django"], log_hints: &["Django logging config"] },
-    WorkspaceSignature { id: "flask", label: "Flask", support_type: "framework", detects: &["flask"], log_hints: &["werkzeug", "Flask app logs"] },
-    WorkspaceSignature { id: "fastapi", label: "FastAPI", support_type: "framework", detects: &["fastapi"], log_hints: &["uvicorn", "structlog", "logging"] },
-    WorkspaceSignature { id: "celery", label: "Celery", support_type: "worker", detects: &["celery"], log_hints: &["celery worker logs"] },
-    WorkspaceSignature { id: "nextjs", label: "Next.js", support_type: "framework", detects: &["next"], log_hints: &["next dev/start stdout"] },
-    WorkspaceSignature { id: "vite", label: "Vite", support_type: "dev_server", detects: &["vite"], log_hints: &["vite dev server stdout"] },
-    WorkspaceSignature { id: "nuxt", label: "Nuxt", support_type: "framework", detects: &["nuxt"], log_hints: &["nuxt server logs"] },
-    WorkspaceSignature { id: "nestjs", label: "NestJS", support_type: "framework", detects: &["nest"], log_hints: &["Nest logger", "pino", "winston"] },
-    WorkspaceSignature { id: "rails", label: "Rails", support_type: "framework", detects: &["rails"], log_hints: &["log/development.log", "log/production.log"] },
-    WorkspaceSignature { id: "laravel", label: "Laravel", support_type: "framework", detects: &["artisan"], log_hints: &["storage/logs/*.log"] },
-    WorkspaceSignature { id: "spring", label: "Spring", support_type: "framework", detects: &["spring"], log_hints: &["logback", "application logs"] },
+    WorkspaceSignature {
+        id: "uvicorn",
+        label: "Uvicorn",
+        support_type: "framework",
+        detects: &["uvicorn"],
+        log_hints: &["uvicorn access/error logs"],
+    },
+    WorkspaceSignature {
+        id: "gunicorn",
+        label: "Gunicorn",
+        support_type: "framework",
+        detects: &["gunicorn"],
+        log_hints: &["gunicorn access/error logs"],
+    },
+    WorkspaceSignature {
+        id: "django",
+        label: "Django",
+        support_type: "framework",
+        detects: &["manage.py", "django"],
+        log_hints: &["Django logging config"],
+    },
+    WorkspaceSignature {
+        id: "flask",
+        label: "Flask",
+        support_type: "framework",
+        detects: &["flask"],
+        log_hints: &["werkzeug", "Flask app logs"],
+    },
+    WorkspaceSignature {
+        id: "fastapi",
+        label: "FastAPI",
+        support_type: "framework",
+        detects: &["fastapi"],
+        log_hints: &["uvicorn", "structlog", "logging"],
+    },
+    WorkspaceSignature {
+        id: "celery",
+        label: "Celery",
+        support_type: "worker",
+        detects: &["celery"],
+        log_hints: &["celery worker logs"],
+    },
+    WorkspaceSignature {
+        id: "nextjs",
+        label: "Next.js",
+        support_type: "framework",
+        detects: &["next"],
+        log_hints: &["next dev/start stdout"],
+    },
+    WorkspaceSignature {
+        id: "vite",
+        label: "Vite",
+        support_type: "dev_server",
+        detects: &["vite"],
+        log_hints: &["vite dev server stdout"],
+    },
+    WorkspaceSignature {
+        id: "nuxt",
+        label: "Nuxt",
+        support_type: "framework",
+        detects: &["nuxt"],
+        log_hints: &["nuxt server logs"],
+    },
+    WorkspaceSignature {
+        id: "nestjs",
+        label: "NestJS",
+        support_type: "framework",
+        detects: &["nest"],
+        log_hints: &["Nest logger", "pino", "winston"],
+    },
+    WorkspaceSignature {
+        id: "rails",
+        label: "Rails",
+        support_type: "framework",
+        detects: &["rails"],
+        log_hints: &["log/development.log", "log/production.log"],
+    },
+    WorkspaceSignature {
+        id: "laravel",
+        label: "Laravel",
+        support_type: "framework",
+        detects: &["artisan"],
+        log_hints: &["storage/logs/*.log"],
+    },
+    WorkspaceSignature {
+        id: "spring",
+        label: "Spring",
+        support_type: "framework",
+        detects: &["spring"],
+        log_hints: &["logback", "application logs"],
+    },
 ];
 
 const LIBRARY_SIGNATURES: &[WorkspaceSignature] = &[
-    WorkspaceSignature { id: "pino", label: "Pino", support_type: "logging_library", detects: &["pino"], log_hints: &["JSON stdout"] },
-    WorkspaceSignature { id: "winston", label: "Winston", support_type: "logging_library", detects: &["winston"], log_hints: &["file transports", "stdout"] },
-    WorkspaceSignature { id: "morgan", label: "Morgan", support_type: "logging_library", detects: &["morgan"], log_hints: &["HTTP access logs"] },
-    WorkspaceSignature { id: "structlog", label: "structlog", support_type: "logging_library", detects: &["structlog"], log_hints: &["JSON/application logs"] },
-    WorkspaceSignature { id: "loguru", label: "Loguru", support_type: "logging_library", detects: &["loguru"], log_hints: &["sink files", "stderr"] },
-    WorkspaceSignature { id: "logback", label: "Logback", support_type: "logging_library", detects: &["logback"], log_hints: &["Spring/Java application logs"] },
-    WorkspaceSignature { id: "log4j", label: "Log4j", support_type: "logging_library", detects: &["log4j"], log_hints: &["Java application logs"] },
-    WorkspaceSignature { id: "tracing", label: "Rust tracing", support_type: "logging_library", detects: &["tracing"], log_hints: &["tracing subscriber output"] },
-    WorkspaceSignature { id: "serilog", label: "Serilog", support_type: "logging_library", detects: &["serilog"], log_hints: &["structured .NET logs"] },
-    WorkspaceSignature { id: "nlog", label: "NLog", support_type: "logging_library", detects: &["nlog"], log_hints: &[".NET application logs"] },
-    WorkspaceSignature { id: "monolog", label: "Monolog", support_type: "logging_library", detects: &["monolog"], log_hints: &["PHP/Laravel logs"] },
-    WorkspaceSignature { id: "zap", label: "Zap", support_type: "logging_library", detects: &["zap"], log_hints: &["JSON/application logs"] },
+    WorkspaceSignature {
+        id: "pino",
+        label: "Pino",
+        support_type: "logging_library",
+        detects: &["pino"],
+        log_hints: &["JSON stdout"],
+    },
+    WorkspaceSignature {
+        id: "winston",
+        label: "Winston",
+        support_type: "logging_library",
+        detects: &["winston"],
+        log_hints: &["file transports", "stdout"],
+    },
+    WorkspaceSignature {
+        id: "morgan",
+        label: "Morgan",
+        support_type: "logging_library",
+        detects: &["morgan"],
+        log_hints: &["HTTP access logs"],
+    },
+    WorkspaceSignature {
+        id: "structlog",
+        label: "structlog",
+        support_type: "logging_library",
+        detects: &["structlog"],
+        log_hints: &["JSON/application logs"],
+    },
+    WorkspaceSignature {
+        id: "loguru",
+        label: "Loguru",
+        support_type: "logging_library",
+        detects: &["loguru"],
+        log_hints: &["sink files", "stderr"],
+    },
+    WorkspaceSignature {
+        id: "logback",
+        label: "Logback",
+        support_type: "logging_library",
+        detects: &["logback"],
+        log_hints: &["Spring/Java application logs"],
+    },
+    WorkspaceSignature {
+        id: "log4j",
+        label: "Log4j",
+        support_type: "logging_library",
+        detects: &["log4j"],
+        log_hints: &["Java application logs"],
+    },
+    WorkspaceSignature {
+        id: "tracing",
+        label: "Rust tracing",
+        support_type: "logging_library",
+        detects: &["tracing"],
+        log_hints: &["tracing subscriber output"],
+    },
+    WorkspaceSignature {
+        id: "serilog",
+        label: "Serilog",
+        support_type: "logging_library",
+        detects: &["serilog"],
+        log_hints: &["structured .NET logs"],
+    },
+    WorkspaceSignature {
+        id: "nlog",
+        label: "NLog",
+        support_type: "logging_library",
+        detects: &["nlog"],
+        log_hints: &[".NET application logs"],
+    },
+    WorkspaceSignature {
+        id: "monolog",
+        label: "Monolog",
+        support_type: "logging_library",
+        detects: &["monolog"],
+        log_hints: &["PHP/Laravel logs"],
+    },
+    WorkspaceSignature {
+        id: "zap",
+        label: "Zap",
+        support_type: "logging_library",
+        detects: &["zap"],
+        log_hints: &["JSON/application logs"],
+    },
 ];
 
 fn workspace_support_layers() -> Vec<WorkspaceSupportLayer> {
@@ -8364,8 +8952,16 @@ fn support_item(signature: &WorkspaceSignature) -> WorkspaceSupportItem {
         id: signature.id.into(),
         label: signature.label.into(),
         support_type: signature.support_type.into(),
-        detects: signature.detects.iter().map(|item| (*item).into()).collect(),
-        log_hints: signature.log_hints.iter().map(|item| (*item).into()).collect(),
+        detects: signature
+            .detects
+            .iter()
+            .map(|item| (*item).into())
+            .collect(),
+        log_hints: signature
+            .log_hints
+            .iter()
+            .map(|item| (*item).into())
+            .collect(),
         children: Vec::new(),
     }
 }
@@ -8405,7 +9001,7 @@ fn discover_pm2_runtime_apps(projects: &[WorkspaceProject]) -> Vec<WorkspaceRunt
     };
     items
         .iter()
-        .filter_map(|item| {
+        .map(|item| {
             let env = item.get("pm2_env").unwrap_or(&serde_json::Value::Null);
             let name = item
                 .get("name")
@@ -8445,11 +9041,18 @@ fn discover_pm2_runtime_apps(projects: &[WorkspaceProject]) -> Vec<WorkspaceRunt
                     .join(" "),
             )
             .filter(|value| !value.is_empty());
-            let runtime = classify_runtime(&name, command.as_deref().unwrap_or_default(), script.as_deref());
-            let framework = detect_framework(command.as_deref().unwrap_or_default(), script.as_deref());
-            let libraries = detect_libraries(command.as_deref().unwrap_or_default(), script.as_deref());
+            let runtime = classify_runtime(
+                &name,
+                command.as_deref().unwrap_or_default(),
+                script.as_deref(),
+            );
+            let framework =
+                detect_framework(command.as_deref().unwrap_or_default(), script.as_deref());
+            let libraries =
+                detect_libraries(command.as_deref().unwrap_or_default(), script.as_deref());
             let project_path = project_for_paths(projects, cwd.as_deref(), script.as_deref());
-            let log_hints = runtime_log_hints(&runtime, framework.as_deref(), &libraries, Some("pm2"));
+            let log_hints =
+                runtime_log_hints(&runtime, framework.as_deref(), &libraries, Some("pm2"));
             let mut signals = vec![WorkspaceMappingSignal {
                 name: "pm2_jlist".into(),
                 confidence: 0.95,
@@ -8470,7 +9073,7 @@ fn discover_pm2_runtime_apps(projects: &[WorkspaceProject]) -> Vec<WorkspaceRunt
                 });
             }
             let confidence = if project_path.is_some() { 0.95 } else { 0.75 };
-            Some(WorkspaceRuntimeApp {
+            WorkspaceRuntimeApp {
                 pid,
                 name,
                 language: Some(runtime.clone()),
@@ -8488,12 +9091,16 @@ fn discover_pm2_runtime_apps(projects: &[WorkspaceProject]) -> Vec<WorkspaceRunt
                 confidence,
                 source: "pm2".into(),
                 signals,
-            })
+            }
         })
         .collect()
 }
 
-fn command_output_with_timeout(program: &str, args: &[&str], timeout_ms: u64) -> Option<std::process::Output> {
+fn command_output_with_timeout(
+    program: &str,
+    args: &[&str],
+    timeout_ms: u64,
+) -> Option<std::process::Output> {
     let mut child = Command::new(program).args(args).spawn().ok()?;
     let started = std::time::Instant::now();
     loop {
@@ -8533,12 +9140,17 @@ fn discover_process_runtime_apps(projects: &[WorkspaceProject]) -> Vec<Workspace
         let cwd = process.cwd().map(display_path);
         let exe = process.exe().map(display_path);
         let script = infer_script_path(&cmd_parts, cwd.as_deref());
-        let project_path = project_for_paths(projects, cwd.as_deref(), script.as_deref().or(exe.as_deref()));
+        let project_path = project_for_paths(
+            projects,
+            cwd.as_deref(),
+            script.as_deref().or(exe.as_deref()),
+        );
         if project_path.is_none() {
             continue;
         }
         let runtime = classify_runtime(&name, &command, script.as_deref().or(exe.as_deref()));
-        let Some(runtime) = runtime_app_runtime(runtime, project_path.as_deref(), exe.as_deref()) else {
+        let Some(runtime) = runtime_app_runtime(runtime, project_path.as_deref(), exe.as_deref())
+        else {
             continue;
         };
         let app_name = runtime_app_name(&name, script.as_deref(), project_path.as_deref());
@@ -8593,7 +9205,11 @@ fn discover_process_runtime_apps(projects: &[WorkspaceProject]) -> Vec<Workspace
     apps
 }
 
-fn runtime_app_runtime(runtime: String, project_path: Option<&str>, exe: Option<&str>) -> Option<String> {
+fn runtime_app_runtime(
+    runtime: String,
+    project_path: Option<&str>,
+    exe: Option<&str>,
+) -> Option<String> {
     if runtime != "unknown" {
         return Some(runtime);
     }
@@ -8630,7 +9246,10 @@ fn mapping_from_runtime_app(app: &WorkspaceRuntimeApp) -> Option<WorkspaceMappin
         project_path,
         confidence: (app.confidence * 1000.0).round() / 1000.0,
         source,
-        notes: app.framework.as_ref().map(|framework| format!("framework={framework}")),
+        notes: app
+            .framework
+            .as_ref()
+            .map(|framework| format!("framework={framework}")),
         signals,
     })
 }
@@ -8659,7 +9278,10 @@ fn upsert_workspace_mapping(
     }
 }
 
-fn mapping_from_service_tokens(service_id: &str, projects: &[WorkspaceProject]) -> Option<WorkspaceMapping> {
+fn mapping_from_service_tokens(
+    service_id: &str,
+    projects: &[WorkspaceProject],
+) -> Option<WorkspaceMapping> {
     let service_tokens = tokenize_workspace_value(service_id);
     if service_tokens.is_empty() {
         return None;
@@ -8675,9 +9297,11 @@ fn mapping_from_service_tokens(service_id: &str, projects: &[WorkspaceProject]) 
         if overlap.is_empty() {
             continue;
         }
-        let exact_segment = Path::new(&project.path)
-            .components()
-            .any(|part| part.as_os_str().to_string_lossy().eq_ignore_ascii_case(service_id));
+        let exact_segment = Path::new(&project.path).components().any(|part| {
+            part.as_os_str()
+                .to_string_lossy()
+                .eq_ignore_ascii_case(service_id)
+        });
         let mut confidence = (0.25 + 0.2 * overlap.len() as f64).min(0.65);
         if exact_segment {
             confidence = confidence.max(0.7);
@@ -8713,7 +9337,11 @@ fn mapping_from_service_tokens(service_id: &str, projects: &[WorkspaceProject]) 
     best
 }
 
-fn project_for_paths(projects: &[WorkspaceProject], cwd: Option<&str>, candidate: Option<&str>) -> Option<String> {
+fn project_for_paths(
+    projects: &[WorkspaceProject],
+    cwd: Option<&str>,
+    candidate: Option<&str>,
+) -> Option<String> {
     let candidates = [cwd, candidate];
     let mut best: Option<&WorkspaceProject> = None;
     for raw in candidates.into_iter().flatten() {
@@ -8786,21 +9414,33 @@ fn runtime_log_hints(
     manager: Option<&str>,
 ) -> Vec<String> {
     let mut hints = Vec::new();
-    if let Some(signature) = LANGUAGE_SIGNATURES.iter().find(|signature| signature.id == runtime) {
+    if let Some(signature) = LANGUAGE_SIGNATURES
+        .iter()
+        .find(|signature| signature.id == runtime)
+    {
         hints.extend(signature.log_hints.iter().map(|hint| (*hint).to_string()));
     }
     if let Some(framework) = framework {
-        if let Some(signature) = FRAMEWORK_SIGNATURES.iter().find(|signature| signature.id == framework) {
+        if let Some(signature) = FRAMEWORK_SIGNATURES
+            .iter()
+            .find(|signature| signature.id == framework)
+        {
             hints.extend(signature.log_hints.iter().map(|hint| (*hint).to_string()));
         }
     }
     for library in libraries {
-        if let Some(signature) = LIBRARY_SIGNATURES.iter().find(|signature| signature.id == library) {
+        if let Some(signature) = LIBRARY_SIGNATURES
+            .iter()
+            .find(|signature| signature.id == library)
+        {
             hints.extend(signature.log_hints.iter().map(|hint| (*hint).to_string()));
         }
     }
     if let Some(manager) = manager {
-        if let Some(signature) = PROCESS_SIGNATURES.iter().find(|signature| signature.id == manager) {
+        if let Some(signature) = PROCESS_SIGNATURES
+            .iter()
+            .find(|signature| signature.id == manager)
+        {
             hints.extend(signature.log_hints.iter().map(|hint| (*hint).to_string()));
         }
     }
@@ -8811,14 +9451,23 @@ fn runtime_log_hints(
 
 fn process_kind_for(command: Option<&str>, framework: Option<&str>) -> String {
     let haystack = command.unwrap_or_default().to_ascii_lowercase();
-    if matches!(framework, Some("celery" | "sidekiq")) || contains_any(&haystack, &["worker", "queue"]) {
+    if matches!(framework, Some("celery" | "sidekiq"))
+        || contains_any(&haystack, &["worker", "queue"])
+    {
         "worker".into()
     } else if matches!(framework, Some("vite")) || contains_any(&haystack, &[" dev", "vite"]) {
         "dev_server".into()
     } else if framework.is_some()
         || contains_any(
             &haystack,
-            &["server", "serve", "uvicorn", "gunicorn", "next start", "listen"],
+            &[
+                "server",
+                "serve",
+                "uvicorn",
+                "gunicorn",
+                "next start",
+                "listen",
+            ],
         )
     {
         "server".into()
@@ -8829,7 +9478,10 @@ fn process_kind_for(command: Option<&str>, framework: Option<&str>) -> String {
     }
 }
 
-fn match_signature<'a>(haystack: &str, signatures: &'a [WorkspaceSignature]) -> Option<&'a WorkspaceSignature> {
+fn match_signature<'a>(
+    haystack: &str,
+    signatures: &'a [WorkspaceSignature],
+) -> Option<&'a WorkspaceSignature> {
     signatures
         .iter()
         .find(|signature| contains_any(haystack, signature.detects))
@@ -8895,12 +9547,19 @@ fn looks_like_script_path(value: &str) -> bool {
         || value.ends_with("manage.py")
 }
 
-fn runtime_app_name(process_name: &str, script: Option<&str>, project_path: Option<&str>) -> String {
+fn runtime_app_name(
+    process_name: &str,
+    script: Option<&str>,
+    project_path: Option<&str>,
+) -> String {
     if let Some(project_path) = project_path {
         if let Some(name) = project_manifest_name(Path::new(project_path)) {
             return name;
         }
-        if let Some(name) = Path::new(project_path).file_name().and_then(|value| value.to_str()) {
+        if let Some(name) = Path::new(project_path)
+            .file_name()
+            .and_then(|value| value.to_str())
+        {
             return name.to_string();
         }
     }
@@ -8908,7 +9567,10 @@ fn runtime_app_name(process_name: &str, script: Option<&str>, project_path: Opti
         if !script.contains('.') && !script.contains(std::path::MAIN_SEPARATOR) {
             return script.to_string();
         }
-        if let Some(stem) = Path::new(script).file_stem().and_then(|value| value.to_str()) {
+        if let Some(stem) = Path::new(script)
+            .file_stem()
+            .and_then(|value| value.to_str())
+        {
             return stem.to_string();
         }
     }
@@ -9013,985 +9675,4 @@ fn disk_free_near(path: &Path) -> Option<u64> {
 }
 
 #[cfg(test)]
-mod tests {
-    use super::*;
-    use inferra_storage::{
-        initialize_databases, EventsStore, IncidentRecord, IncidentsStore, NewEventRecord,
-        StoredFeedback, StoredHypothesis, StoredInferenceGraphSnapshot,
-    };
-    use std::fs;
-    use std::time::{SystemTime, UNIX_EPOCH};
-
-    fn temp_dir(name: &str) -> std::path::PathBuf {
-        let unique = SystemTime::now()
-            .duration_since(UNIX_EPOCH)
-            .expect("time after epoch")
-            .as_nanos();
-        std::env::temp_dir().join(format!("inferra-core-{name}-{unique}"))
-    }
-
-    fn event(
-        event_id: &str,
-        service_id: &str,
-        message: &str,
-        severity: i64,
-        source_type: &str,
-        timestamp: &str,
-    ) -> EventRow {
-        EventRow {
-            event_id: Some(event_id.into()),
-            timestamp: Some(timestamp.into()),
-            severity: Some(SeverityValue::Level(severity)),
-            service_id: Some(service_id.into()),
-            message: Some(message.into()),
-            summary: None,
-            source_ref: Some(inferra_contracts::EventSourceRef {
-                source_type: Some(source_type.into()),
-            }),
-            tags: None,
-        }
-    }
-
-    #[test]
-    fn ai_status_from_config_surfaces_model_overrides() {
-        let config: TomlValue = r#"
-[ai]
-enabled = true
-provider = "ollama"
-model = "gemma"
-model_status = "gemma-status"
-model_investigate = "gemma-investigate"
-"#
-        .parse()
-        .expect("parse config");
-
-        let status = ai_status_from_config(&config);
-        assert_eq!(status.status_model.as_deref(), Some("gemma-status"));
-        assert_eq!(
-            status.investigate_model.as_deref(),
-            Some("gemma-investigate")
-        );
-    }
-
-    #[test]
-    fn discover_projects_honors_workspace_roots_depth_and_limits() {
-        let root = temp_dir("workspace-scan");
-        let extra_root = root.join("extra-root");
-        fs::create_dir_all(root.join("service-a")).expect("create service-a");
-        fs::create_dir_all(root.join("service-b")).expect("create service-b");
-        fs::create_dir_all(root.join("deep/one/two/three")).expect("create deep service");
-        fs::create_dir_all(extra_root.join("service-c")).expect("create extra service");
-        fs::write(root.join("service-a/Cargo.toml"), "[package]\nname='a'\n")
-            .expect("write cargo marker");
-        fs::write(root.join("service-b/package.json"), "{}").expect("write package marker");
-        fs::write(root.join("deep/one/two/three/pyproject.toml"), "[project]\nname='deep'\n")
-            .expect("write deep marker");
-        fs::write(extra_root.join("service-c/go.mod"), "module example.com/servicec\n")
-            .expect("write go marker");
-
-        let config: TomlValue = r#"
-[workspace]
-max_depth = 2
-max_results = 10
-roots = ["extra-root"]
-"#
-        .parse()
-        .expect("parse config");
-
-        let projects = discover_projects(&config, &root);
-        assert!(projects.iter().any(|project| project.path.contains("service-a")));
-        assert!(projects.iter().any(|project| project.path.contains("service-b")));
-        assert!(projects.iter().any(|project| project.path.contains("service-c")));
-        assert!(!projects.iter().any(|project| project.path.contains("three")));
-
-        let _ = fs::remove_dir_all(&root);
-    }
-
-    #[test]
-    fn runtime_apps_map_to_projects_with_manager_confidence() {
-        let project = WorkspaceProject {
-            path: r"C:\workspace\api".into(),
-            kind: "node".into(),
-            marker: "package.json".into(),
-        };
-        let app = WorkspaceRuntimeApp {
-            pid: Some(42),
-            name: "api".into(),
-            runtime: "nodejs".into(),
-            language: Some("nodejs".into()),
-            process_kind: Some("server".into()),
-            framework: Some("nextjs".into()),
-            libraries: Vec::new(),
-            log_hints: vec!["pm2 logs".into()],
-            manager: Some("pm2".into()),
-            status: Some("online".into()),
-            cwd: Some(r"C:\workspace\api".into()),
-            script: Some(r"C:\workspace\api\server.js".into()),
-            command: Some("node server.js".into()),
-            project_path: Some(project.path.clone()),
-            confidence: 0.95,
-            source: "pm2".into(),
-            signals: vec![WorkspaceMappingSignal {
-                name: "pm2_jlist".into(),
-                confidence: 0.95,
-                detail: "PM2 reported this app in jlist".into(),
-            }],
-        };
-
-        let mapping = mapping_from_runtime_app(&app).expect("runtime mapping");
-        assert_eq!(mapping.service_id, "api");
-        assert_eq!(mapping.project_path, project.path);
-        assert_eq!(mapping.source, "pm2");
-        assert!(mapping.confidence >= 0.9);
-        assert!(mapping
-            .signals
-            .iter()
-            .any(|signal| signal.name == "runtime_app"));
-    }
-
-    #[test]
-    fn service_token_mapping_keeps_low_confidence_fallback_available() {
-        let projects = vec![WorkspaceProject {
-            path: "/srv/projects/billing-api".into(),
-            kind: "python".into(),
-            marker: "pyproject.toml".into(),
-        }];
-
-        let mapping = mapping_from_service_tokens("billing-api", &projects).expect("token mapping");
-        assert_eq!(mapping.project_path, "/srv/projects/billing-api");
-        assert_eq!(mapping.source, "auto");
-        assert!(mapping.confidence >= 0.45);
-    }
-
-    #[test]
-    fn project_for_paths_discovers_project_root_outside_configured_scan_roots() {
-        let root = temp_dir("runtime-project-root");
-        let app = root.join("apps").join("web");
-        let src = app.join("src");
-        fs::create_dir_all(&src).expect("create app src");
-        fs::write(app.join("package.json"), r#"{"name":"web-app"}"#).expect("write package");
-        let script = src.join("server.js");
-        fs::write(&script, "console.log('ok')").expect("write script");
-
-        let discovered = project_for_paths(&[], Some(src.to_string_lossy().as_ref()), Some(script.to_string_lossy().as_ref()))
-            .expect("discover project from runtime path");
-        assert_eq!(
-            discovered,
-            clean_display_path(&app.canonicalize().expect("canonical app").to_string_lossy())
-        );
-
-        let _ = fs::remove_dir_all(&root);
-    }
-
-    #[test]
-    fn clean_display_path_removes_windows_extended_prefix() {
-        assert_eq!(clean_display_path(r"\\?\C:\Users\dev\app"), r"C:\Users\dev\app");
-        assert_eq!(clean_display_path(r"\\?\UNC\server\share\app"), r"\\server\share\app");
-    }
-
-    #[test]
-    fn build_hypotheses_honors_custom_rules_and_calibration() {
-        let config: TomlValue = r#"
-[hypothesis_engine]
-max_hypotheses_per_incident = 5
-min_supporting_events = 1
-min_generation_confidence = 0.1
-dedup_overlap_threshold = 0.5
-
-[[hypothesis_engine.custom_rules]]
-name = "redis_timeout_cascade"
-requires = ["connection_failures_outbound", "error_spike"]
-requires_same_service = false
-requires_temporal_order = true
-cause_type = "dependency_failure"
-cause_subtype = "redis_timeout"
-title_template = "Redis timeout causing service errors"
-confidence = 0.82
-
-[calibration.defaults]
-high_threshold = 0.7
-medium_threshold = 0.45
-"#
-        .parse()
-        .expect("parse config");
-        let events = vec![
-            event(
-                "e1",
-                "api",
-                "redis timeout upstream dependency",
-                SEVERITY_ERROR,
-                "app",
-                "2026-05-08T10:00:00Z",
-            ),
-            event(
-                "e2",
-                "worker",
-                "error spike after connection refused",
-                SEVERITY_ERROR,
-                "app",
-                "2026-05-08T10:00:10Z",
-            ),
-        ];
-        let graph = build_inference_graph(&config, &events);
-        let hypotheses = build_hypotheses(
-            &config,
-            "inc-1",
-            &events,
-            "2026-05-08T10:00:15Z",
-            &graph,
-            &LearningArtifacts::default(),
-        );
-        let top = hypotheses.first().expect("top hypothesis");
-        assert_eq!(top.cause_type, "dependency_failure");
-        assert_eq!(top.confidence_label.as_deref(), Some("medium"));
-        assert!(top.description.contains("Redis timeout causing service errors"));
-    }
-
-    #[test]
-    fn build_hypotheses_marks_contradicted_candidates_invalid() {
-        let config: TomlValue = r#"
-[hypothesis_engine]
-max_hypotheses_per_incident = 5
-min_supporting_events = 1
-min_generation_confidence = 0.1
-
-[hypothesis_validation]
-contradiction_ratio_fail = 0.5
-contradiction_ratio_warn = 0.2
-
-[contradiction_handling]
-enabled = true
-strong_penalty_per_contradiction = 0.2
-weak_penalty_per_contradiction = 0.05
-min_penalty_multiplier = 0.5
-"#
-        .parse()
-        .expect("parse config");
-        let events = vec![
-            event(
-                "e1",
-                "api",
-                "cpu saturation and memory pressure",
-                SEVERITY_ERROR,
-                "host_metrics",
-                "2026-05-08T10:00:00Z",
-            ),
-            event(
-                "e2",
-                "api",
-                "memory normal and resource recovered",
-                SEVERITY_INFO,
-                "host_metrics",
-                "2026-05-08T10:00:05Z",
-            ),
-        ];
-        let graph = build_inference_graph(&config, &events);
-        let resource = build_hypotheses(
-            &config,
-            "inc-2",
-            &events,
-            "2026-05-08T10:00:10Z",
-            &graph,
-            &LearningArtifacts::default(),
-        )
-            .into_iter()
-            .find(|item| item.cause_type == "resource_pressure")
-            .expect("resource hypothesis");
-        assert!(!resource.is_valid);
-        assert!(!resource.invalidation_reasons.is_empty());
-    }
-
-    #[test]
-    fn parse_container_line_extracts_runtime_container() {
-        let container = parse_container_line("api\tghcr.io/acme/api:1.2\tUp 4 minutes")
-            .expect("container line");
-        assert_eq!(container.name, "api");
-        assert_eq!(container.image, "ghcr.io/acme/api:1.2");
-        assert_eq!(container.state, "up");
-    }
-
-    #[test]
-    fn build_inference_graph_creates_roots_and_edges() {
-        let config: TomlValue = r#"
-[inference_graph]
-max_events_for_graph = 50
-plausibility_threshold = 0.05
-max_edges_per_node = 10
-
-[inference_graph.strategies]
-dependency_propagation = true
-same_service_escalation = true
-resource_preceded_error = true
-config_preceded_error = true
-restart_preceded_disconnection = true
-shared_fate = true
-timeout_chain = true
-
-[[topology.edges]]
-source = "api"
-target = "postgres"
-"#
-        .parse()
-        .expect("parse config");
-        let events = vec![
-            event(
-                "e1",
-                "postgres",
-                "postgres restart detected",
-                SEVERITY_ERROR,
-                "app",
-                "2026-05-08T10:00:00Z",
-            ),
-            event(
-                "e2",
-                "api",
-                "connection refused to postgres",
-                SEVERITY_ERROR,
-                "app",
-                "2026-05-08T10:00:05Z",
-            ),
-        ];
-        let graph = build_inference_graph(&config, &events);
-        assert_eq!(graph.root_candidates, vec!["e1".to_string()]);
-        assert!(graph
-            .edges
-            .iter()
-            .any(|edge| edge.target_event_id == "e2" && edge.source_event_id == "e1"));
-    }
-
-    #[test]
-    fn sync_learning_artifacts_updates_calibration_and_weights() {
-        let root = temp_dir("learning");
-        let events_db = root.join("events.db");
-        let incidents_db = root.join("incidents.db");
-        initialize_databases(&events_db, &incidents_db).expect("initialize databases");
-        let mut incidents = IncidentsStore::open(&incidents_db)
-            .expect("open incidents")
-            .expect("incidents store");
-        incidents
-            .upsert_incident(
-                &IncidentRecord {
-                    incident_id: "inc-1".into(),
-                    state: "open".into(),
-                    severity: SEVERITY_ERROR,
-                    primary_service: "api".into(),
-                    affected_services: vec!["api".into()],
-                    created_at: "2026-05-08T10:00:00Z".into(),
-                    updated_at: "2026-05-08T10:00:00Z".into(),
-                    time_range_start: "2026-05-08T10:00:00Z".into(),
-                    time_range_end: "2026-05-08T10:00:00Z".into(),
-                    event_count: 2,
-                    cluster_ids: Vec::new(),
-                    runtime_context: None,
-                    resolution_info: None,
-                },
-                &[],
-            )
-            .expect("upsert incident");
-        incidents
-            .replace_hypotheses(
-                "inc-1",
-                &[
-                    StoredHypothesis {
-                        hypothesis_id: "hyp-ok".into(),
-                        rank: Some(1),
-                        cause_type: "dependency_failure".into(),
-                        description: "correct".into(),
-                        total_score: Some(0.82),
-                        score_breakdown: serde_json::json!({
-                            "temporal_alignment": 0.9,
-                            "correlation_strength": 0.6,
-                            "frequency_weight": 0.4,
-                            "dependency_proximity": 0.95,
-                            "evidence_coverage": 0.9,
-                            "anomaly_severity": 0.5
-                        }),
-                        supporting_events: vec!["e1".into()],
-                        contradicting_events: Vec::new(),
-                        affected_services: vec!["api".into()],
-                        suggested_checks: Vec::new(),
-                        confidence_label: Some("medium".into()),
-                        is_valid: true,
-                        invalidation_reasons: Vec::new(),
-                        created_at: "2026-05-08T10:00:00Z".into(),
-                        updated_at: "2026-05-08T10:00:00Z".into(),
-                    },
-                    StoredHypothesis {
-                        hypothesis_id: "hyp-bad".into(),
-                        rank: Some(2),
-                        cause_type: "unknown".into(),
-                        description: "wrong".into(),
-                        total_score: Some(0.33),
-                        score_breakdown: serde_json::json!({
-                            "temporal_alignment": 0.2,
-                            "correlation_strength": 0.2,
-                            "frequency_weight": 0.1,
-                            "dependency_proximity": 0.2,
-                            "evidence_coverage": 0.1,
-                            "anomaly_severity": 0.2
-                        }),
-                        supporting_events: vec!["e2".into()],
-                        contradicting_events: Vec::new(),
-                        affected_services: vec!["api".into()],
-                        suggested_checks: Vec::new(),
-                        confidence_label: Some("low".into()),
-                        is_valid: true,
-                        invalidation_reasons: Vec::new(),
-                        created_at: "2026-05-08T10:00:00Z".into(),
-                        updated_at: "2026-05-08T10:00:00Z".into(),
-                    },
-                ],
-            )
-            .expect("replace hypotheses");
-        incidents
-            .add_feedback(&StoredFeedback {
-                feedback_id: "fb-1".into(),
-                incident_id: "inc-1".into(),
-                correct_hypothesis_id: Some("hyp-ok".into()),
-                feedback_type: "confirmed".into(),
-                operator_notes: "matched".into(),
-                resolved_at: "2026-05-08T10:05:00Z".into(),
-                created_at: Some("2026-05-08T10:05:00Z".into()),
-            })
-            .expect("add feedback");
-        let config: TomlValue = r#"
-[calibration]
-enabled = true
-bucket_count = 5
-min_samples_per_bucket = 1
-staleness_threshold_days = 30
-persistence_file = "./data/calibration.json"
-
-[scoring.tuning]
-learning_rate = 0.1
-max_drift_from_default = 0.5
-min_weight = 0.03
-"#
-        .parse()
-        .expect("parse config");
-        let learning = sync_learning_artifacts(&config, &events_db, &incidents_db, &mut incidents)
-            .expect("sync learning artifacts");
-        assert_eq!(learning.calibration.total_feedback_count, 1);
-        assert!(learning
-            .calibration
-            .buckets
-            .iter()
-            .any(|bucket| bucket.total_predictions > 0));
-        let default_evidence = scoring_weight_defaults()["evidence_coverage"];
-        let learned_evidence = learning.weights.effective_weights["evidence_coverage"];
-        assert!(learned_evidence > default_evidence);
-        let _ = fs::remove_dir_all(&root);
-    }
-
-    #[test]
-    fn sync_learning_artifacts_learns_detector_and_template_from_feedback() {
-        let root = temp_dir("adaptive-learning");
-        let events_db = root.join("events.db");
-        let incidents_db = root.join("incidents.db");
-        initialize_databases(&events_db, &incidents_db).expect("initialize databases");
-        let mut events = EventsStore::open(&events_db)
-            .expect("open events")
-            .expect("events store");
-        events
-            .insert_batch(&[
-                NewEventRecord {
-                    tags: vec!["migration".into(), "postgres".into()],
-                    ..NewEventRecord::minimal(
-                        "e1",
-                        "2026-05-08T10:00:00Z",
-                        "api",
-                        SEVERITY_ERROR,
-                        "schema migration applied to postgres and queries started timing out",
-                        "app",
-                        "2026-05-08T10:00:00Z",
-                    )
-                },
-                NewEventRecord {
-                    tags: vec!["migration".into(), "timeout".into()],
-                    ..NewEventRecord::minimal(
-                        "e2",
-                        "2026-05-08T10:00:03Z",
-                        "api",
-                        SEVERITY_ERROR,
-                        "request timeout after schema migration on postgres",
-                        "app",
-                        "2026-05-08T10:00:03Z",
-                    )
-                },
-            ])
-            .expect("insert events");
-        let mut incidents = IncidentsStore::open(&incidents_db)
-            .expect("open incidents")
-            .expect("incidents store");
-        incidents
-            .upsert_incident(
-                &IncidentRecord {
-                    incident_id: "inc-adaptive".into(),
-                    state: "open".into(),
-                    severity: SEVERITY_ERROR,
-                    primary_service: "api".into(),
-                    affected_services: vec!["api".into()],
-                    created_at: "2026-05-08T10:00:00Z".into(),
-                    updated_at: "2026-05-08T10:00:05Z".into(),
-                    time_range_start: "2026-05-08T10:00:00Z".into(),
-                    time_range_end: "2026-05-08T10:00:05Z".into(),
-                    event_count: 2,
-                    cluster_ids: Vec::new(),
-                    runtime_context: None,
-                    resolution_info: None,
-                },
-                &["e1".into(), "e2".into()],
-            )
-            .expect("upsert incident");
-        incidents
-            .replace_hypotheses(
-                "inc-adaptive",
-                &[StoredHypothesis {
-                    hypothesis_id: "hyp-migration".into(),
-                    rank: Some(1),
-                    cause_type: "migration_regression".into(),
-                    description: "Schema migration on postgres caused request timeouts".into(),
-                    total_score: Some(0.91),
-                    score_breakdown: serde_json::json!({
-                        "temporal_alignment": 0.9,
-                        "correlation_strength": 0.8,
-                        "frequency_weight": 0.4,
-                        "dependency_proximity": 0.6,
-                        "evidence_coverage": 0.9,
-                        "anomaly_severity": 0.7
-                    }),
-                    supporting_events: vec!["e1".into(), "e2".into()],
-                    contradicting_events: Vec::new(),
-                    affected_services: vec!["api".into()],
-                    suggested_checks: vec!["Review the migration diff".into()],
-                    confidence_label: Some("high".into()),
-                    is_valid: true,
-                    invalidation_reasons: Vec::new(),
-                    created_at: "2026-05-08T10:00:05Z".into(),
-                    updated_at: "2026-05-08T10:00:05Z".into(),
-                }],
-            )
-            .expect("replace hypotheses");
-        incidents
-            .add_feedback(&StoredFeedback {
-                feedback_id: "fb-adaptive".into(),
-                incident_id: "inc-adaptive".into(),
-                correct_hypothesis_id: Some("hyp-migration".into()),
-                feedback_type: "confirmed".into(),
-                operator_notes: "the migration really broke postgres callers".into(),
-                resolved_at: "2026-05-08T10:06:00Z".into(),
-                created_at: Some("2026-05-08T10:06:00Z".into()),
-            })
-            .expect("add feedback");
-        let config: TomlValue = r#"
-[hypothesis_engine]
-max_hypotheses_per_incident = 5
-min_supporting_events = 1
-min_generation_confidence = 0.1
-
-[calibration]
-enabled = true
-bucket_count = 5
-min_samples_per_bucket = 1
-staleness_threshold_days = 30
-persistence_file = "./data/calibration.json"
-
-[scoring.tuning]
-learning_rate = 0.1
-max_drift_from_default = 0.5
-min_weight = 0.03
-"#
-        .parse()
-        .expect("parse config");
-        let learning = sync_learning_artifacts(&config, &events_db, &incidents_db, &mut incidents)
-            .expect("sync learning artifacts");
-        assert!(learning
-            .adaptive
-            .learned_detectors
-            .iter()
-            .any(|detector| detector.cause_type == "migration_regression"
-                && detector
-                    .positive_terms
-                    .iter()
-                    .any(|term| term == "migration" || term == "postgres")));
-        assert!(learning
-            .adaptive
-            .learned_templates
-            .iter()
-            .any(|template| template.cause_type == "migration_regression"));
-
-        let new_events = vec![
-            event(
-                "n1",
-                "api",
-                "postgres timeout immediately after migration",
-                SEVERITY_ERROR,
-                "app",
-                "2026-05-08T11:00:00Z",
-            ),
-            event(
-                "n2",
-                "api",
-                "schema migration triggered failing postgres queries",
-                SEVERITY_ERROR,
-                "app",
-                "2026-05-08T11:00:03Z",
-            ),
-        ];
-        let graph = build_inference_graph(&config, &new_events);
-        let hypotheses = build_hypotheses(
-            &config,
-            "inc-adaptive-2",
-            &new_events,
-            "2026-05-08T11:00:05Z",
-            &graph,
-            &learning,
-        );
-        assert!(hypotheses.iter().any(|hypothesis| {
-            hypothesis.cause_type == "migration_regression"
-                && hypothesis
-                    .description
-                    .contains("Schema migration on postgres caused request timeouts")
-        }));
-        let _ = fs::remove_dir_all(&root);
-    }
-
-    #[test]
-    fn sync_learning_artifacts_learns_compositions_and_edge_profiles() {
-        let root = temp_dir("adaptive-composition");
-        let events_db = root.join("events.db");
-        let incidents_db = root.join("incidents.db");
-        initialize_databases(&events_db, &incidents_db).expect("initialize databases");
-        let mut events = EventsStore::open(&events_db)
-            .expect("open events")
-            .expect("events store");
-        events
-            .insert_batch(&[
-                NewEventRecord {
-                    tags: vec!["restart".into(), "postgres".into()],
-                    ..NewEventRecord::minimal(
-                        "e1",
-                        "2026-05-08T10:00:00Z",
-                        "postgres",
-                        SEVERITY_ERROR,
-                        "postgres restart panic detected",
-                        "app",
-                        "2026-05-08T10:00:00Z",
-                    )
-                },
-                NewEventRecord {
-                    tags: vec!["timeout".into(), "postgres".into()],
-                    ..NewEventRecord::minimal(
-                        "e2",
-                        "2026-05-08T10:00:05Z",
-                        "api",
-                        SEVERITY_ERROR,
-                        "timeout calling postgres upstream dependency",
-                        "app",
-                        "2026-05-08T10:00:05Z",
-                    )
-                },
-                NewEventRecord {
-                    tags: vec!["error_spike".into(), "postgres".into()],
-                    ..NewEventRecord::minimal(
-                        "e3",
-                        "2026-05-08T10:00:08Z",
-                        "api",
-                        SEVERITY_ERROR,
-                        "error spike after connection refused from postgres",
-                        "app",
-                        "2026-05-08T10:00:08Z",
-                    )
-                },
-            ])
-            .expect("insert events");
-        let config: TomlValue = r#"
-[hypothesis_engine]
-max_hypotheses_per_incident = 5
-min_supporting_events = 1
-min_generation_confidence = 0.1
-
-[inference_graph]
-max_events_for_graph = 50
-plausibility_threshold = 0.05
-max_edges_per_node = 10
-
-[inference_graph.strategies]
-dependency_propagation = true
-same_service_escalation = true
-resource_preceded_error = true
-config_preceded_error = true
-restart_preceded_disconnection = true
-shared_fate = true
-timeout_chain = true
-
-[calibration]
-enabled = true
-bucket_count = 5
-min_samples_per_bucket = 1
-staleness_threshold_days = 30
-persistence_file = "./data/calibration.json"
-
-[scoring.tuning]
-learning_rate = 0.1
-max_drift_from_default = 0.5
-min_weight = 0.03
-
-[[topology.edges]]
-source = "api"
-target = "postgres"
-"#
-        .parse()
-        .expect("parse config");
-        let incident_events = vec![
-            event(
-                "e1",
-                "postgres",
-                "postgres restart panic detected",
-                SEVERITY_ERROR,
-                "app",
-                "2026-05-08T10:00:00Z",
-            ),
-            event(
-                "e2",
-                "api",
-                "timeout calling postgres upstream dependency",
-                SEVERITY_ERROR,
-                "app",
-                "2026-05-08T10:00:05Z",
-            ),
-            event(
-                "e3",
-                "api",
-                "error spike after connection refused from postgres",
-                SEVERITY_ERROR,
-                "app",
-                "2026-05-08T10:00:08Z",
-            ),
-        ];
-        let graph =
-            build_inference_graph_with_learning(&config, &incident_events, &LearningArtifacts::default());
-        let mut incidents = IncidentsStore::open(&incidents_db)
-            .expect("open incidents")
-            .expect("incidents store");
-        incidents
-            .upsert_incident(
-                &IncidentRecord {
-                    incident_id: "inc-comp".into(),
-                    state: "open".into(),
-                    severity: SEVERITY_ERROR,
-                    primary_service: "api".into(),
-                    affected_services: vec!["api".into(), "postgres".into()],
-                    created_at: "2026-05-08T10:00:00Z".into(),
-                    updated_at: "2026-05-08T10:00:08Z".into(),
-                    time_range_start: "2026-05-08T10:00:00Z".into(),
-                    time_range_end: "2026-05-08T10:00:08Z".into(),
-                    event_count: 3,
-                    cluster_ids: Vec::new(),
-                    runtime_context: None,
-                    resolution_info: None,
-                },
-                &["e1".into(), "e2".into(), "e3".into()],
-            )
-            .expect("upsert incident");
-        incidents
-            .upsert_inference_graph_snapshot(&StoredInferenceGraphSnapshot {
-                incident_id: "inc-comp".into(),
-                graph_data: serde_json::to_value(&graph).expect("serialize graph"),
-                created_at: "2026-05-08T10:00:08Z".into(),
-                event_count: 3,
-            })
-            .expect("upsert graph snapshot");
-        incidents
-            .replace_hypotheses(
-                "inc-comp",
-                &[StoredHypothesis {
-                    hypothesis_id: "hyp-comp".into(),
-                    rank: Some(1),
-                    cause_type: "dependency_failure".into(),
-                    description: "Postgres restart triggered upstream timeout cascade".into(),
-                    total_score: Some(0.89),
-                    score_breakdown: serde_json::json!({
-                        "temporal_alignment": 0.85,
-                        "correlation_strength": 0.8,
-                        "frequency_weight": 0.5,
-                        "dependency_proximity": 0.95,
-                        "evidence_coverage": 0.9,
-                        "anomaly_severity": 0.55
-                    }),
-                    supporting_events: vec!["e1".into(), "e2".into(), "e3".into()],
-                    contradicting_events: Vec::new(),
-                    affected_services: vec!["api".into(), "postgres".into()],
-                    suggested_checks: vec!["Inspect postgres restart cause".into()],
-                    confidence_label: Some("high".into()),
-                    is_valid: true,
-                    invalidation_reasons: Vec::new(),
-                    created_at: "2026-05-08T10:00:08Z".into(),
-                    updated_at: "2026-05-08T10:00:08Z".into(),
-                }],
-            )
-            .expect("replace hypotheses");
-        incidents
-            .add_feedback(&StoredFeedback {
-                feedback_id: "fb-comp".into(),
-                incident_id: "inc-comp".into(),
-                correct_hypothesis_id: Some("hyp-comp".into()),
-                feedback_type: "confirmed".into(),
-                operator_notes: "restart plus timeout chain was the real path".into(),
-                resolved_at: "2026-05-08T10:15:00Z".into(),
-                created_at: Some("2026-05-08T10:15:00Z".into()),
-            })
-            .expect("add feedback");
-        let learning = sync_learning_artifacts(&config, &events_db, &incidents_db, &mut incidents)
-            .expect("sync learning artifacts");
-        assert!(learning
-            .adaptive
-            .learned_compositions
-            .iter()
-            .any(|composition| composition.cause_type == "dependency_failure"
-                && composition.requires.len() >= 2
-                && !composition.preferred_edge_types.is_empty()));
-        assert!(learning
-            .adaptive
-            .learned_edge_profiles
-            .iter()
-            .any(|profile| profile.cause_type.as_deref() == Some("dependency_failure")));
-        let _ = fs::remove_dir_all(&root);
-    }
-
-    #[test]
-    fn build_inference_graph_with_learning_applies_edge_profile_adjustment() {
-        let config: TomlValue = r#"
-[inference_graph]
-max_events_for_graph = 50
-plausibility_threshold = 0.01
-max_edges_per_node = 10
-
-[inference_graph.strategies]
-dependency_propagation = false
-same_service_escalation = true
-resource_preceded_error = false
-config_preceded_error = false
-restart_preceded_disconnection = false
-shared_fate = false
-timeout_chain = false
-"#
-        .parse()
-        .expect("parse config");
-        let events = vec![
-            event(
-                "e1",
-                "api",
-                "warning before crash loop",
-                SEVERITY_WARN,
-                "app",
-                "2026-05-08T10:00:00Z",
-            ),
-            event(
-                "e2",
-                "api",
-                "panic and restart loop detected",
-                SEVERITY_ERROR,
-                "app",
-                "2026-05-08T10:00:05Z",
-            ),
-        ];
-        let baseline = build_inference_graph_with_learning(&config, &events, &LearningArtifacts::default());
-        let baseline_edge = baseline
-            .edges
-            .iter()
-            .find(|edge| edge.edge_type == "same_service_escalation")
-            .expect("baseline edge")
-            .plausibility;
-        let mut learning = LearningArtifacts::default();
-        learning.adaptive.learned_edge_profiles.push(LearnedEdgeProfile {
-            profile_id: "same-service-api".into(),
-            edge_type: "same_service_escalation".into(),
-            source_service: Some("api".into()),
-            target_service: Some("api".into()),
-            cause_type: Some("service_instability".into()),
-            confirmations: 4,
-            false_positives: 0,
-            average_plausibility: 0.95,
-            average_latency_ms: 5000.0,
-            created_from_feedback_id: "fb-edge".into(),
-            updated_at: "2026-05-08T10:10:00Z".into(),
-            manually_disabled: false,
-            status_reason: None,
-            review_status: default_review_status(),
-            review_reason: None,
-            last_reviewed_at: None,
-        });
-        let adapted = build_inference_graph_with_learning(&config, &events, &learning);
-        let adapted_edge = adapted
-            .edges
-            .iter()
-            .find(|edge| edge.edge_type == "same_service_escalation")
-            .expect("adapted edge")
-            .plausibility;
-        assert!(adapted_edge > baseline_edge);
-    }
-
-    #[test]
-    fn build_adaptive_learning_history_entries_tracks_score_and_rank_movement() {
-        let previous = vec![serde_json::json!({
-            "hypothesis_id": "inc-1-hyp-1",
-            "cause_type": "dependency_failure",
-            "rank": 2,
-            "total_score": 0.55,
-            "score_breakdown": {
-                "provenance": {
-                    "artifacts": [{
-                        "kind": "composition",
-                        "artifact_id": "composition_restart_timeout",
-                        "label": "restart-timeout",
-                        "impact_metric": "prior_contribution",
-                        "impact_value": 0.10
-                    }]
-                }
-            }
-        })];
-        let next = vec![StoredHypothesis {
-            hypothesis_id: "inc-1-hyp-1".into(),
-            rank: Some(1),
-            cause_type: "dependency_failure".into(),
-            description: "learned composition".into(),
-            total_score: Some(0.72),
-            score_breakdown: serde_json::json!({
-                "provenance": {
-                    "artifacts": [{
-                        "kind": "composition",
-                        "artifact_id": "composition_restart_timeout",
-                        "label": "restart-timeout",
-                        "impact_metric": "prior_contribution",
-                        "impact_value": 0.17
-                    }]
-                }
-            }),
-            supporting_events: vec!["e1".into()],
-            contradicting_events: Vec::new(),
-            affected_services: vec!["api".into()],
-            suggested_checks: Vec::new(),
-            confidence_label: Some("medium".into()),
-            is_valid: true,
-            invalidation_reasons: Vec::new(),
-            created_at: "2026-05-08T12:00:00Z".into(),
-            updated_at: "2026-05-08T12:00:00Z".into(),
-        }];
-        let entries = build_adaptive_learning_history_entries(
-            "inc-1",
-            "2026-05-08T12:00:00Z",
-            &previous,
-            &next,
-        );
-        assert_eq!(entries.len(), 1);
-        assert_eq!(entries[0].artifact_kind, "composition");
-        assert_eq!(entries[0].rank_delta, Some(1));
-        assert!(
-            entries[0]
-                .score_delta
-                .map(|value| (value - 0.17).abs() < 0.0001)
-                .unwrap_or(false)
-        );
-    }
-}
+mod unit_tests;

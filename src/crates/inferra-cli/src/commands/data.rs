@@ -22,14 +22,20 @@ pub fn run_incident_command(ctx: &AppContext, action: IncidentAction) -> Result<
                 ctx.ui.print_json(&payload);
                 return Ok(());
             }
-            ctx.ui.banner("Incidents", "Active incidents ordered by severity and recency");
+            ctx.ui.banner(
+                "Incidents",
+                "Active incidents ordered by severity and recency",
+            );
             if let Some(items) = payload["incidents"].as_array() {
                 if items.is_empty() {
                     ctx.ui.info("No active incidents.");
                 } else {
                     let rows = items.iter().map(|incident| {
                         vec![
-                            incident["incident_id"].as_str().unwrap_or_default().to_string(),
+                            incident["incident_id"]
+                                .as_str()
+                                .unwrap_or_default()
+                                .to_string(),
                             incident["state"].as_str().unwrap_or("unknown").to_string(),
                             incident["severity"]
                                 .as_i64()
@@ -45,7 +51,10 @@ pub fn run_incident_command(ctx: &AppContext, action: IncidentAction) -> Result<
                                 .unwrap_or_else(|| "-".to_string()),
                         ]
                     });
-                    ctx.ui.table(&["Incident", "State", "Severity", "Service", "Events"], rows);
+                    ctx.ui.table(
+                        &["Incident", "State", "Severity", "Service", "Events"],
+                        rows,
+                    );
                 }
             }
         }
@@ -98,7 +107,10 @@ pub fn run_incident_command(ctx: &AppContext, action: IncidentAction) -> Result<
                         .unwrap_or_else(|| "0".to_string()),
                 ),
             ]);
-            let hypotheses = payload["hypotheses"].as_array().cloned().unwrap_or_default();
+            let hypotheses = payload["hypotheses"]
+                .as_array()
+                .cloned()
+                .unwrap_or_default();
             if !hypotheses.is_empty() {
                 ctx.ui.paragraph("");
                 ctx.ui.section("Hypotheses");
@@ -113,13 +125,11 @@ pub fn run_incident_command(ctx: &AppContext, action: IncidentAction) -> Result<
                             .as_i64()
                             .map(|value| value.to_string())
                             .unwrap_or_else(|| "-".to_string()),
-                        item["confidence_label"]
-                            .as_str()
-                            .unwrap_or("-")
-                            .to_string(),
+                        item["confidence_label"].as_str().unwrap_or("-").to_string(),
                     ]
                 });
-                ctx.ui.table(&["Hypothesis", "Type", "Rank", "Confidence"], rows);
+                ctx.ui
+                    .table(&["Hypothesis", "Type", "Rank", "Confidence"], rows);
             }
         }
     }
@@ -146,7 +156,8 @@ pub fn run_event_command(ctx: &AppContext, action: EventAction) -> Result<()> {
                 ctx.ui.print_json(&payload);
                 return Ok(());
             }
-            ctx.ui.banner("Events", "Raw event rows from the local store");
+            ctx.ui
+                .banner("Events", "Raw event rows from the local store");
             let rows = payload["events"]
                 .as_array()
                 .into_iter()
@@ -166,7 +177,8 @@ pub fn run_event_command(ctx: &AppContext, action: EventAction) -> Result<()> {
             if rows.is_empty() {
                 ctx.ui.info("No matching events.");
             } else {
-                ctx.ui.table(&["Event", "Severity", "Service", "Message"], rows);
+                ctx.ui
+                    .table(&["Event", "Severity", "Service", "Message"], rows);
             }
         }
         EventAction::Show { event_id } => {
@@ -178,7 +190,8 @@ pub fn run_event_command(ctx: &AppContext, action: EventAction) -> Result<()> {
                 ctx.ui.print_json(&payload);
                 return Ok(());
             }
-            ctx.ui.banner(&format!("Event {event_id}"), "Single event detail");
+            ctx.ui
+                .banner(&format!("Event {event_id}"), "Single event detail");
             ctx.ui.kv_table([
                 (
                     "Service",
@@ -225,14 +238,18 @@ pub fn run_service_data_command(ctx: &AppContext, action: ServiceDataAction) -> 
                 ctx.ui.print_json(&payload);
                 return Ok(());
             }
-            ctx.ui.banner("Services", "Service health derived from the local overview");
+            ctx.ui
+                .banner("Services", "Service health derived from the local overview");
             let table_rows = payload["services"]
                 .as_array()
                 .into_iter()
                 .flatten()
                 .map(|service| {
                     vec![
-                        service["service_id"].as_str().unwrap_or_default().to_string(),
+                        service["service_id"]
+                            .as_str()
+                            .unwrap_or_default()
+                            .to_string(),
                         service["status"].as_str().unwrap_or("unknown").to_string(),
                         service["event_count"]
                             .as_i64()
@@ -245,7 +262,8 @@ pub fn run_service_data_command(ctx: &AppContext, action: ServiceDataAction) -> 
                     ]
                 })
                 .collect::<Vec<_>>();
-            ctx.ui.table(&["Service", "Status", "Events", "Errors"], table_rows);
+            ctx.ui
+                .table(&["Service", "Status", "Events", "Errors"], table_rows);
         }
         ServiceDataAction::Show { service_id } => {
             let service = services
@@ -262,7 +280,10 @@ pub fn run_service_data_command(ctx: &AppContext, action: ServiceDataAction) -> 
                 ctx.ui.print_json(&payload);
                 return Ok(());
             }
-            ctx.ui.banner(&format!("Service {service_id}"), "Service health and recent events");
+            ctx.ui.banner(
+                &format!("Service {service_id}"),
+                "Service health and recent events",
+            );
             ctx.ui.kv_table([
                 (
                     "Status",
@@ -319,7 +340,10 @@ pub fn run_service_data_command(ctx: &AppContext, action: ServiceDataAction) -> 
                 return Ok(());
             }
             ctx.ui.banner(
-                &format!("Service events {}", payload["service_id"].as_str().unwrap_or_default()),
+                &format!(
+                    "Service events {}",
+                    payload["service_id"].as_str().unwrap_or_default()
+                ),
                 "Recent events for one service",
             );
             let rows = payload["events"]
@@ -353,7 +377,8 @@ pub async fn run_workspace_command(ctx: &AppContext, action: WorkspaceAction) ->
                 ctx.ui.print_json(&payload);
                 return Ok(());
             }
-            ctx.ui.banner("Workspace map", "Detected projects and service mappings");
+            ctx.ui
+                .banner("Workspace map", "Detected projects and service mappings");
             ctx.ui.kv_table([
                 (
                     "Projects",
@@ -389,15 +414,22 @@ pub async fn run_workspace_command(ctx: &AppContext, action: WorkspaceAction) ->
                 ctx.ui.print_json(&subset);
                 return Ok(());
             }
-            ctx.ui.banner("Workspace services", "Mapped and unmapped services");
+            ctx.ui
+                .banner("Workspace services", "Mapped and unmapped services");
             let rows = subset["service_mappings"]
                 .as_array()
                 .into_iter()
                 .flatten()
                 .map(|mapping| {
                     vec![
-                        mapping["service_id"].as_str().unwrap_or_default().to_string(),
-                        mapping["project_path"].as_str().unwrap_or_default().to_string(),
+                        mapping["service_id"]
+                            .as_str()
+                            .unwrap_or_default()
+                            .to_string(),
+                        mapping["project_path"]
+                            .as_str()
+                            .unwrap_or_default()
+                            .to_string(),
                         mapping["confidence"]
                             .as_f64()
                             .map(|value| format!("{value:.2}"))
@@ -440,7 +472,9 @@ pub async fn run_workspace_command(ctx: &AppContext, action: WorkspaceAction) ->
             let payload = ctx
                 .api_request(
                     reqwest::Method::GET,
-                    &format!("/api/workspace/projects?max_depth={max_depth}&max_results={max_results}"),
+                    &format!(
+                        "/api/workspace/projects?max_depth={max_depth}&max_results={max_results}"
+                    ),
                     None,
                 )
                 .await?;
@@ -448,7 +482,8 @@ pub async fn run_workspace_command(ctx: &AppContext, action: WorkspaceAction) ->
                 ctx.ui.print_json(&payload);
                 return Ok(());
             }
-            ctx.ui.banner("Projects", "Projects discovered by the workspace API");
+            ctx.ui
+                .banner("Projects", "Projects discovered by the workspace API");
             let rows = payload["projects"]
                 .as_array()
                 .into_iter()

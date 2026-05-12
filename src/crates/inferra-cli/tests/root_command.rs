@@ -19,11 +19,21 @@ fn root_command_emits_landing_payload_in_json_mode() {
         .output()
         .expect("run inferra");
 
-    assert!(output.status.success(), "stderr={}", String::from_utf8_lossy(&output.stderr));
+    assert!(
+        output.status.success(),
+        "stderr={}",
+        String::from_utf8_lossy(&output.stderr)
+    );
     let payload: JsonValue =
         serde_json::from_slice(&output.stdout).expect("parse inferra root JSON output");
-    assert_eq!(payload.get("name"), Some(&JsonValue::String("inferra".into())));
-    assert_eq!(payload.get("version"), Some(&JsonValue::String(env!("CARGO_PKG_VERSION").into())));
+    assert_eq!(
+        payload.get("name"),
+        Some(&JsonValue::String("inferra".into()))
+    );
+    assert_eq!(
+        payload.get("version"),
+        Some(&JsonValue::String(env!("CARGO_PKG_VERSION").into()))
+    );
     assert!(payload.get("runtime").is_some());
     assert!(payload.get("service").is_some());
 }

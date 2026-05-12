@@ -5,7 +5,7 @@ Thanks for helping make Inferra better.
 ## Local Setup
 
 ```bash
-python -m pip install -e ".[dev]"
+python -m pip install -e ".[dev,legacy]"
 python -m pytest -q
 ```
 
@@ -19,6 +19,6 @@ python -m pytest -q
 ## Before Opening a PR
 
 ```bash
-python -m compileall src tests
+python -m compileall tests deploy deprecated
 python -m pytest -q
 ```

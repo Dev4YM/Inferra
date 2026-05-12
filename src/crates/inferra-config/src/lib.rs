@@ -288,7 +288,10 @@ pub fn experience_from_config(config: &TomlValue) -> ExperiencePayload {
 
 #[cfg(test)]
 mod tests {
-    use super::{apply_config_put, load_merged_config, resolve_config_path, server_listen, write_config, TomlValue};
+    use super::{
+        apply_config_put, load_merged_config, resolve_config_path, server_listen, write_config,
+        TomlValue,
+    };
     use serde_json::json;
     use std::path::PathBuf;
     use std::sync::{Mutex, OnceLock};
@@ -307,7 +310,9 @@ mod tests {
 
     #[test]
     fn resolve_config_path_accepts_inferra_config_env() {
-        let _guard = env_lock().lock().expect("lock env");
+        let _guard = env_lock()
+            .lock()
+            .unwrap_or_else(|poisoned| poisoned.into_inner());
         let env_path = PathBuf::from("env/inferra.toml");
         unsafe {
             std::env::set_var("INFERRA_CONFIG", &env_path);
@@ -323,7 +328,9 @@ mod tests {
 
     #[test]
     fn resolve_config_path_accepts_inferra_config_path_env() {
-        let _guard = env_lock().lock().expect("lock env");
+        let _guard = env_lock()
+            .lock()
+            .unwrap_or_else(|poisoned| poisoned.into_inner());
         let env_path = PathBuf::from("env-path/inferra.toml");
         unsafe {
             std::env::remove_var("INFERRA_CONFIG");
@@ -367,7 +374,9 @@ port = 7433
         .expect("parse base");
         let error = apply_config_put(base, &json!({ "config": { "server": { "host": null } } }))
             .expect_err("null values should be rejected");
-        assert!(error.to_string().contains("null config values are not supported"));
+        assert!(error
+            .to_string()
+            .contains("null config values are not supported"));
     }
 
     #[test]
@@ -380,6 +389,8 @@ port = 70000
         .parse()
         .expect("parse config");
         let error = server_listen(&config).expect_err("invalid port should fail");
-        assert!(error.to_string().contains("server.port must be between 1 and"));
+        assert!(error
+            .to_string()
+            .contains("server.port must be between 1 and"));
     }
 }

@@ -519,9 +519,15 @@ impl EventsStore {
             "SELECT event_id, timestamp, severity, service_id, message, source_type, tags \
              FROM events WHERE event_id IN ({placeholders})"
         );
-        let mut stmt = self.conn.prepare(&sql).context("prepare batch event detail")?;
+        let mut stmt = self
+            .conn
+            .prepare(&sql)
+            .context("prepare batch event detail")?;
         let rows = stmt
-            .query_map(rusqlite::params_from_iter(event_ids.iter()), event_row_from_row)
+            .query_map(
+                rusqlite::params_from_iter(event_ids.iter()),
+                event_row_from_row,
+            )
             .context("query batch event detail")?;
         let mut by_id = HashMap::new();
         for row in rows {
@@ -872,7 +878,9 @@ impl EventsStore {
     pub fn governance_summary(&self) -> Result<GovernanceSummary> {
         let tracked_fingerprints = self
             .conn
-            .query_row("SELECT COUNT(*) FROM fingerprint_seen", [], |row| row.get(0))
+            .query_row("SELECT COUNT(*) FROM fingerprint_seen", [], |row| {
+                row.get(0)
+            })
             .or_else(|error| {
                 if is_missing_table_error(&error) {
                     Ok(0)
@@ -1212,7 +1220,13 @@ impl IncidentsStore {
                     updated_at = excluded.updated_at,
                     schema_version = excluded.schema_version,
                     interval_seconds = excluded.interval_seconds",
-                rusqlite::params![data_type, payload_json, source, updated_at, interval_seconds],
+                rusqlite::params![
+                    data_type,
+                    payload_json,
+                    source,
+                    updated_at,
+                    interval_seconds
+                ],
             )
             .with_context(|| format!("upsert ui snapshot {data_type}"))?;
         Ok(StoredUiSnapshot {
@@ -1841,16 +1855,16 @@ impl IncidentsStore {
             Err(error) => return Err(error).context("prepare feedback scan"),
         };
         let rows = match stmt.query_map([], |row| {
-                Ok(StoredFeedback {
-                    feedback_id: row.get(0)?,
-                    incident_id: row.get(1)?,
-                    correct_hypothesis_id: row.get(2)?,
-                    feedback_type: row.get(3)?,
-                    operator_notes: row.get(4)?,
-                    resolved_at: row.get(5)?,
-                    created_at: row.get(6)?,
-                })
-            }) {
+            Ok(StoredFeedback {
+                feedback_id: row.get(0)?,
+                incident_id: row.get(1)?,
+                correct_hypothesis_id: row.get(2)?,
+                feedback_type: row.get(3)?,
+                operator_notes: row.get(4)?,
+                resolved_at: row.get(5)?,
+                created_at: row.get(6)?,
+            })
+        }) {
             Ok(rows) => rows,
             Err(error) if is_missing_table_error(&error) => return Ok(Vec::new()),
             Err(error) => return Err(error).context("query feedback scan"),
@@ -1928,7 +1942,7 @@ impl IncidentsStore {
         query: &AdaptiveLearningAuditQuery,
     ) -> Result<Vec<StoredAdaptiveLearningAuditEntry>> {
         let limit = query.limit.max(1) as i64;
-        let offset = query.offset.max(0) as i64;
+        let offset = query.offset as i64;
         let mut stmt = match self.conn.prepare(
             "SELECT audit_id, artifact_kind, artifact_id, action, reason,
                     previous_status, new_status, review_status_before, review_status_after,
@@ -2038,7 +2052,7 @@ impl IncidentsStore {
         query: &AdaptiveLearningHistoryQuery,
     ) -> Result<Vec<StoredAdaptiveLearningHistoryEntry>> {
         let limit = query.limit.max(1) as i64;
-        let offset = query.offset.max(0) as i64;
+        let offset = query.offset as i64;
         let mut stmt = match self.conn.prepare(
             "SELECT entry_id, artifact_kind, artifact_id, artifact_label, incident_id,
                     cause_type, hypothesis_id, observed_at, score, rank,
@@ -2120,7 +2134,9 @@ impl IncidentsStore {
             ) {
                 Ok(stmt) => stmt,
                 Err(error) if is_missing_table_error(&error) => return Ok(None),
-                Err(error) => return Err(error).context("prepare adaptive processed feedback query"),
+                Err(error) => {
+                    return Err(error).context("prepare adaptive processed feedback query")
+                }
             };
             let rows = stmt
                 .query_map([], |row| row.get::<_, String>(0))
@@ -2488,7 +2504,8 @@ impl IncidentsStore {
                     serde_json::to_string(&item.requires).unwrap_or_else(|_| "[]".into()),
                     if item.requires_same_service { 1 } else { 0 },
                     if item.requires_temporal_order { 1 } else { 0 },
-                    serde_json::to_string(&item.preferred_edge_types).unwrap_or_else(|_| "[]".into()),
+                    serde_json::to_string(&item.preferred_edge_types)
+                        .unwrap_or_else(|_| "[]".into()),
                     item.confirmations,
                     item.false_positives,
                     item.created_from_feedback_id,
@@ -2582,7 +2599,8 @@ impl IncidentsStore {
         if views.is_empty() {
             return Ok(Vec::new());
         }
-        let mut selections_by_view = HashMap::<String, Vec<StoredAdaptiveReviewViewSelection>>::new();
+        let mut selections_by_view =
+            HashMap::<String, Vec<StoredAdaptiveReviewViewSelection>>::new();
         let mut selection_stmt = match self.conn.prepare(
             "SELECT view_id, artifact_kind, artifact_id
              FROM adaptive_review_view_artifacts
@@ -2590,7 +2608,9 @@ impl IncidentsStore {
         ) {
             Ok(stmt) => stmt,
             Err(error) if is_missing_table_error(&error) => return Ok(views),
-            Err(error) => return Err(error).context("prepare adaptive review view artifacts query"),
+            Err(error) => {
+                return Err(error).context("prepare adaptive review view artifacts query")
+            }
         };
         let selection_rows = selection_stmt
             .query_map([], |row| {
@@ -2605,7 +2625,10 @@ impl IncidentsStore {
             .context("query adaptive review view artifacts")?;
         for row in selection_rows {
             let (view_id, selection) = row?;
-            selections_by_view.entry(view_id).or_default().push(selection);
+            selections_by_view
+                .entry(view_id)
+                .or_default()
+                .push(selection);
         }
         for view in &mut views {
             view.artifact_selections = selections_by_view.remove(&view.view_id).unwrap_or_default();
@@ -2824,13 +2847,13 @@ impl IncidentsStore {
         changed_at: Option<&str>,
     ) -> Result<()> {
         match self.conn.execute(
-                "INSERT INTO incident_state_log (
+            "INSERT INTO incident_state_log (
                     incident_id, old_state, new_state, changed_at, reason
                 ) VALUES (
                     ?1, ?2, ?3, COALESCE(?4, strftime('%Y-%m-%dT%H:%M:%fZ', 'now')), ?5
                 )",
-                rusqlite::params![incident_id, old_state, new_state, changed_at, reason],
-            ) {
+            rusqlite::params![incident_id, old_state, new_state, changed_at, reason],
+        ) {
             Ok(_) => {}
             Err(error) if is_missing_table_error(&error) => return Ok(()),
             Err(error) => return Err(error).context("insert incident state log"),
@@ -2939,7 +2962,9 @@ impl IncidentsStore {
             )
             .context("prepare stale incident query")?;
         let rows = stmt
-            .query_map(rusqlite::params![cutoff, limit as i64], |row| row.get::<_, String>(0))
+            .query_map(rusqlite::params![cutoff, limit as i64], |row| {
+                row.get::<_, String>(0)
+            })
             .context("query stale incidents")?;
         let mut out = Vec::new();
         for row in rows {
@@ -2960,7 +2985,9 @@ impl IncidentsStore {
             )
             .context("prepare archive candidate query")?;
         let rows = stmt
-            .query_map(rusqlite::params![cutoff, limit as i64], |row| row.get::<_, String>(0))
+            .query_map(rusqlite::params![cutoff, limit as i64], |row| {
+                row.get::<_, String>(0)
+            })
             .context("query archive candidates")?;
         let mut out = Vec::new();
         for row in rows {
@@ -3735,7 +3762,10 @@ fn table_exists(conn: &Connection, table_name: &str) -> Result<bool> {
 }
 
 fn is_missing_table_error(error: &impl std::fmt::Display) -> bool {
-    error.to_string().to_ascii_lowercase().contains("no such table")
+    error
+        .to_string()
+        .to_ascii_lowercase()
+        .contains("no such table")
 }
 
 fn ui_snapshot_from_row(row: &Row<'_>) -> rusqlite::Result<StoredUiSnapshot> {
@@ -4288,7 +4318,10 @@ mod tests {
             .expect("graph snapshot")
             .is_some());
         assert_eq!(incidents.list_feedback("inc-1").expect("feedback").len(), 1);
-        assert_eq!(incidents.list_chat_messages("inc-1").expect("chat").len(), 1);
+        assert_eq!(
+            incidents.list_chat_messages("inc-1").expect("chat").len(),
+            1
+        );
         assert_eq!(
             incidents.list_state_log("inc-1").expect("state log").len(),
             2
@@ -4392,12 +4425,18 @@ mod tests {
             .adaptive_learning_model()
             .expect("load adaptive registry")
             .expect("adaptive registry present");
-        assert_eq!(loaded.processed_feedback_ids, vec!["fb-1".to_string(), "fb-2".to_string()]);
+        assert_eq!(
+            loaded.processed_feedback_ids,
+            vec!["fb-1".to_string(), "fb-2".to_string()]
+        );
         assert_eq!(loaded.learned_detectors.len(), 1);
         assert_eq!(loaded.learned_templates.len(), 1);
         assert_eq!(loaded.learned_compositions.len(), 1);
         assert_eq!(loaded.learned_edge_profiles.len(), 1);
-        assert_eq!(loaded.learned_detectors[0].positive_terms, vec!["timeout", "postgres"]);
+        assert_eq!(
+            loaded.learned_detectors[0].positive_terms,
+            vec!["timeout", "postgres"]
+        );
         assert!(loaded.learned_templates[0].requires_same_service);
         assert_eq!(
             loaded.learned_compositions[0].preferred_edge_types,
@@ -4452,7 +4491,10 @@ mod tests {
         let touched = incidents
             .list_adaptive_review_views()
             .expect("reload review views");
-        assert_eq!(touched[0].last_used_at.as_deref(), Some("2026-05-08T10:10:00Z"));
+        assert_eq!(
+            touched[0].last_used_at.as_deref(),
+            Some("2026-05-08T10:10:00Z")
+        );
 
         incidents
             .delete_adaptive_review_view("view-1")
@@ -4544,11 +4586,7 @@ mod tests {
 
         let archive_db = root.join("archive").join("incidents_20260508.db");
         let archived = incidents
-            .archive_incident_to_path(
-                "inc-archive",
-                &archive_db,
-                "2026-05-08T00:00:00Z",
-            )
+            .archive_incident_to_path("inc-archive", &archive_db, "2026-05-08T00:00:00Z")
             .expect("archive incident");
         assert!(archived);
         assert!(incidents
@@ -4569,7 +4607,10 @@ mod tests {
             payload["incident"]["incident_id"].as_str(),
             Some("inc-archive")
         );
-        assert_eq!(payload["feedback"].as_array().map(|items| items.len()), Some(1));
+        assert_eq!(
+            payload["feedback"].as_array().map(|items| items.len()),
+            Some(1)
+        );
         assert_eq!(
             payload["chat_messages"].as_array().map(|items| items.len()),
             Some(1)

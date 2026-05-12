@@ -52,7 +52,7 @@ inferra --config inferra.toml serve
 
 Start the live server with `inferra --config inferra.toml serve`, then open `http://127.0.0.1:7433`.
 
-The web console source lives in `src/web/frontend` and builds into the packaged `src/web/ui_dist` bundle. Rebuild it with `scripts/build-web.ps1` on Windows or `bash scripts/build-web.sh` on Unix-like shells. Optional UI browser tests: `python -m pip install -e ".[ui]"`, `python -m playwright install chromium`, then `python -m pytest tests/integration/test_ui.py`.
+The web console source lives in `src/web/frontend` and builds into the packaged `src/web/ui_dist` bundle. Rebuild it with `scripts/build-web.ps1` on Windows or `bash scripts/build-web.sh` on Unix-like shells. Optional UI browser tests: `python -m pip install -e ".[ui,dev,legacy]"`, `python -m playwright install chromium`, then `python -m pytest tests/integration/test_ui.py`.
 
 Service anomaly status (closed time buckets, spike/sustained/absence signals) is exposed at `GET /api/anomaly/{service}/status` with optional `window_hours` (default 24, max 168).
 
@@ -196,12 +196,28 @@ Archived Python reference code lives under `deprecated/` and is not part of the 
 
 Built HTML docs: `python -m pip install -e ".[docs]"` then `mkdocs build` (see `mkdocs.yml`).
 
+**Licensing:** the project is dual-licensed under MIT and Apache-2.0; see the `LICENSE` pointer file plus `LICENSE-MIT` and `LICENSE-APACHE` in the repository root (matching `license` in `src/Cargo.toml`).
+
 ## Development
 
-Developer setup uses `python -m pip install -e ".[dev]"`.
+The **shipping runtime and CLI** live in the Rust workspace at `src/Cargo.toml`. Build and test with Cargo (from the repo root):
 
 ```text
-python -m compileall src tests
+cargo fmt --manifest-path src/Cargo.toml --all --check
+cargo clippy --manifest-path src/Cargo.toml --workspace --all-targets -- -D warnings
+cargo test --manifest-path src/Cargo.toml --workspace
+```
+
+The web console source is under `src/web/frontend`; `npm run build` writes the packaged bundle to `src/web/ui_dist`. **Commit `ui_dist` whenever you change the frontend** so packaged installs and CI smoke tests match the React source (CI checks that the tree is in sync).
+
+Python is used for **developer tooling, docs, and pytest** over archived modules under `deprecated/`. Third-party modules those tests import are under the **`[legacy]`** extra (not installed by default). Use:
+
+```text
+python -m pip install -e ".[dev,legacy]"
+```
+
+```text
+python -m compileall tests deploy deprecated
 python -m pytest -q
 ```
 

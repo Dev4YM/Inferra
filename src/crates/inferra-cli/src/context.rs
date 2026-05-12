@@ -16,7 +16,11 @@ pub struct AppContext {
 }
 
 impl AppContext {
-    pub fn new(config_override: Option<PathBuf>, ui_dist_override: Option<PathBuf>, json: bool) -> Self {
+    pub fn new(
+        config_override: Option<PathBuf>,
+        ui_dist_override: Option<PathBuf>,
+        json: bool,
+    ) -> Self {
         Self {
             config_override,
             ui_dist_override,
@@ -63,10 +67,9 @@ impl AppContext {
         if let Some(payload) = payload {
             request = request.json(&payload);
         }
-        let response = request
-            .send()
-            .await
-            .with_context(|| format!("request local API at {url}; start `inferra serve` if needed"))?;
+        let response = request.send().await.with_context(|| {
+            format!("request local API at {url}; start `inferra serve` if needed")
+        })?;
         let status = response.status();
         let text = response
             .text()
@@ -156,8 +159,9 @@ mod tests {
 
     #[test]
     fn ui_dist_candidates_cover_bin_and_sibling_layouts() {
-        let candidates =
-            ui_dist_candidates_from_executable(Path::new(r"C:\Program Files\Inferra\bin\inferra.exe"));
+        let candidates = ui_dist_candidates_from_executable(Path::new(
+            r"C:\Program Files\Inferra\bin\inferra.exe",
+        ));
         assert_eq!(
             candidates[0],
             PathBuf::from(r"C:\Program Files\Inferra\bin\runtime-assets\ui_dist")

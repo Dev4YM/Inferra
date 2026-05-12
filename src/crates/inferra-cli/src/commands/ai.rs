@@ -111,10 +111,12 @@ pub async fn run_ai_command(ctx: &AppContext, action: AiAction) -> Result<()> {
 fn resolve_question(ctx: &AppContext, question: Option<String>) -> Result<String> {
     match question {
         Some(question) => Ok(question),
-        None if ctx.ui.is_interactive() => Ok(Input::new()
-            .with_prompt("Question")
-            .interact_text()?),
-        None => bail!("question is required unless you run `inferra ai ask` in an interactive terminal"),
+        None if ctx.ui.is_interactive() => {
+            Ok(Input::new().with_prompt("Question").interact_text()?)
+        }
+        None => {
+            bail!("question is required unless you run `inferra ai ask` in an interactive terminal")
+        }
     }
 }
 
@@ -123,7 +125,8 @@ fn render_ai_status(ctx: &AppContext, payload: &JsonValue) {
         ctx.ui.print_json(payload);
         return;
     }
-    ctx.ui.banner("AI status", "Configured provider and runtime availability");
+    ctx.ui
+        .banner("AI status", "Configured provider and runtime availability");
     ctx.ui.kv_table([
         (
             "Enabled",
@@ -171,7 +174,8 @@ fn render_ai_doctor(ctx: &AppContext, payload: &JsonValue) {
         ctx.ui.print_json(payload);
         return;
     }
-    ctx.ui.banner("AI doctor", "Connectivity, model selection, and safeguards");
+    ctx.ui
+        .banner("AI doctor", "Connectivity, model selection, and safeguards");
     ctx.ui.kv_table([
         (
             "Healthy",

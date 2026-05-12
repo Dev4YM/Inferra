@@ -32,7 +32,9 @@ pub async fn show_landing(ctx: &AppContext) -> Result<()> {
 }
 
 pub async fn show_status(ctx: &AppContext) -> Result<()> {
-    let spinner = ctx.ui.spinner("Gathering runtime, service, and dashboard status");
+    let spinner = ctx
+        .ui
+        .spinner("Gathering runtime, service, and dashboard status");
     let payload = collect_status_payload(ctx).await?;
     spinner.finish("Detailed status ready");
     if ctx.ui.is_json() {
@@ -54,7 +56,9 @@ pub async fn run_serve_command(ctx: &AppContext) -> Result<()> {
     let ui_dist = ctx.resolve_ui_dist()?;
     match inferra_api::serve(paths, ui_dist).await {
         Ok(()) => Ok(()),
-        Err(error) if is_addr_in_use_error(&error) => handle_existing_runtime(host, port, error).await,
+        Err(error) if is_addr_in_use_error(&error) => {
+            handle_existing_runtime(host, port, error).await
+        }
         Err(error) => Err(error),
     }
 }
@@ -257,7 +261,10 @@ pub async fn run_collector_command(ctx: &AppContext, action: CollectorAction) ->
                 ctx.ui.print_json(&payload);
                 return Ok(());
             }
-            ctx.ui.banner("Collectors", "Configured collectors and local API runtime state");
+            ctx.ui.banner(
+                "Collectors",
+                "Configured collectors and local API runtime state",
+            );
             let rows = payload["collectors"]
                 .as_array()
                 .into_iter()
@@ -287,9 +294,11 @@ pub async fn run_collector_command(ctx: &AppContext, action: CollectorAction) ->
                     ]
                 })
                 .collect::<Vec<_>>();
-            ctx.ui.table(&["Collector", "Status", "Running", "Source"], rows);
+            ctx.ui
+                .table(&["Collector", "Status", "Running", "Source"], rows);
             if payload.get("fallback") == Some(&JsonValue::Bool(true)) {
-                ctx.ui.warning("The runtime API was not reachable, so this view used static config.");
+                ctx.ui
+                    .warning("The runtime API was not reachable, so this view used static config.");
             }
             Ok(())
         }
@@ -327,11 +336,13 @@ pub fn run_config_command(ctx: &AppContext, action: ConfigAction) -> Result<()> 
     let config = load_merged_config(&paths.config_path)?;
     match action {
         ConfigAction::Show => {
-            let payload = json!({ "config": config, "config_path": paths.config_path.display().to_string() });
+            let payload =
+                json!({ "config": config, "config_path": paths.config_path.display().to_string() });
             if ctx.ui.is_json() {
                 ctx.ui.print_json(&payload);
             } else {
-                ctx.ui.banner("Config", "Merged config with defaults applied");
+                ctx.ui
+                    .banner("Config", "Merged config with defaults applied");
                 ctx.ui.kv_table([
                     ("Config path", paths.config_path.display().to_string()),
                     ("Data dir", paths.data_dir.display().to_string()),
@@ -373,7 +384,10 @@ pub fn run_config_command(ctx: &AppContext, action: ConfigAction) -> Result<()> 
             emit_command_result(
                 ctx,
                 &payload,
-                &[format!("Applied preset {name} to {}", paths.config_path.display())],
+                &[format!(
+                    "Applied preset {name} to {}",
+                    paths.config_path.display()
+                )],
             );
             Ok(())
         }
@@ -437,7 +451,10 @@ fn emit_service_status(ctx: &AppContext) -> Result<()> {
             ),
             (
                 "State",
-                payload["state"].as_str().unwrap_or("not_installed").to_string(),
+                payload["state"]
+                    .as_str()
+                    .unwrap_or("not_installed")
+                    .to_string(),
             ),
             (
                 "Startup",
@@ -556,7 +573,10 @@ fn run_service_repair(ctx: &AppContext) -> Result<()> {
     if ctx.ui.is_json() {
         ctx.ui.print_json(&payload);
     } else {
-        ctx.ui.banner("Service Repair", "Non-destructive checks for local service readiness");
+        ctx.ui.banner(
+            "Service Repair",
+            "Non-destructive checks for local service readiness",
+        );
         let rows = payload["findings"]
             .as_array()
             .into_iter()
@@ -662,14 +682,13 @@ async fn collect_status_payload(ctx: &AppContext) -> Result<JsonValue> {
 fn render_status_snapshot(ctx: &AppContext, payload: &JsonValue, welcome_only: bool) {
     let runtime = &payload["runtime"];
     if runtime.get("reachable") == Some(&JsonValue::Bool(true)) {
-        ctx.ui.success(
-            &format!(
-                "Runtime reachable at {}",
-                runtime["dashboard_url"].as_str().unwrap_or_default()
-            ),
-        );
+        ctx.ui.success(&format!(
+            "Runtime reachable at {}",
+            runtime["dashboard_url"].as_str().unwrap_or_default()
+        ));
     } else {
-        ctx.ui.warning("Runtime is not responding on the configured local address.");
+        ctx.ui
+            .warning("Runtime is not responding on the configured local address.");
     }
     ctx.ui.kv_table([
         (
@@ -678,11 +697,17 @@ fn render_status_snapshot(ctx: &AppContext, payload: &JsonValue, welcome_only: b
         ),
         (
             "Dashboard",
-            runtime["dashboard_url"].as_str().unwrap_or_default().to_string(),
+            runtime["dashboard_url"]
+                .as_str()
+                .unwrap_or_default()
+                .to_string(),
         ),
         (
             "Config path",
-            payload["config_path"].as_str().unwrap_or_default().to_string(),
+            payload["config_path"]
+                .as_str()
+                .unwrap_or_default()
+                .to_string(),
         ),
         (
             "Data dir",
@@ -748,7 +773,10 @@ fn render_status_snapshot(ctx: &AppContext, payload: &JsonValue, welcome_only: b
                     .to_string(),
             ),
         ]);
-        if let Some(log_path) = payload["service"].get("log_path").and_then(JsonValue::as_str) {
+        if let Some(log_path) = payload["service"]
+            .get("log_path")
+            .and_then(JsonValue::as_str)
+        {
             ctx.ui.paragraph(&format!("Log path: {log_path}"));
         }
 

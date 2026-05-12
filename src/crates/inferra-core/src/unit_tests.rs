@@ -1,0 +1,1009 @@
+//! Unit tests for inferra-core.
+
+use super::*;
+use inferra_storage::{
+    initialize_databases, EventsStore, IncidentRecord, IncidentsStore, NewEventRecord,
+    StoredFeedback, StoredHypothesis, StoredInferenceGraphSnapshot,
+};
+use std::fs;
+use std::time::{SystemTime, UNIX_EPOCH};
+
+fn temp_dir(name: &str) -> std::path::PathBuf {
+    let unique = SystemTime::now()
+        .duration_since(UNIX_EPOCH)
+        .expect("time after epoch")
+        .as_nanos();
+    std::env::temp_dir().join(format!("inferra-core-{name}-{unique}"))
+}
+
+fn event(
+    event_id: &str,
+    service_id: &str,
+    message: &str,
+    severity: i64,
+    source_type: &str,
+    timestamp: &str,
+) -> EventRow {
+    EventRow {
+        event_id: Some(event_id.into()),
+        timestamp: Some(timestamp.into()),
+        severity: Some(SeverityValue::Level(severity)),
+        service_id: Some(service_id.into()),
+        message: Some(message.into()),
+        summary: None,
+        source_ref: Some(inferra_contracts::EventSourceRef {
+            source_type: Some(source_type.into()),
+        }),
+        tags: None,
+    }
+}
+
+#[test]
+fn ai_status_from_config_surfaces_model_overrides() {
+    let config: TomlValue = r#"
+[ai]
+enabled = true
+provider = "ollama"
+model = "gemma"
+model_status = "gemma-status"
+model_investigate = "gemma-investigate"
+"#
+    .parse()
+    .expect("parse config");
+
+    let status = ai_status_from_config(&config);
+    assert_eq!(status.status_model.as_deref(), Some("gemma-status"));
+    assert_eq!(
+        status.investigate_model.as_deref(),
+        Some("gemma-investigate")
+    );
+}
+
+#[test]
+fn discover_projects_honors_workspace_roots_depth_and_limits() {
+    let root = temp_dir("workspace-scan");
+    let extra_root = root.join("extra-root");
+    fs::create_dir_all(root.join("service-a")).expect("create service-a");
+    fs::create_dir_all(root.join("service-b")).expect("create service-b");
+    fs::create_dir_all(root.join("deep/one/two/three")).expect("create deep service");
+    fs::create_dir_all(extra_root.join("service-c")).expect("create extra service");
+    fs::write(root.join("service-a/Cargo.toml"), "[package]\nname='a'\n")
+        .expect("write cargo marker");
+    fs::write(root.join("service-b/package.json"), "{}").expect("write package marker");
+    fs::write(
+        root.join("deep/one/two/three/pyproject.toml"),
+        "[project]\nname='deep'\n",
+    )
+    .expect("write deep marker");
+    fs::write(
+        extra_root.join("service-c/go.mod"),
+        "module example.com/servicec\n",
+    )
+    .expect("write go marker");
+
+    let config: TomlValue = r#"
+[workspace]
+max_depth = 2
+max_results = 10
+roots = ["extra-root"]
+"#
+    .parse()
+    .expect("parse config");
+
+    let projects = discover_projects(&config, &root);
+    assert!(projects
+        .iter()
+        .any(|project| project.path.contains("service-a")));
+    assert!(projects
+        .iter()
+        .any(|project| project.path.contains("service-b")));
+    assert!(projects
+        .iter()
+        .any(|project| project.path.contains("service-c")));
+    assert!(!projects
+        .iter()
+        .any(|project| project.path.contains("three")));
+
+    let _ = fs::remove_dir_all(&root);
+}
+
+#[test]
+fn runtime_apps_map_to_projects_with_manager_confidence() {
+    let project = WorkspaceProject {
+        path: r"C:\workspace\api".into(),
+        kind: "node".into(),
+        marker: "package.json".into(),
+    };
+    let app = WorkspaceRuntimeApp {
+        pid: Some(42),
+        name: "api".into(),
+        runtime: "nodejs".into(),
+        language: Some("nodejs".into()),
+        process_kind: Some("server".into()),
+        framework: Some("nextjs".into()),
+        libraries: Vec::new(),
+        log_hints: vec!["pm2 logs".into()],
+        manager: Some("pm2".into()),
+        status: Some("online".into()),
+        cwd: Some(r"C:\workspace\api".into()),
+        script: Some(r"C:\workspace\api\server.js".into()),
+        command: Some("node server.js".into()),
+        project_path: Some(project.path.clone()),
+        confidence: 0.95,
+        source: "pm2".into(),
+        signals: vec![WorkspaceMappingSignal {
+            name: "pm2_jlist".into(),
+            confidence: 0.95,
+            detail: "PM2 reported this app in jlist".into(),
+        }],
+    };
+
+    let mapping = mapping_from_runtime_app(&app).expect("runtime mapping");
+    assert_eq!(mapping.service_id, "api");
+    assert_eq!(mapping.project_path, project.path);
+    assert_eq!(mapping.source, "pm2");
+    assert!(mapping.confidence >= 0.9);
+    assert!(mapping
+        .signals
+        .iter()
+        .any(|signal| signal.name == "runtime_app"));
+}
+
+#[test]
+fn service_token_mapping_keeps_low_confidence_fallback_available() {
+    let projects = vec![WorkspaceProject {
+        path: "/srv/projects/billing-api".into(),
+        kind: "python".into(),
+        marker: "pyproject.toml".into(),
+    }];
+
+    let mapping = mapping_from_service_tokens("billing-api", &projects).expect("token mapping");
+    assert_eq!(mapping.project_path, "/srv/projects/billing-api");
+    assert_eq!(mapping.source, "auto");
+    assert!(mapping.confidence >= 0.45);
+}
+
+#[test]
+fn project_for_paths_discovers_project_root_outside_configured_scan_roots() {
+    let root = temp_dir("runtime-project-root");
+    let app = root.join("apps").join("web");
+    let src = app.join("src");
+    fs::create_dir_all(&src).expect("create app src");
+    fs::write(app.join("package.json"), r#"{"name":"web-app"}"#).expect("write package");
+    let script = src.join("server.js");
+    fs::write(&script, "console.log('ok')").expect("write script");
+
+    let discovered = project_for_paths(
+        &[],
+        Some(src.to_string_lossy().as_ref()),
+        Some(script.to_string_lossy().as_ref()),
+    )
+    .expect("discover project from runtime path");
+    assert_eq!(
+        discovered,
+        clean_display_path(&app.canonicalize().expect("canonical app").to_string_lossy())
+    );
+
+    let _ = fs::remove_dir_all(&root);
+}
+
+#[test]
+fn clean_display_path_removes_windows_extended_prefix() {
+    assert_eq!(
+        clean_display_path(r"\\?\C:\Users\dev\app"),
+        r"C:\Users\dev\app"
+    );
+    assert_eq!(
+        clean_display_path(r"\\?\UNC\server\share\app"),
+        r"\\server\share\app"
+    );
+}
+
+#[test]
+fn build_hypotheses_honors_custom_rules_and_calibration() {
+    let config: TomlValue = r#"
+[hypothesis_engine]
+max_hypotheses_per_incident = 5
+min_supporting_events = 1
+min_generation_confidence = 0.1
+dedup_overlap_threshold = 0.5
+
+[[hypothesis_engine.custom_rules]]
+name = "redis_timeout_cascade"
+requires = ["connection_failures_outbound", "error_spike"]
+requires_same_service = false
+requires_temporal_order = true
+cause_type = "dependency_failure"
+cause_subtype = "redis_timeout"
+title_template = "Redis timeout causing service errors"
+confidence = 0.82
+
+[calibration.defaults]
+high_threshold = 0.7
+medium_threshold = 0.45
+"#
+    .parse()
+    .expect("parse config");
+    let events = vec![
+        event(
+            "e1",
+            "api",
+            "redis timeout upstream dependency",
+            SEVERITY_ERROR,
+            "app",
+            "2026-05-08T10:00:00Z",
+        ),
+        event(
+            "e2",
+            "worker",
+            "error spike after connection refused",
+            SEVERITY_ERROR,
+            "app",
+            "2026-05-08T10:00:10Z",
+        ),
+    ];
+    let graph = build_inference_graph(&config, &events);
+    let hypotheses = build_hypotheses(
+        &config,
+        "inc-1",
+        &events,
+        "2026-05-08T10:00:15Z",
+        &graph,
+        &LearningArtifacts::default(),
+    );
+    let top = hypotheses.first().expect("top hypothesis");
+    assert_eq!(top.cause_type, "dependency_failure");
+    assert_eq!(top.confidence_label.as_deref(), Some("medium"));
+    assert!(top
+        .description
+        .contains("Redis timeout causing service errors"));
+}
+
+#[test]
+fn build_hypotheses_marks_contradicted_candidates_invalid() {
+    let config: TomlValue = r#"
+[hypothesis_engine]
+max_hypotheses_per_incident = 5
+min_supporting_events = 1
+min_generation_confidence = 0.1
+
+[hypothesis_validation]
+contradiction_ratio_fail = 0.5
+contradiction_ratio_warn = 0.2
+
+[contradiction_handling]
+enabled = true
+strong_penalty_per_contradiction = 0.2
+weak_penalty_per_contradiction = 0.05
+min_penalty_multiplier = 0.5
+"#
+    .parse()
+    .expect("parse config");
+    let events = vec![
+        event(
+            "e1",
+            "api",
+            "cpu saturation and memory pressure",
+            SEVERITY_ERROR,
+            "host_metrics",
+            "2026-05-08T10:00:00Z",
+        ),
+        event(
+            "e2",
+            "api",
+            "memory normal and resource recovered",
+            SEVERITY_INFO,
+            "host_metrics",
+            "2026-05-08T10:00:05Z",
+        ),
+    ];
+    let graph = build_inference_graph(&config, &events);
+    let resource = build_hypotheses(
+        &config,
+        "inc-2",
+        &events,
+        "2026-05-08T10:00:10Z",
+        &graph,
+        &LearningArtifacts::default(),
+    )
+    .into_iter()
+    .find(|item| item.cause_type == "resource_pressure")
+    .expect("resource hypothesis");
+    assert!(!resource.is_valid);
+    assert!(!resource.invalidation_reasons.is_empty());
+}
+
+#[test]
+fn parse_container_line_extracts_runtime_container() {
+    let container =
+        parse_container_line("api\tghcr.io/acme/api:1.2\tUp 4 minutes").expect("container line");
+    assert_eq!(container.name, "api");
+    assert_eq!(container.image, "ghcr.io/acme/api:1.2");
+    assert_eq!(container.state, "up");
+}
+
+#[test]
+fn build_inference_graph_creates_roots_and_edges() {
+    let config: TomlValue = r#"
+[inference_graph]
+max_events_for_graph = 50
+plausibility_threshold = 0.05
+max_edges_per_node = 10
+
+[inference_graph.strategies]
+dependency_propagation = true
+same_service_escalation = true
+resource_preceded_error = true
+config_preceded_error = true
+restart_preceded_disconnection = true
+shared_fate = true
+timeout_chain = true
+
+[[topology.edges]]
+source = "api"
+target = "postgres"
+"#
+    .parse()
+    .expect("parse config");
+    let events = vec![
+        event(
+            "e1",
+            "postgres",
+            "postgres restart detected",
+            SEVERITY_ERROR,
+            "app",
+            "2026-05-08T10:00:00Z",
+        ),
+        event(
+            "e2",
+            "api",
+            "connection refused to postgres",
+            SEVERITY_ERROR,
+            "app",
+            "2026-05-08T10:00:05Z",
+        ),
+    ];
+    let graph = build_inference_graph(&config, &events);
+    assert_eq!(graph.root_candidates, vec!["e1".to_string()]);
+    assert!(graph
+        .edges
+        .iter()
+        .any(|edge| edge.target_event_id == "e2" && edge.source_event_id == "e1"));
+}
+
+#[test]
+fn sync_learning_artifacts_updates_calibration_and_weights() {
+    let root = temp_dir("learning");
+    let events_db = root.join("events.db");
+    let incidents_db = root.join("incidents.db");
+    initialize_databases(&events_db, &incidents_db).expect("initialize databases");
+    let mut incidents = IncidentsStore::open(&incidents_db)
+        .expect("open incidents")
+        .expect("incidents store");
+    incidents
+        .upsert_incident(
+            &IncidentRecord {
+                incident_id: "inc-1".into(),
+                state: "open".into(),
+                severity: SEVERITY_ERROR,
+                primary_service: "api".into(),
+                affected_services: vec!["api".into()],
+                created_at: "2026-05-08T10:00:00Z".into(),
+                updated_at: "2026-05-08T10:00:00Z".into(),
+                time_range_start: "2026-05-08T10:00:00Z".into(),
+                time_range_end: "2026-05-08T10:00:00Z".into(),
+                event_count: 2,
+                cluster_ids: Vec::new(),
+                runtime_context: None,
+                resolution_info: None,
+            },
+            &[],
+        )
+        .expect("upsert incident");
+    incidents
+        .replace_hypotheses(
+            "inc-1",
+            &[
+                StoredHypothesis {
+                    hypothesis_id: "hyp-ok".into(),
+                    rank: Some(1),
+                    cause_type: "dependency_failure".into(),
+                    description: "correct".into(),
+                    total_score: Some(0.82),
+                    score_breakdown: serde_json::json!({
+                        "temporal_alignment": 0.9,
+                        "correlation_strength": 0.6,
+                        "frequency_weight": 0.4,
+                        "dependency_proximity": 0.95,
+                        "evidence_coverage": 0.9,
+                        "anomaly_severity": 0.5
+                    }),
+                    supporting_events: vec!["e1".into()],
+                    contradicting_events: Vec::new(),
+                    affected_services: vec!["api".into()],
+                    suggested_checks: Vec::new(),
+                    confidence_label: Some("medium".into()),
+                    is_valid: true,
+                    invalidation_reasons: Vec::new(),
+                    created_at: "2026-05-08T10:00:00Z".into(),
+                    updated_at: "2026-05-08T10:00:00Z".into(),
+                },
+                StoredHypothesis {
+                    hypothesis_id: "hyp-bad".into(),
+                    rank: Some(2),
+                    cause_type: "unknown".into(),
+                    description: "wrong".into(),
+                    total_score: Some(0.33),
+                    score_breakdown: serde_json::json!({
+                        "temporal_alignment": 0.2,
+                        "correlation_strength": 0.2,
+                        "frequency_weight": 0.1,
+                        "dependency_proximity": 0.2,
+                        "evidence_coverage": 0.1,
+                        "anomaly_severity": 0.2
+                    }),
+                    supporting_events: vec!["e2".into()],
+                    contradicting_events: Vec::new(),
+                    affected_services: vec!["api".into()],
+                    suggested_checks: Vec::new(),
+                    confidence_label: Some("low".into()),
+                    is_valid: true,
+                    invalidation_reasons: Vec::new(),
+                    created_at: "2026-05-08T10:00:00Z".into(),
+                    updated_at: "2026-05-08T10:00:00Z".into(),
+                },
+            ],
+        )
+        .expect("replace hypotheses");
+    incidents
+        .add_feedback(&StoredFeedback {
+            feedback_id: "fb-1".into(),
+            incident_id: "inc-1".into(),
+            correct_hypothesis_id: Some("hyp-ok".into()),
+            feedback_type: "confirmed".into(),
+            operator_notes: "matched".into(),
+            resolved_at: "2026-05-08T10:05:00Z".into(),
+            created_at: Some("2026-05-08T10:05:00Z".into()),
+        })
+        .expect("add feedback");
+    let config: TomlValue = r#"
+[calibration]
+enabled = true
+bucket_count = 5
+min_samples_per_bucket = 1
+staleness_threshold_days = 30
+persistence_file = "./data/calibration.json"
+
+[scoring.tuning]
+learning_rate = 0.1
+max_drift_from_default = 0.5
+min_weight = 0.03
+"#
+    .parse()
+    .expect("parse config");
+    let learning = sync_learning_artifacts(&config, &events_db, &incidents_db, &mut incidents)
+        .expect("sync learning artifacts");
+    assert_eq!(learning.calibration.total_feedback_count, 1);
+    assert!(learning
+        .calibration
+        .buckets
+        .iter()
+        .any(|bucket| bucket.total_predictions > 0));
+    let default_evidence = scoring_weight_defaults()["evidence_coverage"];
+    let learned_evidence = learning.weights.effective_weights["evidence_coverage"];
+    assert!(learned_evidence > default_evidence);
+    let _ = fs::remove_dir_all(&root);
+}
+
+#[test]
+fn sync_learning_artifacts_learns_detector_and_template_from_feedback() {
+    let root = temp_dir("adaptive-learning");
+    let events_db = root.join("events.db");
+    let incidents_db = root.join("incidents.db");
+    initialize_databases(&events_db, &incidents_db).expect("initialize databases");
+    let mut events = EventsStore::open(&events_db)
+        .expect("open events")
+        .expect("events store");
+    events
+        .insert_batch(&[
+            NewEventRecord {
+                tags: vec!["migration".into(), "postgres".into()],
+                ..NewEventRecord::minimal(
+                    "e1",
+                    "2026-05-08T10:00:00Z",
+                    "api",
+                    SEVERITY_ERROR,
+                    "schema migration applied to postgres and queries started timing out",
+                    "app",
+                    "2026-05-08T10:00:00Z",
+                )
+            },
+            NewEventRecord {
+                tags: vec!["migration".into(), "timeout".into()],
+                ..NewEventRecord::minimal(
+                    "e2",
+                    "2026-05-08T10:00:03Z",
+                    "api",
+                    SEVERITY_ERROR,
+                    "request timeout after schema migration on postgres",
+                    "app",
+                    "2026-05-08T10:00:03Z",
+                )
+            },
+        ])
+        .expect("insert events");
+    let mut incidents = IncidentsStore::open(&incidents_db)
+        .expect("open incidents")
+        .expect("incidents store");
+    incidents
+        .upsert_incident(
+            &IncidentRecord {
+                incident_id: "inc-adaptive".into(),
+                state: "open".into(),
+                severity: SEVERITY_ERROR,
+                primary_service: "api".into(),
+                affected_services: vec!["api".into()],
+                created_at: "2026-05-08T10:00:00Z".into(),
+                updated_at: "2026-05-08T10:00:05Z".into(),
+                time_range_start: "2026-05-08T10:00:00Z".into(),
+                time_range_end: "2026-05-08T10:00:05Z".into(),
+                event_count: 2,
+                cluster_ids: Vec::new(),
+                runtime_context: None,
+                resolution_info: None,
+            },
+            &["e1".into(), "e2".into()],
+        )
+        .expect("upsert incident");
+    incidents
+        .replace_hypotheses(
+            "inc-adaptive",
+            &[StoredHypothesis {
+                hypothesis_id: "hyp-migration".into(),
+                rank: Some(1),
+                cause_type: "migration_regression".into(),
+                description: "Schema migration on postgres caused request timeouts".into(),
+                total_score: Some(0.91),
+                score_breakdown: serde_json::json!({
+                    "temporal_alignment": 0.9,
+                    "correlation_strength": 0.8,
+                    "frequency_weight": 0.4,
+                    "dependency_proximity": 0.6,
+                    "evidence_coverage": 0.9,
+                    "anomaly_severity": 0.7
+                }),
+                supporting_events: vec!["e1".into(), "e2".into()],
+                contradicting_events: Vec::new(),
+                affected_services: vec!["api".into()],
+                suggested_checks: vec!["Review the migration diff".into()],
+                confidence_label: Some("high".into()),
+                is_valid: true,
+                invalidation_reasons: Vec::new(),
+                created_at: "2026-05-08T10:00:05Z".into(),
+                updated_at: "2026-05-08T10:00:05Z".into(),
+            }],
+        )
+        .expect("replace hypotheses");
+    incidents
+        .add_feedback(&StoredFeedback {
+            feedback_id: "fb-adaptive".into(),
+            incident_id: "inc-adaptive".into(),
+            correct_hypothesis_id: Some("hyp-migration".into()),
+            feedback_type: "confirmed".into(),
+            operator_notes: "the migration really broke postgres callers".into(),
+            resolved_at: "2026-05-08T10:06:00Z".into(),
+            created_at: Some("2026-05-08T10:06:00Z".into()),
+        })
+        .expect("add feedback");
+    let config: TomlValue = r#"
+[hypothesis_engine]
+max_hypotheses_per_incident = 5
+min_supporting_events = 1
+min_generation_confidence = 0.1
+
+[calibration]
+enabled = true
+bucket_count = 5
+min_samples_per_bucket = 1
+staleness_threshold_days = 30
+persistence_file = "./data/calibration.json"
+
+[scoring.tuning]
+learning_rate = 0.1
+max_drift_from_default = 0.5
+min_weight = 0.03
+"#
+    .parse()
+    .expect("parse config");
+    let learning = sync_learning_artifacts(&config, &events_db, &incidents_db, &mut incidents)
+        .expect("sync learning artifacts");
+    assert!(learning
+        .adaptive
+        .learned_detectors
+        .iter()
+        .any(|detector| detector.cause_type == "migration_regression"
+            && detector
+                .positive_terms
+                .iter()
+                .any(|term| term == "migration" || term == "postgres")));
+    assert!(learning
+        .adaptive
+        .learned_templates
+        .iter()
+        .any(|template| template.cause_type == "migration_regression"));
+
+    let new_events = vec![
+        event(
+            "n1",
+            "api",
+            "postgres timeout immediately after migration",
+            SEVERITY_ERROR,
+            "app",
+            "2026-05-08T11:00:00Z",
+        ),
+        event(
+            "n2",
+            "api",
+            "schema migration triggered failing postgres queries",
+            SEVERITY_ERROR,
+            "app",
+            "2026-05-08T11:00:03Z",
+        ),
+    ];
+    let graph = build_inference_graph(&config, &new_events);
+    let hypotheses = build_hypotheses(
+        &config,
+        "inc-adaptive-2",
+        &new_events,
+        "2026-05-08T11:00:05Z",
+        &graph,
+        &learning,
+    );
+    assert!(hypotheses.iter().any(|hypothesis| {
+        hypothesis.cause_type == "migration_regression"
+            && hypothesis
+                .description
+                .contains("Schema migration on postgres caused request timeouts")
+    }));
+    let _ = fs::remove_dir_all(&root);
+}
+
+#[test]
+fn sync_learning_artifacts_learns_compositions_and_edge_profiles() {
+    let root = temp_dir("adaptive-composition");
+    let events_db = root.join("events.db");
+    let incidents_db = root.join("incidents.db");
+    initialize_databases(&events_db, &incidents_db).expect("initialize databases");
+    let mut events = EventsStore::open(&events_db)
+        .expect("open events")
+        .expect("events store");
+    events
+        .insert_batch(&[
+            NewEventRecord {
+                tags: vec!["restart".into(), "postgres".into()],
+                ..NewEventRecord::minimal(
+                    "e1",
+                    "2026-05-08T10:00:00Z",
+                    "postgres",
+                    SEVERITY_ERROR,
+                    "postgres restart panic detected",
+                    "app",
+                    "2026-05-08T10:00:00Z",
+                )
+            },
+            NewEventRecord {
+                tags: vec!["timeout".into(), "postgres".into()],
+                ..NewEventRecord::minimal(
+                    "e2",
+                    "2026-05-08T10:00:05Z",
+                    "api",
+                    SEVERITY_ERROR,
+                    "timeout calling postgres upstream dependency",
+                    "app",
+                    "2026-05-08T10:00:05Z",
+                )
+            },
+            NewEventRecord {
+                tags: vec!["error_spike".into(), "postgres".into()],
+                ..NewEventRecord::minimal(
+                    "e3",
+                    "2026-05-08T10:00:08Z",
+                    "api",
+                    SEVERITY_ERROR,
+                    "error spike after connection refused from postgres",
+                    "app",
+                    "2026-05-08T10:00:08Z",
+                )
+            },
+        ])
+        .expect("insert events");
+    let config: TomlValue = r#"
+[hypothesis_engine]
+max_hypotheses_per_incident = 5
+min_supporting_events = 1
+min_generation_confidence = 0.1
+
+[inference_graph]
+max_events_for_graph = 50
+plausibility_threshold = 0.05
+max_edges_per_node = 10
+
+[inference_graph.strategies]
+dependency_propagation = true
+same_service_escalation = true
+resource_preceded_error = true
+config_preceded_error = true
+restart_preceded_disconnection = true
+shared_fate = true
+timeout_chain = true
+
+[calibration]
+enabled = true
+bucket_count = 5
+min_samples_per_bucket = 1
+staleness_threshold_days = 30
+persistence_file = "./data/calibration.json"
+
+[scoring.tuning]
+learning_rate = 0.1
+max_drift_from_default = 0.5
+min_weight = 0.03
+
+[[topology.edges]]
+source = "api"
+target = "postgres"
+"#
+    .parse()
+    .expect("parse config");
+    let incident_events = vec![
+        event(
+            "e1",
+            "postgres",
+            "postgres restart panic detected",
+            SEVERITY_ERROR,
+            "app",
+            "2026-05-08T10:00:00Z",
+        ),
+        event(
+            "e2",
+            "api",
+            "timeout calling postgres upstream dependency",
+            SEVERITY_ERROR,
+            "app",
+            "2026-05-08T10:00:05Z",
+        ),
+        event(
+            "e3",
+            "api",
+            "error spike after connection refused from postgres",
+            SEVERITY_ERROR,
+            "app",
+            "2026-05-08T10:00:08Z",
+        ),
+    ];
+    let graph = build_inference_graph_with_learning(
+        &config,
+        &incident_events,
+        &LearningArtifacts::default(),
+    );
+    let mut incidents = IncidentsStore::open(&incidents_db)
+        .expect("open incidents")
+        .expect("incidents store");
+    incidents
+        .upsert_incident(
+            &IncidentRecord {
+                incident_id: "inc-comp".into(),
+                state: "open".into(),
+                severity: SEVERITY_ERROR,
+                primary_service: "api".into(),
+                affected_services: vec!["api".into(), "postgres".into()],
+                created_at: "2026-05-08T10:00:00Z".into(),
+                updated_at: "2026-05-08T10:00:08Z".into(),
+                time_range_start: "2026-05-08T10:00:00Z".into(),
+                time_range_end: "2026-05-08T10:00:08Z".into(),
+                event_count: 3,
+                cluster_ids: Vec::new(),
+                runtime_context: None,
+                resolution_info: None,
+            },
+            &["e1".into(), "e2".into(), "e3".into()],
+        )
+        .expect("upsert incident");
+    incidents
+        .upsert_inference_graph_snapshot(&StoredInferenceGraphSnapshot {
+            incident_id: "inc-comp".into(),
+            graph_data: serde_json::to_value(&graph).expect("serialize graph"),
+            created_at: "2026-05-08T10:00:08Z".into(),
+            event_count: 3,
+        })
+        .expect("upsert graph snapshot");
+    incidents
+        .replace_hypotheses(
+            "inc-comp",
+            &[StoredHypothesis {
+                hypothesis_id: "hyp-comp".into(),
+                rank: Some(1),
+                cause_type: "dependency_failure".into(),
+                description: "Postgres restart triggered upstream timeout cascade".into(),
+                total_score: Some(0.89),
+                score_breakdown: serde_json::json!({
+                    "temporal_alignment": 0.85,
+                    "correlation_strength": 0.8,
+                    "frequency_weight": 0.5,
+                    "dependency_proximity": 0.95,
+                    "evidence_coverage": 0.9,
+                    "anomaly_severity": 0.55
+                }),
+                supporting_events: vec!["e1".into(), "e2".into(), "e3".into()],
+                contradicting_events: Vec::new(),
+                affected_services: vec!["api".into(), "postgres".into()],
+                suggested_checks: vec!["Inspect postgres restart cause".into()],
+                confidence_label: Some("high".into()),
+                is_valid: true,
+                invalidation_reasons: Vec::new(),
+                created_at: "2026-05-08T10:00:08Z".into(),
+                updated_at: "2026-05-08T10:00:08Z".into(),
+            }],
+        )
+        .expect("replace hypotheses");
+    incidents
+        .add_feedback(&StoredFeedback {
+            feedback_id: "fb-comp".into(),
+            incident_id: "inc-comp".into(),
+            correct_hypothesis_id: Some("hyp-comp".into()),
+            feedback_type: "confirmed".into(),
+            operator_notes: "restart plus timeout chain was the real path".into(),
+            resolved_at: "2026-05-08T10:15:00Z".into(),
+            created_at: Some("2026-05-08T10:15:00Z".into()),
+        })
+        .expect("add feedback");
+    let learning = sync_learning_artifacts(&config, &events_db, &incidents_db, &mut incidents)
+        .expect("sync learning artifacts");
+    assert!(learning
+        .adaptive
+        .learned_compositions
+        .iter()
+        .any(|composition| composition.cause_type == "dependency_failure"
+            && composition.requires.len() >= 2
+            && !composition.preferred_edge_types.is_empty()));
+    assert!(learning
+        .adaptive
+        .learned_edge_profiles
+        .iter()
+        .any(|profile| profile.cause_type.as_deref() == Some("dependency_failure")));
+    let _ = fs::remove_dir_all(&root);
+}
+
+#[test]
+fn build_inference_graph_with_learning_applies_edge_profile_adjustment() {
+    let config: TomlValue = r#"
+[inference_graph]
+max_events_for_graph = 50
+plausibility_threshold = 0.01
+max_edges_per_node = 10
+
+[inference_graph.strategies]
+dependency_propagation = false
+same_service_escalation = true
+resource_preceded_error = false
+config_preceded_error = false
+restart_preceded_disconnection = false
+shared_fate = false
+timeout_chain = false
+"#
+    .parse()
+    .expect("parse config");
+    let events = vec![
+        event(
+            "e1",
+            "api",
+            "warning before crash loop",
+            SEVERITY_WARN,
+            "app",
+            "2026-05-08T10:00:00Z",
+        ),
+        event(
+            "e2",
+            "api",
+            "panic and restart loop detected",
+            SEVERITY_ERROR,
+            "app",
+            "2026-05-08T10:00:05Z",
+        ),
+    ];
+    let baseline =
+        build_inference_graph_with_learning(&config, &events, &LearningArtifacts::default());
+    let baseline_edge = baseline
+        .edges
+        .iter()
+        .find(|edge| edge.edge_type == "same_service_escalation")
+        .expect("baseline edge")
+        .plausibility;
+    let mut learning = LearningArtifacts::default();
+    learning
+        .adaptive
+        .learned_edge_profiles
+        .push(LearnedEdgeProfile {
+            profile_id: "same-service-api".into(),
+            edge_type: "same_service_escalation".into(),
+            source_service: Some("api".into()),
+            target_service: Some("api".into()),
+            cause_type: Some("service_instability".into()),
+            confirmations: 4,
+            false_positives: 0,
+            average_plausibility: 0.95,
+            average_latency_ms: 5000.0,
+            created_from_feedback_id: "fb-edge".into(),
+            updated_at: "2026-05-08T10:10:00Z".into(),
+            manually_disabled: false,
+            status_reason: None,
+            review_status: default_review_status(),
+            review_reason: None,
+            last_reviewed_at: None,
+        });
+    let adapted = build_inference_graph_with_learning(&config, &events, &learning);
+    let adapted_edge = adapted
+        .edges
+        .iter()
+        .find(|edge| edge.edge_type == "same_service_escalation")
+        .expect("adapted edge")
+        .plausibility;
+    assert!(adapted_edge > baseline_edge);
+}
+
+#[test]
+fn build_adaptive_learning_history_entries_tracks_score_and_rank_movement() {
+    let previous = vec![serde_json::json!({
+        "hypothesis_id": "inc-1-hyp-1",
+        "cause_type": "dependency_failure",
+        "rank": 2,
+        "total_score": 0.55,
+        "score_breakdown": {
+            "provenance": {
+                "artifacts": [{
+                    "kind": "composition",
+                    "artifact_id": "composition_restart_timeout",
+                    "label": "restart-timeout",
+                    "impact_metric": "prior_contribution",
+                    "impact_value": 0.10
+                }]
+            }
+        }
+    })];
+    let next = vec![StoredHypothesis {
+        hypothesis_id: "inc-1-hyp-1".into(),
+        rank: Some(1),
+        cause_type: "dependency_failure".into(),
+        description: "learned composition".into(),
+        total_score: Some(0.72),
+        score_breakdown: serde_json::json!({
+            "provenance": {
+                "artifacts": [{
+                    "kind": "composition",
+                    "artifact_id": "composition_restart_timeout",
+                    "label": "restart-timeout",
+                    "impact_metric": "prior_contribution",
+                    "impact_value": 0.17
+                }]
+            }
+        }),
+        supporting_events: vec!["e1".into()],
+        contradicting_events: Vec::new(),
+        affected_services: vec!["api".into()],
+        suggested_checks: Vec::new(),
+        confidence_label: Some("medium".into()),
+        is_valid: true,
+        invalidation_reasons: Vec::new(),
+        created_at: "2026-05-08T12:00:00Z".into(),
+        updated_at: "2026-05-08T12:00:00Z".into(),
+    }];
+    let entries =
+        build_adaptive_learning_history_entries("inc-1", "2026-05-08T12:00:00Z", &previous, &next);
+    assert_eq!(entries.len(), 1);
+    assert_eq!(entries[0].artifact_kind, "composition");
+    assert_eq!(entries[0].rank_delta, Some(1));
+    assert!(entries[0]
+        .score_delta
+        .map(|value| (value - 0.17).abs() < 0.0001)
+        .unwrap_or(false));
+}

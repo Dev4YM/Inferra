@@ -5,11 +5,18 @@ build-backend = "setuptools.build_meta"
 [project]
 name = "inferra"
 version = "0.2.0"
-description = "Local-first AI-integrated runtime intelligence control plane"
+description = """Local-first AI-integrated runtime intelligence control plane.
+
+The installable Python package exposes archived reference code under deprecated/ (see README).
+The active product runtime is the Rust workspace at src/Cargo.toml. Base Python dependencies are
+empty; archived modules and pytest need the optional [legacy] extra (see README Development)."""
 readme = "README.md"
 requires-python = ">=3.11"
 keywords = ["observability", "debugging", "incident-response", "ollama", "sqlite"]
-dependencies = [
+dependencies = []
+
+[project.optional-dependencies]
+legacy = [
   "argcomplete>=3.5",
   "fastapi>=0.110",
   "uvicorn[standard]>=0.27",
@@ -19,11 +26,8 @@ dependencies = [
   "aiofiles>=23",
   "aiohttp>=3.9",
   "rich>=13.9",
-  "tomli>=2; python_version < '3.11'",
   "tomli-w>=1.0",
 ]
-
-[project.optional-dependencies]
 windows = ["pywin32>=306"]
 build-windows = ["pyinstaller>=6,<8"]
 kubernetes = ["kubernetes>=29"]
