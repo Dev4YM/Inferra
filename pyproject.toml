@@ -26,7 +26,7 @@ legacy = [
   "aiofiles>=23",
   "aiohttp>=3.9",
   "rich>=13.9",
-  "tomli-w>=1.0",
+  "tomli-w>=1.2.0",
 ]
 windows = ["pywin32>=306"]
 build-windows = ["pyinstaller>=6,<8"]
