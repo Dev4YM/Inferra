@@ -18,7 +18,7 @@ dependencies = []
 [project.optional-dependencies]
 legacy = [
   "argcomplete>=3.5",
-  "fastapi>=0.110",
+  "fastapi>=0.136.1",
   "uvicorn[standard]>=0.27",
   "networkx>=3.2",
   "psutil>=5.9",
