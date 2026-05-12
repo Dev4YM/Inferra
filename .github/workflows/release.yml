@@ -198,7 +198,7 @@ jobs:
             type=sha
       - name: Build and push
         id: push
-        uses: docker/build-push-action@v6
+        uses: docker/build-push-action@v7
         with:
           context: .
           push: ${{ github.ref_type == 'tag' }}
