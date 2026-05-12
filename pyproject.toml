@@ -37,7 +37,7 @@ dev = [
   "httpx>=0.27",
   "aioresponses>=0.7",
   "pytest-cov>=6",
-  "ruff>=0.11",
+  "ruff>=0.15.12",
 ]
 ui = ["playwright>=1.41"]
 docs = ["mkdocs>=1.6"]
