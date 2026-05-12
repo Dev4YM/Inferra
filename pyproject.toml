@@ -30,7 +30,7 @@ legacy = [
 ]
 windows = ["pywin32>=306"]
 build-windows = ["pyinstaller>=6,<8"]
-kubernetes = ["kubernetes>=29"]
+kubernetes = ["kubernetes>=35.0.0"]
 dev = [
   "pytest>=8",
   "pytest-asyncio>=0.23",
