@@ -152,6 +152,20 @@ pub struct StoredAiTrace {
 }
 
 #[derive(Debug, Clone)]
+pub struct StoredAiGeneration {
+    pub generation_id: String,
+    pub scope_key: String,
+    pub focus: String,
+    pub mode: String,
+    pub question: String,
+    pub response: Value,
+    pub bundle_hash: String,
+    pub used_ai: bool,
+    pub provider: Value,
+    pub created_at: String,
+}
+
+#[derive(Debug, Clone)]
 pub struct StoredInferenceGraphSnapshot {
     pub incident_id: String,
     pub graph_data: Value,
@@ -1320,6 +1334,21 @@ impl IncidentsStore {
                  ORDER BY updated_at DESC, created_at DESC LIMIT 1",
             )
             .context("prepare latest active incident")?;
+        let mut rows = stmt.query([])?;
+        let Some(row) = rows.next()? else {
+            return Ok(None);
+        };
+        Ok(Some(row.get(0)?))
+    }
+
+    pub fn latest_incident_id(&self) -> Result<Option<String>> {
+        let mut stmt = self
+            .conn
+            .prepare(
+                "SELECT incident_id FROM incidents \
+                 ORDER BY updated_at DESC, created_at DESC LIMIT 1",
+            )
+            .context("prepare latest incident")?;
         let mut rows = stmt.query([])?;
         let Some(row) = rows.next()? else {
             return Ok(None);
@@ -2838,6 +2867,90 @@ impl IncidentsStore {
             .context("query latest ai trace")
     }
 
+    pub fn add_ai_generation(&self, generation: &StoredAiGeneration) -> Result<()> {
+        self.conn
+            .execute(
+                "INSERT INTO ai_generations (
+                    generation_id, scope_key, focus, mode, question, response_json,
+                    bundle_hash, used_ai, provider_json, created_at
+                ) VALUES (
+                    ?1, ?2, ?3, ?4, ?5, ?6,
+                    ?7, ?8, ?9, ?10
+                )",
+                rusqlite::params![
+                    generation.generation_id,
+                    generation.scope_key,
+                    generation.focus,
+                    generation.mode,
+                    generation.question,
+                    generation.response.to_string(),
+                    generation.bundle_hash,
+                    if generation.used_ai { 1 } else { 0 },
+                    generation.provider.to_string(),
+                    generation.created_at,
+                ],
+            )
+            .context("insert ai generation")?;
+        Ok(())
+    }
+
+    pub fn latest_ai_generation(&self, scope_key: &str) -> Result<Option<Value>> {
+        self.conn
+            .query_row(
+                "SELECT generation_id, scope_key, focus, mode, question, response_json,
+                        bundle_hash, used_ai, provider_json, created_at
+                 FROM ai_generations
+                 WHERE scope_key = ?1
+                 ORDER BY created_at DESC LIMIT 1",
+                rusqlite::params![scope_key],
+                ai_generation_json_from_row,
+            )
+            .optional()
+            .context("query latest ai generation")
+    }
+
+    pub fn list_ai_generations(
+        &self,
+        scope_prefix: Option<&str>,
+        limit: usize,
+    ) -> Result<Vec<Value>> {
+        let limit = limit.clamp(1, 200);
+        let (sql, params): (&str, Vec<rusqlite::types::Value>) =
+            if let Some(prefix) = scope_prefix.filter(|value| !value.trim().is_empty()) {
+                (
+                    "SELECT generation_id, scope_key, focus, mode, question, response_json,
+                        bundle_hash, used_ai, provider_json, created_at
+                 FROM ai_generations
+                 WHERE scope_key LIKE ?1 || '%'
+                 ORDER BY created_at DESC LIMIT ?2",
+                    vec![prefix.to_string().into(), (limit as i64).into()],
+                )
+            } else {
+                (
+                    "SELECT generation_id, scope_key, focus, mode, question, response_json,
+                        bundle_hash, used_ai, provider_json, created_at
+                 FROM ai_generations
+                 ORDER BY created_at DESC LIMIT ?1",
+                    vec![(limit as i64).into()],
+                )
+            };
+        let mut stmt = self
+            .conn
+            .prepare(sql)
+            .context("prepare ai generations list")?;
+        let rows = stmt
+            .query_map(
+                rusqlite::params_from_iter(params.iter()),
+                ai_generation_json_from_row,
+            )
+            .context("query ai generations list")?;
+        let mut out = Vec::new();
+        for row in rows {
+            out.push(row?);
+        }
+        Ok(out)
+    }
+
     pub fn record_state_log(
         &self,
         incident_id: &str,
@@ -3367,6 +3480,18 @@ fn initialize_incidents_db(path: &Path) -> Result<()> {
              message_schema_version INTEGER NOT NULL DEFAULT 1,
              created_at TEXT NOT NULL DEFAULT (strftime('%Y-%m-%dT%H:%M:%fZ', 'now'))
          );
+         CREATE TABLE IF NOT EXISTS ai_generations (
+             generation_id TEXT PRIMARY KEY,
+             scope_key TEXT NOT NULL,
+             focus TEXT NOT NULL,
+             mode TEXT NOT NULL,
+             question TEXT NOT NULL DEFAULT '',
+             response_json TEXT NOT NULL DEFAULT '{}',
+             bundle_hash TEXT NOT NULL DEFAULT '',
+             used_ai INTEGER NOT NULL DEFAULT 0,
+             provider_json TEXT NOT NULL DEFAULT '{}',
+             created_at TEXT NOT NULL DEFAULT (strftime('%Y-%m-%dT%H:%M:%fZ', 'now'))
+         );
          CREATE TABLE IF NOT EXISTS adaptive_learning_audit (
              audit_id TEXT PRIMARY KEY,
              artifact_kind TEXT NOT NULL,
@@ -3519,6 +3644,8 @@ fn initialize_incidents_db(path: &Path) -> Result<()> {
          CREATE INDEX IF NOT EXISTS idx_state_log_changed ON incident_state_log(changed_at);
          CREATE INDEX IF NOT EXISTS idx_ai_traces_incident ON incident_ai_traces(incident_id, created_at DESC);
          CREATE INDEX IF NOT EXISTS idx_chat_incident ON incident_chat_messages(incident_id, created_at ASC);
+         CREATE INDEX IF NOT EXISTS idx_ai_generations_scope ON ai_generations(scope_key, created_at DESC);
+         CREATE INDEX IF NOT EXISTS idx_ai_generations_focus ON ai_generations(focus, created_at DESC);
          CREATE INDEX IF NOT EXISTS idx_adaptive_audit_created ON adaptive_learning_audit(created_at DESC);
          CREATE INDEX IF NOT EXISTS idx_adaptive_audit_artifact ON adaptive_learning_audit(artifact_kind, artifact_id, created_at DESC);
          CREATE INDEX IF NOT EXISTS idx_adaptive_audit_action ON adaptive_learning_audit(action, created_at DESC);
@@ -3643,13 +3770,39 @@ fn initialize_incidents_db(path: &Path) -> Result<()> {
     )
     .context("create ai_operator_context")?;
     conn.execute(
-        "INSERT INTO _schema_version(schema_name, version) VALUES ('incidents', 8)
+        "CREATE TABLE IF NOT EXISTS ai_generations (
+            generation_id TEXT PRIMARY KEY,
+            scope_key TEXT NOT NULL,
+            focus TEXT NOT NULL,
+            mode TEXT NOT NULL,
+            question TEXT NOT NULL DEFAULT '',
+            response_json TEXT NOT NULL DEFAULT '{}',
+            bundle_hash TEXT NOT NULL DEFAULT '',
+            used_ai INTEGER NOT NULL DEFAULT 0,
+            provider_json TEXT NOT NULL DEFAULT '{}',
+            created_at TEXT NOT NULL DEFAULT (strftime('%Y-%m-%dT%H:%M:%fZ', 'now'))
+        );",
+        [],
+    )
+    .context("create ai_generations")?;
+    conn.execute(
+        "CREATE INDEX IF NOT EXISTS idx_ai_generations_scope ON ai_generations(scope_key, created_at DESC)",
+        [],
+    )
+    .context("create ai_generations scope index")?;
+    conn.execute(
+        "CREATE INDEX IF NOT EXISTS idx_ai_generations_focus ON ai_generations(focus, created_at DESC)",
+        [],
+    )
+    .context("create ai_generations focus index")?;
+    conn.execute(
+        "INSERT INTO _schema_version(schema_name, version) VALUES ('incidents', 9)
          ON CONFLICT(schema_name) DO UPDATE SET version = excluded.version, applied_at = strftime('%Y-%m-%dT%H:%M:%fZ', 'now')",
         [],
     )
     .context("update incidents _schema_version")?;
     conn.execute(
-        "INSERT INTO schema_version(name, version) VALUES ('incidents', 8)
+        "INSERT INTO schema_version(name, version) VALUES ('incidents', 9)
          ON CONFLICT(name) DO UPDATE SET version = excluded.version",
         [],
     )
@@ -3748,6 +3901,23 @@ fn parse_tags(raw: String) -> Option<Vec<String>> {
 
 fn parse_json_array(raw: String) -> Vec<String> {
     serde_json::from_str::<Vec<String>>(&raw).unwrap_or_default()
+}
+
+fn ai_generation_json_from_row(row: &Row<'_>) -> rusqlite::Result<Value> {
+    let response_text: String = row.get(5)?;
+    let provider_text: String = row.get(8)?;
+    Ok(serde_json::json!({
+        "generation_id": row.get::<_, String>(0)?,
+        "scope_key": row.get::<_, String>(1)?,
+        "focus": row.get::<_, String>(2)?,
+        "mode": row.get::<_, String>(3)?,
+        "question": row.get::<_, String>(4)?,
+        "response": serde_json::from_str::<Value>(&response_text).unwrap_or(Value::Null),
+        "bundle_hash": row.get::<_, String>(6)?,
+        "used_ai": row.get::<_, i64>(7)? != 0,
+        "provider": serde_json::from_str::<Value>(&provider_text).unwrap_or(Value::Null),
+        "created_at": row.get::<_, String>(9)?,
+    }))
 }
 
 fn table_exists(conn: &Connection, table_name: &str) -> Result<bool> {
@@ -4292,6 +4462,20 @@ mod tests {
             })
             .expect("add ai trace");
         incidents
+            .add_ai_generation(&StoredAiGeneration {
+                generation_id: "gen-1".into(),
+                scope_key: "incident:inc-1|mode=developer|report=false|q=0".into(),
+                focus: "incident:inc-1".into(),
+                mode: "developer".into(),
+                question: String::new(),
+                response: serde_json::json!({"output":{"headline":"Database outage"}, "used_ai": false}),
+                bundle_hash: "bundle-hash".into(),
+                used_ai: false,
+                provider: serde_json::json!({"enabled": false}),
+                created_at: "2026-05-07T10:03:31Z".into(),
+            })
+            .expect("add ai generation");
+        incidents
             .upsert_inference_graph_snapshot(&StoredInferenceGraphSnapshot {
                 incident_id: "inc-1".into(),
                 graph_data: serde_json::json!({"nodes":["api", "postgres"], "edges":[["api","postgres"]]}),
@@ -4312,6 +4496,10 @@ mod tests {
         assert!(incidents
             .latest_ai_trace("inc-1")
             .expect("latest ai trace")
+            .is_some());
+        assert!(incidents
+            .latest_ai_generation("incident:inc-1|mode=developer|report=false|q=0")
+            .expect("latest ai generation")
             .is_some());
         assert!(incidents
             .inference_graph_snapshot("inc-1")

@@ -117,12 +117,22 @@ fn runtime_apps_map_to_projects_with_manager_confidence() {
     let app = WorkspaceRuntimeApp {
         pid: Some(42),
         name: "api".into(),
+        display_name: Some("api".into()),
         runtime: "nodejs".into(),
         language: Some("nodejs".into()),
         process_kind: Some("server".into()),
         framework: Some("nextjs".into()),
         libraries: Vec::new(),
         log_hints: vec!["pm2 logs".into()],
+        log_sources: Vec::new(),
+        app_url: None,
+        endpoints: Vec::new(),
+        health_endpoint: None,
+        app_location: None,
+        resources: None,
+        app_state: None,
+        context_capabilities: Vec::new(),
+        app_structure: Vec::new(),
         manager: Some("pm2".into()),
         status: Some("online".into()),
         cwd: Some(r"C:\workspace\api".into()),
@@ -147,6 +157,180 @@ fn runtime_apps_map_to_projects_with_manager_confidence() {
         .signals
         .iter()
         .any(|signal| signal.name == "runtime_app"));
+}
+
+#[test]
+fn port_from_command_ignores_node_print_flag() {
+    assert_eq!(port_from_command("node -p \"process.version\""), None);
+    assert_eq!(
+        port_from_command("node server.js http://127.0.0.1:20"),
+        None
+    );
+    assert_eq!(port_from_command("node server.js --port 3001"), Some(3001));
+    assert_eq!(
+        port_from_command("uvicorn app:app --host 0.0.0.0 --port=8000"),
+        Some(8000)
+    );
+}
+
+#[test]
+fn workspace_manifest_enriches_runtime_app_context() {
+    let root = temp_dir("workspace-manifest");
+    let app_dir = root.join("billing-api");
+    fs::create_dir_all(app_dir.join(".inferra")).expect("create inferra dir");
+    fs::create_dir_all(app_dir.join("logs")).expect("create logs dir");
+    fs::write(
+        app_dir.join("package.json"),
+        r#"{"dependencies":{"fastify":"latest"}}"#,
+    )
+    .expect("write package");
+    fs::write(app_dir.join("logs/app.log"), "server started\n").expect("write log");
+    fs::write(
+        app_dir.join(".inferra/app.toml"),
+        r#"
+[app]
+name = "Billing API"
+url = "http://127.0.0.1:3001"
+framework = "fastify"
+
+[heartbeat]
+path = "/health"
+
+[[logs]]
+label = "App log"
+path = "logs/app.log"
+kind = "file"
+"#,
+    )
+    .expect("write manifest");
+
+    let mut app = WorkspaceRuntimeApp {
+        pid: None,
+        name: "billing-api".into(),
+        display_name: None,
+        runtime: "nodejs".into(),
+        language: Some("nodejs".into()),
+        process_kind: Some("server".into()),
+        framework: None,
+        libraries: Vec::new(),
+        log_hints: Vec::new(),
+        log_sources: Vec::new(),
+        app_url: None,
+        endpoints: Vec::new(),
+        health_endpoint: None,
+        app_location: None,
+        resources: None,
+        app_state: None,
+        context_capabilities: Vec::new(),
+        app_structure: Vec::new(),
+        manager: None,
+        status: None,
+        cwd: Some(display_path(&app_dir)),
+        script: None,
+        command: None,
+        project_path: Some(display_path(&app_dir)),
+        confidence: 0.8,
+        source: "process".into(),
+        signals: Vec::new(),
+    };
+
+    apply_workspace_manifest(&mut app);
+
+    assert_eq!(app.display_name.as_deref(), Some("Billing API"));
+    assert_eq!(app.framework.as_deref(), Some("fastify"));
+    assert_eq!(app.app_url.as_deref(), Some("http://127.0.0.1:3001"));
+    assert_eq!(
+        app.health_endpoint
+            .as_ref()
+            .map(|endpoint| endpoint.url.as_str()),
+        Some("http://127.0.0.1:3001/health")
+    );
+    assert!(app.log_sources.iter().any(|source| {
+        source.label == "App log"
+            && source.path.as_deref().is_some_and(|path| {
+                path.ends_with(r"logs\app.log") || path.ends_with("logs/app.log")
+            })
+    }));
+    assert!(app
+        .signals
+        .iter()
+        .any(|signal| signal.name == "inferra_manifest"));
+
+    let _ = fs::remove_dir_all(&root);
+}
+
+#[test]
+fn workspace_project_acceptance_skips_installed_packages_unless_registered() {
+    let root = temp_dir("workspace-installed-package-filter");
+    let package = root.join("node_modules/pm2");
+    fs::create_dir_all(&package).expect("create package");
+    fs::write(package.join("package.json"), "{}").expect("write package marker");
+
+    assert!(!should_accept_workspace_project(&package));
+    fs::create_dir_all(package.join(".inferra")).expect("create inferra dir");
+    fs::write(
+        package.join(".inferra/app.toml"),
+        "[app]\nname='registered'\n",
+    )
+    .expect("write manifest");
+    assert!(should_accept_workspace_project(&package));
+
+    let _ = fs::remove_dir_all(&root);
+}
+
+#[test]
+fn dependency_scan_discovers_framework_log_files_without_manifest() {
+    let root = temp_dir("workspace-dependency-log-scan");
+    fs::create_dir_all(root.join("logs")).expect("create logs");
+    fs::write(
+        root.join("package.json"),
+        r#"{"dependencies":{"fastify":"latest","pino":"latest"}}"#,
+    )
+    .expect("write package");
+    fs::write(root.join("logs/app.log"), "ready\n").expect("write log");
+    let project_path = display_path(&root);
+    let mut app = WorkspaceRuntimeApp {
+        pid: None,
+        name: "api".into(),
+        display_name: None,
+        runtime: "nodejs".into(),
+        language: Some("nodejs".into()),
+        process_kind: Some("server".into()),
+        framework: None,
+        libraries: Vec::new(),
+        log_hints: Vec::new(),
+        log_sources: Vec::new(),
+        app_url: None,
+        endpoints: Vec::new(),
+        health_endpoint: None,
+        app_location: None,
+        resources: None,
+        app_state: None,
+        context_capabilities: Vec::new(),
+        app_structure: Vec::new(),
+        manager: None,
+        status: None,
+        cwd: Some(project_path.clone()),
+        script: None,
+        command: None,
+        project_path: Some(project_path),
+        confidence: 0.8,
+        source: "process".into(),
+        signals: Vec::new(),
+    };
+
+    apply_workspace_manifest(&mut app);
+
+    assert_eq!(app.framework.as_deref(), Some("fastify"));
+    assert!(app.libraries.iter().any(|library| library == "pino"));
+    assert!(app.log_sources.iter().any(|source| {
+        source.kind == "file"
+            && source.path.as_deref().is_some_and(|path| {
+                path.ends_with("logs/app.log") || path.ends_with(r"logs\app.log")
+            })
+    }));
+
+    let _ = fs::remove_dir_all(&root);
 }
 
 #[test]

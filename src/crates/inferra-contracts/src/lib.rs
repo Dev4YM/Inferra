@@ -153,10 +153,100 @@ pub struct WorkspaceProject {
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct WorkspaceLogSource {
+    pub kind: String,
+    pub label: String,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub path: Option<String>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub command: Option<String>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub stream: Option<String>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub exists: Option<bool>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub readable: Option<bool>,
+    pub source: String,
+    pub confidence: f64,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct WorkspaceAppEndpoint {
+    pub url: String,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub host: Option<String>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub port: Option<u16>,
+    pub protocol: String,
+    pub source: String,
+    pub confidence: f64,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct WorkspaceAppLocation {
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub project_path: Option<String>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub cwd: Option<String>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub script: Option<String>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub executable: Option<String>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub installation_dir: Option<String>,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct WorkspaceAppResources {
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub cpu_percent: Option<f64>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub memory_mb: Option<f64>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub virtual_memory_mb: Option<f64>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub uptime_seconds: Option<u64>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub process_status: Option<String>,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct WorkspaceAppState {
+    pub health: String,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub status: Option<String>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub reason: Option<String>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub started_at: Option<String>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub restarts: Option<u64>,
+    pub observed_by: String,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct WorkspaceAppCapability {
+    pub key: String,
+    pub supported: bool,
+    pub source: String,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub detail: Option<String>,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct WorkspaceAppStructureItem {
+    pub path: String,
+    pub kind: String,
+    pub role: String,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct WorkspaceRuntimeApp {
     #[serde(skip_serializing_if = "Option::is_none")]
     pub pid: Option<u32>,
     pub name: String,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub display_name: Option<String>,
     pub runtime: String,
     #[serde(skip_serializing_if = "Option::is_none")]
     pub language: Option<String>,
@@ -168,6 +258,24 @@ pub struct WorkspaceRuntimeApp {
     pub libraries: Vec<String>,
     #[serde(default, skip_serializing_if = "Vec::is_empty")]
     pub log_hints: Vec<String>,
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    pub log_sources: Vec<WorkspaceLogSource>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub app_url: Option<String>,
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    pub endpoints: Vec<WorkspaceAppEndpoint>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub health_endpoint: Option<WorkspaceAppEndpoint>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub app_location: Option<WorkspaceAppLocation>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub resources: Option<WorkspaceAppResources>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub app_state: Option<WorkspaceAppState>,
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    pub context_capabilities: Vec<WorkspaceAppCapability>,
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    pub app_structure: Vec<WorkspaceAppStructureItem>,
     #[serde(skip_serializing_if = "Option::is_none")]
     pub manager: Option<String>,
     #[serde(skip_serializing_if = "Option::is_none")]

@@ -1,9 +1,19 @@
 import { BrainCircuit, RefreshCcw } from "lucide-react";
-import { useCallback, useMemo, useState } from "react";
+import { useCallback, useEffect, useMemo, useState } from "react";
 import { Link, useSearchParams } from "react-router-dom";
 import { toast } from "sonner";
 
-import type { EventRow, InvestigationResponse, ScannerStatusResponse, WorkspaceMapResponse, WorkspaceRuntimeApp } from "@/api";
+import type {
+  AiGeneration,
+  AiGenerationsResponse,
+  EventRow,
+  InvestigationResponse,
+  ScannerStatusResponse,
+  WorkspaceAppLogsResponse,
+  WorkspaceAppResourcesResponse,
+  WorkspaceMapResponse,
+  WorkspaceRuntimeApp,
+} from "@/api";
 import { errorMessage, postJson } from "@/api";
 import { Button } from "@/components/ui/button";
 import { Card, CardContent, CardHeader, CardTitle } from "@/components/ui/card";
@@ -138,6 +148,9 @@ export function WorkspacePage({ mode }: { mode: Mode }) {
                 <Th>App</Th>
                 <Th>Runtime</Th>
                 <Th>Manager</Th>
+                <Th>State</Th>
+                <Th>URL</Th>
+                <Th>Resources</Th>
                 <Th>Project</Th>
                 <Th>Confidence</Th>
                 <Th>Details</Th>
@@ -149,12 +162,28 @@ export function WorkspacePage({ mode }: { mode: Mode }) {
                 <tr key={`${app.name}-${app.pid ?? index}`} className="transition hover:bg-secondary/50">
                   <Td>
                     <div className="min-w-0">
-                      <p className="font-medium">{app.name}</p>
+                      <p className="font-medium">{app.display_name ?? app.name}</p>
+                      {app.display_name && app.display_name !== app.name ? <p className="text-xs text-muted-foreground">{app.name}</p> : null}
                       {app.framework ? <p className="text-xs text-muted-foreground">{formatDisplayValue(app.framework)}</p> : null}
                     </div>
                   </Td>
                   <Td>{formatDisplayValue(app.language ?? app.runtime)}</Td>
                   <Td>{formatDisplayValue(app.manager ?? app.source)}</Td>
+                  <Td>{app.app_state?.health ? formatDisplayValue(app.app_state.health) : formatDisplayValue(app.status ?? "Observed")}</Td>
+                  <Td>
+                    {app.app_url ? (
+                      <a className="font-mono text-xs" href={app.app_url} target="_blank" rel="noreferrer">
+                        {app.app_url}
+                      </a>
+                    ) : (
+                      "-"
+                    )}
+                  </Td>
+                  <Td className="text-xs text-muted-foreground">
+                    {app.resources?.cpu_percent != null || app.resources?.memory_mb != null
+                      ? `${app.resources?.cpu_percent ?? "-"}% / ${app.resources?.memory_mb ?? "-"} MB`
+                      : "-"}
+                  </Td>
                   <Td className="font-mono text-xs text-muted-foreground">{app.project_path ?? app.cwd ?? "-"}</Td>
                   <Td>{app.confidence.toFixed(2)}</Td>
                   <Td>
@@ -250,8 +279,8 @@ export function WorkspaceAppPage({ mode }: { mode: Mode }) {
     () => (workspace.data?.runtime_apps ?? []).find((item) => item.name === appName) ?? null,
     [appName, workspace.data],
   );
-  const appLogsPath = app ? `/api/logs?service=${encodeURIComponent(app.name)}&limit=50` : null;
-  const appLogs = useApiQuery<{ logs: EventRow[] }>(appLogsPath, { deps: [app?.name] });
+  const appLogsPath = app ? `/api/workspace/apps/${encodeURIComponent(app.name)}/logs?limit=80` : null;
+  const appLogs = useApiQuery<WorkspaceAppLogsResponse>(appLogsPath, { deps: [app?.name], staleTime: 5_000 });
 
   if (workspace.isLoading && !workspace.data) {
     return (
@@ -300,7 +329,9 @@ export function WorkspaceAppPage({ mode }: { mode: Mode }) {
       />
       <WorkspaceAppDetails
         app={app}
-        logs={appLogs.data?.logs ?? []}
+        logs={appLogs.data?.events ?? []}
+        rawLogs={appLogs.data?.raw_logs ?? []}
+        logsSampledAt={appLogs.data?.sampled_at ?? null}
         logsLoading={appLogs.isLoading}
         logsError={appLogs.errorMessage}
         onRefreshLogs={() => void appLogs.reload({ silent: true })}
@@ -324,6 +355,8 @@ function SummaryCard({ label, value }: { label: string; value: string }) {
 function WorkspaceAppDetails({
   app,
   logs,
+  rawLogs,
+  logsSampledAt,
   logsLoading,
   logsError,
   onRefreshLogs,
@@ -331,6 +364,8 @@ function WorkspaceAppDetails({
 }: {
   app: WorkspaceRuntimeApp;
   logs: EventRow[];
+  rawLogs: WorkspaceAppLogsResponse["raw_logs"];
+  logsSampledAt: string | null;
   logsLoading: boolean;
   logsError: string | null;
   onRefreshLogs: () => void;
@@ -338,6 +373,16 @@ function WorkspaceAppDetails({
 }) {
   const [monitorSeconds, setMonitorSeconds] = useState(20);
   const [aiResult, setAiResult] = useState<InvestigationResponse | null>(null);
+  const aiScope = `workspace_app:${app.name}`;
+  const savedGenerations = useApiQuery<AiGenerationsResponse>(
+    `/api/ai/generations?scope=${encodeURIComponent(aiScope)}&limit=6`,
+    { deps: [aiScope], staleTime: 5_000 },
+  );
+  const liveResources = useApiQuery<WorkspaceAppResourcesResponse>(
+    `/api/workspace/apps/${encodeURIComponent(app.name)}/resources${app.pid ? `?pid=${app.pid}` : ""}`,
+    { deps: [app.name, app.pid], refetchInterval: 2_000, staleTime: 1_000 },
+  );
+  const resources = liveResources.data?.resources ?? app.resources ?? null;
   const aiMonitor = useApiMutation(
     async (payload: { question: string; scope: string; mode: Mode; monitor_seconds: number }) =>
       postJson<InvestigationResponse>("/api/ai/ask", payload),
@@ -347,11 +392,12 @@ function WorkspaceAppDetails({
       const next = await aiMonitor.run({
         question:
           "Monitor this workspace app using recent stored logs and live runtime signals. Summarize health, anomalies, likely causes, missing evidence, and safe read-only next checks.",
-        scope: `workspace_app:${app.name}`,
+        scope: aiScope,
         mode,
         monitor_seconds: monitorSeconds,
       });
       setAiResult(next);
+      void savedGenerations.reload({ silent: true });
       if (!next.used_ai) {
         toast.message("Deterministic fallback used.", { description: next.fallback_reason || "AI was unavailable." });
       } else {
@@ -360,18 +406,35 @@ function WorkspaceAppDetails({
     } catch (error) {
       toast.error("AI monitor failed", { description: errorMessage(error) });
     }
-  }, [aiMonitor, app.name, mode, monitorSeconds]);
+  }, [aiMonitor, aiScope, mode, monitorSeconds, savedGenerations]);
+
+  useEffect(() => {
+    setAiResult(null);
+  }, [aiScope]);
+
+  useEffect(() => {
+    if (aiResult) return;
+    const saved = savedGenerations.data?.generations?.[0];
+    if (saved?.response) {
+      setAiResult(hydrateWorkspaceSavedGeneration(saved));
+    }
+  }, [aiResult, savedGenerations.data]);
 
   const detailRows = [
     ["Name", app.name],
+    ["Display name", app.display_name ?? app.name],
     ["Language", formatDisplayValue(app.language ?? app.runtime)],
     ["Process kind", app.process_kind ? formatDisplayValue(app.process_kind) : "-"],
     ["Framework", app.framework ? formatDisplayValue(app.framework) : "-"],
     ["Manager", formatDisplayValue(app.manager ?? app.source)],
     ["PID", app.pid ? String(app.pid) : "-"],
+    ["State", app.app_state?.health ? formatDisplayValue(app.app_state.health) : formatDisplayValue(app.status ?? "Observed")],
+    ["App URL", app.app_url ?? "-"],
+    ["Heartbeat", app.health_endpoint?.url ?? "-"],
     ["Project", app.project_path ?? "-"],
     ["CWD", app.cwd ?? "-"],
     ["Script", app.script ?? "-"],
+    ["Executable", app.app_location?.executable ?? "-"],
     ["Command", app.command ?? "-"],
   ];
 
@@ -380,7 +443,7 @@ function WorkspaceAppDetails({
       <div className="grid gap-4 xl:grid-cols-[minmax(0,0.9fr)_minmax(0,1.1fr)]">
       <Card>
         <CardHeader>
-          <CardTitle>{app.name}</CardTitle>
+          <CardTitle>{app.display_name ?? app.name}</CardTitle>
         </CardHeader>
         <CardContent className="space-y-4">
           <div className="grid gap-2">
@@ -412,12 +475,27 @@ function WorkspaceAppDetails({
               </div>
             </div>
           ) : null}
+          {app.context_capabilities?.length ? (
+            <div className="space-y-2">
+              <p className="text-xs font-semibold uppercase tracking-[0.18em] text-muted-foreground">AI context coverage</p>
+              <div className="flex flex-wrap gap-2">
+                {app.context_capabilities.map((capability) => (
+                  <Badge key={capability.key} variant={capability.supported ? "success" : "outline"}>
+                    {formatDisplayValue(capability.key)}
+                  </Badge>
+                ))}
+              </div>
+            </div>
+          ) : null}
         </CardContent>
       </Card>
 
       <Card>
         <CardHeader className="flex-row items-center justify-between gap-3">
-          <CardTitle>Recent logs</CardTitle>
+          <div>
+            <CardTitle>Extracted logs</CardTitle>
+            {logsSampledAt ? <p className="mt-1 text-xs text-muted-foreground">Sampled {logsSampledAt}</p> : null}
+          </div>
           <Button variant="outline" size="sm" onClick={onRefreshLogs}>
             <RefreshCcw className={`size-4 ${logsLoading ? "animate-spin" : ""}`} />
             Refresh
@@ -426,8 +504,22 @@ function WorkspaceAppDetails({
         <CardContent>
           {logsError ? <ErrorState description={logsError} onRetry={onRefreshLogs} /> : null}
           {!logsError && logsLoading ? <LoadingState title="Loading app logs" /> : null}
+          {!logsError && !logsLoading && rawLogs.length ? (
+            <div className="space-y-2">
+              {rawLogs.slice(0, 16).map((entry, index) => (
+                <div key={`${entry.source?.path ?? "raw"}-${entry.line_number_from_tail ?? index}`} className="rounded-lg border border-border/60 bg-background/30 p-3">
+                  <div className="mb-2 flex flex-wrap items-center gap-2 text-xs text-muted-foreground">
+                    <Badge variant="outline">{formatDisplayValue(entry.source?.label ?? "File")}</Badge>
+                    {entry.source?.path ? <span className="break-all font-mono">{entry.source.path}</span> : null}
+                  </div>
+                  <p className="whitespace-pre-wrap break-words font-mono text-xs leading-relaxed">{entry.line || "-"}</p>
+                </div>
+              ))}
+            </div>
+          ) : null}
           {!logsError && !logsLoading && logs.length ? (
-            <div className="space-y-3">
+            <div className="mt-4 space-y-3">
+              <p className="text-xs font-semibold uppercase tracking-[0.18em] text-muted-foreground">Stored normalized events</p>
               {logs.slice(0, 8).map((event, index) => (
                 <div key={event.event_id ?? index} className="rounded-lg border border-border/60 bg-background/30 p-3">
                   <div className="flex flex-wrap items-center gap-2 text-xs text-muted-foreground">
@@ -440,15 +532,114 @@ function WorkspaceAppDetails({
               ))}
             </div>
           ) : null}
-          {!logsError && !logsLoading && !logs.length ? (
+          {!logsError && !logsLoading && !rawLogs.length && !logs.length ? (
             <EmptyState
-              title="No stored logs for this app"
-              description="Start collectors or register an app-specific log source to populate this panel."
+              title="No logs extracted for this app"
+              description="Register file log paths under .inferra/app.toml or start collectors so Inferra can attach app-specific evidence."
             />
           ) : null}
         </CardContent>
       </Card>
       </div>
+
+      <div className="grid gap-4 xl:grid-cols-3">
+        <Card>
+          <CardHeader>
+            <CardTitle>App state</CardTitle>
+          </CardHeader>
+          <CardContent className="space-y-3 text-sm">
+            <InfoLine label="Health" value={app.app_state?.health ? formatDisplayValue(app.app_state.health) : "-"} />
+            <InfoLine label="Status" value={app.app_state?.status ? formatDisplayValue(app.app_state.status) : app.status ?? "-"} />
+            <InfoLine label="Observed by" value={formatDisplayValue(app.app_state?.observed_by ?? app.manager ?? app.source)} />
+            <InfoLine label="Restarts" value={app.app_state?.restarts != null ? String(app.app_state.restarts) : "-"} />
+            {app.app_state?.reason ? <p className="text-xs text-muted-foreground">{app.app_state.reason}</p> : null}
+          </CardContent>
+        </Card>
+
+        <Card>
+          <CardHeader>
+            <CardTitle>Resources</CardTitle>
+          </CardHeader>
+          <CardContent className="space-y-3 text-sm">
+            <div className="mb-2 flex items-center gap-2">
+              <Badge variant={liveResources.data?.live ? "success" : "outline"}>
+                {liveResources.data?.live ? "Live" : "Snapshot"}
+              </Badge>
+              {liveResources.data?.sampled_at ? <span className="text-xs text-muted-foreground">{liveResources.data.sampled_at}</span> : null}
+            </div>
+            <InfoLine label="CPU" value={resources?.cpu_percent != null ? `${resources.cpu_percent}%` : "-"} />
+            <InfoLine label="Memory" value={resources?.memory_mb != null ? `${resources.memory_mb} MB` : "-"} />
+            <InfoLine label="Virtual memory" value={resources?.virtual_memory_mb != null ? `${resources.virtual_memory_mb} MB` : "-"} />
+            <InfoLine label="Uptime" value={resources?.uptime_seconds != null ? `${resources.uptime_seconds}s` : "-"} />
+            <InfoLine label="Process status" value={resources?.process_status ? formatDisplayValue(resources.process_status) : "-"} />
+          </CardContent>
+        </Card>
+
+        <Card>
+          <CardHeader>
+            <CardTitle>Endpoints</CardTitle>
+          </CardHeader>
+          <CardContent className="space-y-3">
+            {app.endpoints?.length ? (
+              app.endpoints.map((endpoint) => (
+                <div key={`${endpoint.url}-${endpoint.source}`} className="rounded-xl border border-border/60 bg-background/30 p-3">
+                  <a className="break-all font-mono text-xs" href={endpoint.url} target="_blank" rel="noreferrer">
+                    {endpoint.url}
+                  </a>
+                  <div className="mt-2 flex flex-wrap gap-2">
+                    <Badge variant="outline">{formatDisplayValue(endpoint.source)}</Badge>
+                    <Badge variant="outline">{Math.round(endpoint.confidence * 100)}%</Badge>
+                  </div>
+                </div>
+              ))
+            ) : (
+              <p className="text-sm text-muted-foreground">No app URL or listening port has been inferred yet.</p>
+            )}
+          </CardContent>
+        </Card>
+      </div>
+
+      <Card>
+        <CardHeader>
+          <CardTitle>App directory structure</CardTitle>
+        </CardHeader>
+        <CardContent className="flex flex-wrap gap-2">
+          {app.app_structure?.length ? (
+            app.app_structure.map((item) => (
+              <Badge key={`${item.path}-${item.role}`} variant={item.role === "inferra_config" ? "success" : "outline"}>
+                {item.path} - {formatDisplayValue(item.role)}
+              </Badge>
+            ))
+          ) : (
+            <p className="text-sm text-muted-foreground">No project structure was captured for this app.</p>
+          )}
+        </CardContent>
+      </Card>
+
+      <Card>
+        <CardHeader>
+          <CardTitle>Log sources</CardTitle>
+        </CardHeader>
+        <CardContent className="grid gap-3 md:grid-cols-2 xl:grid-cols-3">
+          {app.log_sources?.length ? (
+            app.log_sources.map((source, index) => (
+              <div key={`${source.kind}-${source.path ?? source.command ?? index}`} className="rounded-xl border border-border/60 bg-background/30 p-3">
+                <div className="mb-2 flex flex-wrap items-center gap-2">
+                  <Badge variant="outline">{formatDisplayValue(source.kind)}</Badge>
+                  <Badge variant={source.readable === false ? "warning" : "info"}>{formatDisplayValue(source.source)}</Badge>
+                </div>
+                <p className="font-medium">{source.label}</p>
+                <p className="mt-1 break-all font-mono text-xs text-muted-foreground">{source.path ?? source.command ?? source.stream ?? "-"}</p>
+                <p className="mt-2 text-xs text-muted-foreground">
+                  {source.exists == null ? "Availability depends on the manager/runtime stream." : source.exists ? "Found locally." : "Inferred but not found on disk yet."}
+                </p>
+              </div>
+            ))
+          ) : (
+            <EmptyState title="No log source metadata" description="Inferra has runtime hints, but no file, stream, or manager log source has been resolved yet." />
+          )}
+        </CardContent>
+      </Card>
 
       <Card>
         <CardHeader>
@@ -472,11 +663,58 @@ function WorkspaceAppDetails({
               <BrainCircuit className="size-4" />
               {aiMonitor.isPending ? "Monitoring..." : "Run AI monitor"}
             </Button>
+            {savedGenerations.data?.count ? (
+              <Badge variant="success">{savedGenerations.data.count} saved</Badge>
+            ) : null}
           </div>
           {aiMonitor.errorMessage ? <ErrorState description={aiMonitor.errorMessage} onRetry={() => void runAiMonitor()} /> : null}
+          {savedGenerations.data?.generations?.length ? (
+            <div className="space-y-2">
+              {savedGenerations.data.generations.slice(0, 3).map((generation) => (
+                <button
+                  key={generation.generation_id}
+                  type="button"
+                  className="flex w-full items-center justify-between gap-3 rounded-xl border border-border/60 bg-background/30 p-3 text-left text-sm transition hover:bg-secondary/40"
+                  onClick={() => setAiResult(hydrateWorkspaceSavedGeneration(generation))}
+                >
+                  <span className="min-w-0">
+                    <span className="block truncate font-medium">{generation.question || generation.focus}</span>
+                    <span className="block truncate text-xs text-muted-foreground">{generation.scope_key}</span>
+                  </span>
+                  <Badge variant={generation.used_ai ? "success" : "outline"}>{generation.created_at}</Badge>
+                </button>
+              ))}
+            </div>
+          ) : null}
         </CardContent>
       </Card>
       {aiResult ? <InvestigationView result={aiResult} showRaw={isAdvancedMode(mode)} onRefresh={() => void runAiMonitor()} /> : null}
+    </div>
+  );
+}
+
+function hydrateWorkspaceSavedGeneration(generation: AiGeneration): InvestigationResponse {
+  return {
+    ...generation.response,
+    cached: true,
+    ai_generation: {
+      generation_id: generation.generation_id,
+      scope_key: generation.scope_key,
+      focus: generation.focus,
+      mode: generation.mode,
+      question: generation.question,
+      bundle_hash: generation.bundle_hash,
+      used_ai: generation.used_ai,
+      created_at: generation.created_at,
+    },
+  };
+}
+
+function InfoLine({ label, value }: { label: string; value: string }) {
+  return (
+    <div className="flex items-center justify-between gap-3 border-b border-border/50 pb-2 last:border-b-0">
+      <span className="text-xs font-semibold uppercase tracking-[0.18em] text-muted-foreground">{label}</span>
+      <span className="break-all text-right font-mono text-xs">{value}</span>
     </div>
   );
 }

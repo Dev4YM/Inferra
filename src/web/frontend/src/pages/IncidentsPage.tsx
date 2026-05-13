@@ -110,10 +110,11 @@ export function IncidentsPage({ mode }: { mode: Mode }) {
 
 export function IncidentDetailPage({ mode }: { mode: Mode }) {
   const { incidentId } = useParams();
+  const [forceInvestigationRun, setForceInvestigationRun] = useState(0);
   const detail = useApiQuery<IncidentDetailResponse>(incidentId ? `/api/incidents/${encodeURIComponent(incidentId)}` : null, { deps: [incidentId] });
   const investigation = useApiQuery<InvestigationResponse>(
-    incidentId ? `/api/investigate/incident/${encodeURIComponent(incidentId)}?mode=${mode}` : null,
-    { deps: [incidentId, mode] },
+    incidentId ? `/api/investigate/incident/${encodeURIComponent(incidentId)}?mode=${mode}${forceInvestigationRun ? `&force=true&run=${forceInvestigationRun}` : ""}` : null,
+    { deps: [incidentId, mode, forceInvestigationRun] },
   );
   const adaptive = useApiQuery<AdaptiveLearningSummaryResponse>(
     detail.data?.learning_provenance?.artifacts?.length ? "/api/learning/adaptive" : null,
@@ -199,7 +200,7 @@ export function IncidentDetailPage({ mode }: { mode: Mode }) {
         subtitle={`${incident.primary_service || "Unknown"} · Severity ${incident.severity} · ${formatDisplayValue(incident.state)}`}
         mode={mode}
         actions={
-          <Button variant="outline" size="sm" onClick={() => { void detail.reload({ silent: true }); void investigation.reload({ silent: true }); }}>
+          <Button variant="outline" size="sm" onClick={() => { void detail.reload({ silent: true }); setForceInvestigationRun((value) => value + 1); }}>
             <RefreshCcw className={`size-4 ${detail.isRefreshing || investigation.isRefreshing ? "animate-spin" : ""}`} />
             Refresh
           </Button>
@@ -265,7 +266,7 @@ export function IncidentDetailPage({ mode }: { mode: Mode }) {
           </Card>
 
           {investigation.data ? (
-            <InvestigationView result={investigation.data} showRaw={isAdvancedMode(mode)} onRefresh={() => void investigation.reload({ silent: true })} />
+            <InvestigationView result={investigation.data} showRaw={isAdvancedMode(mode)} onRefresh={() => setForceInvestigationRun((value) => value + 1)} />
           ) : investigation.errorMessage ? (
             investigationMissing ? (
               <EmptyState

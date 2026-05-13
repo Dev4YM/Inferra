@@ -1,8 +1,8 @@
 import { Activity, Bot, RotateCcw, Send, Square } from "lucide-react";
-import { useCallback, useRef, useState } from "react";
+import { useCallback, useEffect, useRef, useState } from "react";
 import { toast } from "sonner";
 
-import type { AiDoctorResponse, IncidentRow, InvestigationResponse, ServiceRow } from "@/api";
+import type { AiDoctorResponse, AiGeneration, AiGenerationsResponse, IncidentRow, InvestigationResponse, ServiceRow } from "@/api";
 import { errorMessage, fetchJson, postInvestigateStream, postJson } from "@/api";
 import { Alert, AlertDescription, AlertTitle } from "@/components/ui/alert";
 import { Badge } from "@/components/ui/badge";
@@ -30,6 +30,10 @@ export function AiInvestigatorPage({ mode }: { mode: Mode }) {
   const doctor = useApiQuery<AiDoctorResponse>("/api/ai/doctor");
   const incidents = useApiQuery<{ incidents: IncidentRow[] }>("/api/incidents");
   const services = useApiQuery<{ services: ServiceRow[] }>("/api/services");
+  const savedGenerations = useApiQuery<AiGenerationsResponse>(
+    `/api/ai/generations?scope=${encodeURIComponent(scope)}&limit=8`,
+    { deps: [scope], staleTime: 5_000 },
+  );
   const askMutation = useApiMutation(
     async (payload: { question: string; scope: string; mode: Mode; monitor_seconds: number }) =>
       postJson<InvestigationResponse>("/api/ai/ask", payload),
@@ -45,6 +49,7 @@ export function AiInvestigatorPage({ mode }: { mode: Mode }) {
       setStreamTranscript("");
       const next = await askMutation.run({ question, scope, mode, monitor_seconds: monitorSeconds });
       setResult(next);
+      void savedGenerations.reload({ silent: true });
       if (next.warnings?.length) {
         toast.warning("The AI response needed recovery before it could be shown.", { description: next.warnings.join(" ") });
       } else if (!next.used_ai) {
@@ -53,7 +58,7 @@ export function AiInvestigatorPage({ mode }: { mode: Mode }) {
     } catch (error) {
       toast.error("Investigation request failed", { description: errorMessage(error) });
     }
-  }, [askMutation, mode, monitorSeconds, question, scope]);
+  }, [askMutation, mode, monitorSeconds, question, savedGenerations, scope]);
 
   const askStream = useCallback(async () => {
     lastInvestigationMethodRef.current = "stream";
@@ -73,6 +78,7 @@ export function AiInvestigatorPage({ mode }: { mode: Mode }) {
         controller.signal,
       );
       setResult(next);
+      void savedGenerations.reload({ silent: true });
       if (next.warnings?.length) {
         toast.warning("The AI response needed recovery before it could be shown.", { description: next.warnings.join(" ") });
       } else if (!next.used_ai) {
@@ -90,7 +96,7 @@ export function AiInvestigatorPage({ mode }: { mode: Mode }) {
       setStreamBusy(false);
       streamAbortRef.current = null;
     }
-  }, [mode, monitorSeconds, question, scope]);
+  }, [mode, monitorSeconds, question, savedGenerations, scope]);
 
   const cancelStream = useCallback(() => {
     streamAbortRef.current?.abort();
@@ -103,11 +109,12 @@ export function AiInvestigatorPage({ mode }: { mode: Mode }) {
     try {
       const report = await reportMutation.run({ incidentId, monitor_seconds: monitorSeconds });
       setResult(report);
+      void savedGenerations.reload({ silent: true });
       toast.success("Incident report generated");
     } catch (error) {
       toast.error("Report request failed", { description: errorMessage(error) });
     }
-  }, [monitorSeconds, reportMutation, scope]);
+  }, [monitorSeconds, reportMutation, savedGenerations, scope]);
 
   const refreshInvestigation = useCallback(() => {
     const method = lastInvestigationMethodRef.current;
@@ -121,6 +128,19 @@ export function AiInvestigatorPage({ mode }: { mode: Mode }) {
     }
     void ask();
   }, [ask, askStream, runReport, scope]);
+
+  useEffect(() => {
+    setResult(null);
+    setStreamTranscript("");
+  }, [scope]);
+
+  useEffect(() => {
+    if (result) return;
+    const saved = savedGenerations.data?.generations?.[0];
+    if (saved?.response) {
+      setResult(hydrateSavedGeneration(saved));
+    }
+  }, [result, savedGenerations.data]);
 
   return (
     <div className="space-y-6">
@@ -250,6 +270,47 @@ export function AiInvestigatorPage({ mode }: { mode: Mode }) {
       {result ? (
         <InvestigationView result={result} showRaw={isAdvancedMode(mode)} onRefresh={() => void refreshInvestigation()} />
       ) : null}
+
+      {savedGenerations.data?.generations?.length ? (
+        <Card>
+          <CardHeader>
+            <CardTitle>Saved AI runs</CardTitle>
+          </CardHeader>
+          <CardContent className="space-y-2">
+            {savedGenerations.data.generations.slice(0, 5).map((generation) => (
+              <button
+                key={generation.generation_id}
+                type="button"
+                className="flex w-full items-center justify-between gap-3 rounded-xl border border-border/60 bg-background/30 p-3 text-left text-sm transition hover:bg-secondary/40"
+                onClick={() => setResult(hydrateSavedGeneration(generation))}
+              >
+                <span className="min-w-0">
+                  <span className="block truncate font-medium">{generation.question || generation.focus}</span>
+                  <span className="block truncate text-xs text-muted-foreground">{generation.scope_key}</span>
+                </span>
+                <Badge variant={generation.used_ai ? "success" : "outline"}>{generation.created_at}</Badge>
+              </button>
+            ))}
+          </CardContent>
+        </Card>
+      ) : null}
     </div>
   );
+}
+
+function hydrateSavedGeneration(generation: AiGeneration): InvestigationResponse {
+  return {
+    ...generation.response,
+    cached: true,
+    ai_generation: {
+      generation_id: generation.generation_id,
+      scope_key: generation.scope_key,
+      focus: generation.focus,
+      mode: generation.mode,
+      question: generation.question,
+      bundle_hash: generation.bundle_hash,
+      used_ai: generation.used_ai,
+      created_at: generation.created_at,
+    },
+  };
 }

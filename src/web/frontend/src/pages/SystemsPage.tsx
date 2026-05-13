@@ -1,4 +1,5 @@
 import { Activity, AlertTriangle, Gauge, RefreshCcw, ServerCog } from "lucide-react";
+import { useState } from "react";
 import { Link, useParams } from "react-router-dom";
 
 import type {
@@ -145,10 +146,11 @@ export function SystemsPage({ mode }: { mode: Mode }) {
 
 export function ServiceDetailPage({ mode }: { mode: Mode }) {
   const { serviceId } = useParams();
+  const [forceInvestigationRun, setForceInvestigationRun] = useState(0);
   const detail = useApiQuery<ServiceDetailResponse>(serviceId ? `/api/services/${encodeURIComponent(serviceId)}` : null, { deps: [serviceId] });
   const investigation = useApiQuery<InvestigationResponse>(
-    serviceId ? `/api/investigate/service/${encodeURIComponent(serviceId)}?mode=${mode}` : null,
-    { deps: [serviceId, mode] },
+    serviceId ? `/api/investigate/service/${encodeURIComponent(serviceId)}?mode=${mode}${forceInvestigationRun ? `&force=true&run=${forceInvestigationRun}` : ""}` : null,
+    { deps: [serviceId, mode, forceInvestigationRun] },
   );
   const anomaly = useApiQuery<AnomalyStatus>(serviceId ? `/api/anomaly/${encodeURIComponent(serviceId)}/status` : null, { deps: [serviceId] });
   const topology = useApiQuery<{ edges: TopologyEdge[] }>("/api/topology");
@@ -175,7 +177,7 @@ export function ServiceDetailPage({ mode }: { mode: Mode }) {
             size="sm"
             onClick={() => {
               void detail.reload({ silent: true });
-              void investigation.reload({ silent: true });
+              setForceInvestigationRun((value) => value + 1);
               void anomaly.reload({ silent: true });
               void topology.reload({ silent: true });
               void workspace.reload({ silent: true });
@@ -196,7 +198,7 @@ export function ServiceDetailPage({ mode }: { mode: Mode }) {
       <div className="content-grid">
         <div className="space-y-4">
           {investigation.data ? (
-            <InvestigationView result={investigation.data} showRaw={isAdvancedMode(mode)} onRefresh={() => void investigation.reload({ silent: true })} />
+            <InvestigationView result={investigation.data} showRaw={isAdvancedMode(mode)} onRefresh={() => setForceInvestigationRun((value) => value + 1)} />
           ) : investigation.errorMessage ? (
             investigationMissing ? (
               <EmptyState

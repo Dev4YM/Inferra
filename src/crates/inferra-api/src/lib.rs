@@ -19,7 +19,7 @@ use inferra_config::{
 use inferra_contracts::{
     AiDoctorResponse, AiStatusResponse, ApiVersionResponse, CollectorRow, CollectorsResponse,
     ConfigResponse, IncidentDetailResponse, IncidentRow, OverviewResponse, ServiceDetailResponse,
-    SeverityValue, WorkspaceMapResponse,
+    SeverityValue, WorkspaceMapResponse, WorkspaceRuntimeApp,
 };
 use inferra_core::{
     adaptive_learning_audit_log, adaptive_learning_bulk_review_artifacts,
@@ -29,19 +29,21 @@ use inferra_core::{
     adaptive_learning_summary, adaptive_learning_touch_review_view, ai_status_from_config,
     build_overview, build_overview_with_runtime_signals, build_workspace_map,
     collect_host_resources_snapshot, collect_runtime_monitor_window, refresh_incident_reasoning,
-    try_collect_gpu_summary, AdaptiveArtifactSelection, AdaptiveSavedReviewViewDraft,
-    OverviewRuntimeSignals,
+    try_collect_gpu_summary, workspace_app_live_resources, AdaptiveArtifactSelection,
+    AdaptiveSavedReviewViewDraft, OverviewRuntimeSignals,
 };
 use inferra_storage::{
     initialize_databases, AdaptiveLearningAuditQuery, AdaptiveLearningHistoryQuery, EventsStore,
-    IncidentsStore, StoredAiTrace, StoredExplanation, StoredFeedback, StoredUiSnapshot,
+    IncidentsStore, StoredAiGeneration, StoredAiTrace, StoredExplanation, StoredFeedback,
+    StoredUiSnapshot,
 };
 use serde_json::{json, Value as JsonValue};
 use std::collections::{HashMap, HashSet};
 use std::convert::Infallible;
 use std::future::Future;
-use std::hash::{Hash, Hasher};
-use std::path::PathBuf;
+use std::io::{Read, Seek, SeekFrom};
+use std::path::{Path, PathBuf};
+use std::process::Command;
 use std::sync::Arc;
 use std::time::{Duration, Instant};
 use time::OffsetDateTime;
@@ -298,6 +300,7 @@ pub fn app_router(state: AppState) -> Router {
         .route("/api/services/{service_id}/events", get(api_service_events))
         .route("/api/ai/status", get(api_ai_status))
         .route("/api/ai/doctor", get(api_ai_doctor))
+        .route("/api/ai/generations", get(api_ai_generations))
         .route("/api/ai/ask", post(api_ai_ask))
         .route(
             "/api/ai/investigate-stream",
@@ -326,6 +329,14 @@ pub fn app_router(state: AppState) -> Router {
         .route("/api/workspace/projects", get(api_workspace_projects))
         .route("/api/workspace/map", get(api_workspace_map))
         .route("/api/workspace/services", get(api_workspace_services))
+        .route(
+            "/api/workspace/apps/{app_name}/logs",
+            get(api_workspace_app_logs),
+        )
+        .route(
+            "/api/workspace/apps/{app_name}/resources",
+            get(api_workspace_app_resources),
+        )
         .route("/api/workspace/inspect", get(api_workspace_inspect))
         .route("/api/workspace/mappings", post(api_workspace_add_mapping))
         .route("/api/topology", get(api_topology))
@@ -1514,6 +1525,30 @@ async fn api_ai_doctor(
     }))
 }
 
+async fn api_ai_generations(
+    State(state): State<AppState>,
+    Query(params): Query<HashMap<String, String>>,
+) -> Result<Json<JsonValue>, (StatusCode, String)> {
+    initialize_databases(&state.paths.events_db, &state.paths.incidents_db)
+        .map_err(|e| (StatusCode::INTERNAL_SERVER_ERROR, e.to_string()))?;
+    let store = IncidentsStore::open(&state.paths.incidents_db)
+        .map_err(|e| (StatusCode::INTERNAL_SERVER_ERROR, e.to_string()))?
+        .ok_or_else(|| (StatusCode::NOT_FOUND, "incidents database missing".into()))?;
+    let limit = params
+        .get("limit")
+        .and_then(|value| value.parse::<usize>().ok())
+        .unwrap_or(50)
+        .clamp(1, 200);
+    let generations = store
+        .list_ai_generations(params.get("scope").map(String::as_str), limit)
+        .map_err(|e| (StatusCode::INTERNAL_SERVER_ERROR, e.to_string()))?;
+    let count = generations.len();
+    Ok(Json(json!({
+        "generations": generations,
+        "count": count,
+    })))
+}
+
 async fn api_investigate_now(
     State(state): State<AppState>,
     Query(params): Query<HashMap<String, String>>,
@@ -1522,6 +1557,7 @@ async fn api_investigate_now(
     let mode = current_mode(&cfg, params.get("mode").map(String::as_str));
     let focus = "overview".to_string();
     let monitor = resolve_monitor_seconds(&cfg, params.get("monitor_seconds"), None);
+    let use_cache = !query_bool(&params, "force").unwrap_or(false);
     let bundle =
         investigation_bundle_enriched(state.paths.as_ref(), &cfg, &focus, "", &mode, monitor)
             .await
@@ -1534,6 +1570,7 @@ async fn api_investigate_now(
         &mode,
         None,
         false,
+        use_cache,
     )
     .await
 }
@@ -1561,6 +1598,10 @@ async fn api_ai_ask(
     }
     let mode = current_mode(&cfg, payload.get("mode").and_then(|v| v.as_str()));
     let monitor = resolve_monitor_seconds(&cfg, None, Some(&payload));
+    let use_cache = !payload
+        .get("force")
+        .and_then(JsonValue::as_bool)
+        .unwrap_or(false);
     let bundle = investigation_bundle_enriched(
         state.paths.as_ref(),
         &cfg,
@@ -1579,6 +1620,7 @@ async fn api_ai_ask(
         &mode,
         Some(question),
         false,
+        use_cache,
     )
     .await
 }
@@ -1592,6 +1634,7 @@ async fn api_investigate_incident(
     let mode = current_mode(&cfg, params.get("mode").map(String::as_str));
     let focus = format!("incident:{incident_id}");
     let monitor = resolve_monitor_seconds(&cfg, params.get("monitor_seconds"), None);
+    let use_cache = !query_bool(&params, "force").unwrap_or(false);
     let bundle =
         investigation_bundle_enriched(state.paths.as_ref(), &cfg, &focus, "", &mode, monitor)
             .await
@@ -1604,6 +1647,7 @@ async fn api_investigate_incident(
         &mode,
         None,
         false,
+        use_cache,
     )
     .await
 }
@@ -1617,6 +1661,7 @@ async fn api_investigate_service(
     let mode = current_mode(&cfg, params.get("mode").map(String::as_str));
     let focus = format!("service:{service_id}");
     let monitor = resolve_monitor_seconds(&cfg, params.get("monitor_seconds"), None);
+    let use_cache = !query_bool(&params, "force").unwrap_or(false);
     let bundle =
         investigation_bundle_enriched(state.paths.as_ref(), &cfg, &focus, "", &mode, monitor)
             .await
@@ -1629,6 +1674,7 @@ async fn api_investigate_service(
         &mode,
         None,
         false,
+        use_cache,
     )
     .await
 }
@@ -1642,6 +1688,7 @@ async fn api_ai_report(
     let mode = current_mode(&cfg, params.get("mode").map(String::as_str));
     let focus = format!("incident:{incident_id}");
     let monitor = resolve_monitor_seconds(&cfg, params.get("monitor_seconds"), None);
+    let use_cache = !query_bool(&params, "force").unwrap_or(false);
     let bundle =
         investigation_bundle_enriched(state.paths.as_ref(), &cfg, &focus, "", &mode, monitor)
             .await
@@ -1654,6 +1701,7 @@ async fn api_ai_report(
         &mode,
         None,
         true,
+        use_cache,
     )
     .await
 }
@@ -1666,7 +1714,24 @@ async fn investigation_response_for_bundle(
     mode: &str,
     question: Option<String>,
     report: bool,
+    use_cache: bool,
 ) -> Result<Json<JsonValue>, (StatusCode, String)> {
+    let question_text = question.clone().unwrap_or_default();
+    let scope_key = ai_generation_scope_key(focus, mode, &question_text, report);
+    if use_cache {
+        if let Some(mut saved) = load_saved_ai_generation(paths, &scope_key)
+            .map_err(|e| (StatusCode::INTERNAL_SERVER_ERROR, format!("{e:#}")))?
+        {
+            if let Some(mut response) = saved.get_mut("response").cloned() {
+                if let Some(object) = saved.as_object_mut() {
+                    object.remove("response");
+                }
+                response["cached"] = JsonValue::Bool(true);
+                response["ai_generation"] = saved;
+                return Ok(Json(response));
+            }
+        }
+    }
     let mut response = run_investigation_response(paths, config, &bundle)
         .await
         .map_err(|e| (StatusCode::BAD_GATEWAY, e.to_string()))?;
@@ -1677,12 +1742,23 @@ async fn investigation_response_for_bundle(
     }
     response["focus"] = JsonValue::String(focus.to_string());
     response["mode"] = JsonValue::String(mode.to_string());
-    if let Some(question) = question {
-        response["question"] = JsonValue::String(question);
+    if !question_text.is_empty() {
+        response["question"] = JsonValue::String(question_text.clone());
     }
     if report {
         response["report"] = JsonValue::Bool(true);
     }
+    let generation = persist_ai_generation(
+        paths,
+        &scope_key,
+        focus,
+        mode,
+        &question_text,
+        &bundle,
+        &response,
+    )
+    .map_err(|e| (StatusCode::INTERNAL_SERVER_ERROR, format!("{e:#}")))?;
+    response["ai_generation"] = ai_generation_metadata_json(&generation);
     let _ = persist_ui_snapshot(
         paths,
         SNAPSHOT_AI_INVESTIGATION,
@@ -1954,6 +2030,15 @@ async fn api_ai_investigate_stream(
             )
         };
         let _ = persist_investigation_artifacts(paths.as_ref(), &bundle, &response);
+        let _ = persist_ai_generation(
+            paths.as_ref(),
+            &ai_generation_scope_key(&focus, &mode, &question, false),
+            &focus,
+            &mode,
+            &question,
+            &bundle,
+            &response,
+        );
         yield Ok(Event::default().event("done").data(response.to_string()));
     };
     Sse::new(stream).keep_alive(KeepAlive::default())
@@ -2249,6 +2334,254 @@ async fn api_workspace_services(
         "service_mappings": workspace.service_mappings,
         "unmapped_services": workspace.unmapped_services,
     })))
+}
+
+async fn api_workspace_app_resources(
+    State(state): State<AppState>,
+    AxumPath(app_name): AxumPath<String>,
+    Query(params): Query<std::collections::HashMap<String, String>>,
+) -> Result<Json<JsonValue>, (StatusCode, String)> {
+    let cfg = state.config.read().await.clone();
+    let workspace = cached_workspace_map(&state, &cfg, false)
+        .await
+        .map_err(|e| (StatusCode::INTERNAL_SERVER_ERROR, e.to_string()))?;
+    let app = workspace
+        .runtime_apps
+        .iter()
+        .find(|item| {
+            item.name == app_name || item.display_name.as_deref() == Some(app_name.as_str())
+        })
+        .ok_or_else(|| (StatusCode::NOT_FOUND, "workspace app not found".to_string()))?;
+    let pid = params
+        .get("pid")
+        .and_then(|value| value.parse::<u32>().ok())
+        .or(app.pid);
+    let live_resources = workspace_app_live_resources(pid, Some(&app.name));
+    let live = live_resources.is_some();
+    let resources = live_resources.or_else(|| app.resources.clone());
+    Ok(Json(json!({
+        "app_name": app.name,
+        "pid": pid,
+        "sampled_at": now_iso(),
+        "live": live,
+        "resources": resources,
+    })))
+}
+
+async fn api_workspace_app_logs(
+    State(state): State<AppState>,
+    AxumPath(app_name): AxumPath<String>,
+    Query(params): Query<std::collections::HashMap<String, String>>,
+) -> Result<Json<JsonValue>, (StatusCode, String)> {
+    let cfg = state.config.read().await.clone();
+    let limit = params
+        .get("limit")
+        .and_then(|value| value.parse::<usize>().ok())
+        .unwrap_or(80)
+        .clamp(1, 300);
+    let workspace = cached_workspace_map(&state, &cfg, false)
+        .await
+        .map_err(|e| (StatusCode::INTERNAL_SERVER_ERROR, e.to_string()))?;
+    let app = workspace
+        .runtime_apps
+        .iter()
+        .find(|item| {
+            item.name == app_name || item.display_name.as_deref() == Some(app_name.as_str())
+        })
+        .ok_or_else(|| (StatusCode::NOT_FOUND, "workspace app not found".to_string()))?;
+    let events = if let Some(store) = EventsStore::open(&state.paths.events_db)
+        .map_err(|e| (StatusCode::INTERNAL_SERVER_ERROR, e.to_string()))?
+    {
+        let by_service = store
+            .query_logs(limit, Some(&app.name), None, None, None)
+            .map_err(|e| (StatusCode::INTERNAL_SERVER_ERROR, e.to_string()))?;
+        if by_service.is_empty() {
+            store
+                .query_logs(limit, None, None, Some(&app.name), None)
+                .map_err(|e| (StatusCode::INTERNAL_SERVER_ERROR, e.to_string()))?
+        } else {
+            by_service
+        }
+    } else {
+        Vec::new()
+    };
+    let raw_logs = workspace_app_raw_logs(app, limit);
+    Ok(Json(json!({
+        "app_name": app.name,
+        "events": events,
+        "raw_logs": raw_logs,
+        "log_sources": app.log_sources,
+        "sampled_at": now_iso(),
+    })))
+}
+
+fn workspace_app_raw_logs(app: &WorkspaceRuntimeApp, limit: usize) -> Vec<JsonValue> {
+    let mut logs = Vec::new();
+    let mut read_pm2 = false;
+    if matches!(app.manager.as_deref(), Some("pm2")) {
+        logs.extend(pm2_app_raw_logs(app, limit));
+        read_pm2 = true;
+        if logs.len() >= limit {
+            return logs;
+        }
+    }
+    for source in &app.log_sources {
+        match source.kind.as_str() {
+            "file" => append_file_raw_logs(&mut logs, source, limit),
+            "manager" if source.source == "pm2" && !read_pm2 => {
+                logs.extend(pm2_app_raw_logs(app, limit.saturating_sub(logs.len())));
+                read_pm2 = true;
+            }
+            _ => {}
+        }
+        if logs.len() >= limit {
+            return logs;
+        }
+    }
+    logs
+}
+
+fn append_file_raw_logs(
+    logs: &mut Vec<JsonValue>,
+    source: &inferra_contracts::WorkspaceLogSource,
+    limit: usize,
+) {
+    let Some(path) = source.path.as_deref() else {
+        return;
+    };
+    if is_sensitive_workspace_log_path(path) {
+        return;
+    }
+    let path = Path::new(path);
+    if !path.is_file() {
+        return;
+    }
+    let Ok(lines) = tail_text_lines(path, limit.min(160), 512 * 1024) else {
+        return;
+    };
+    let rendered_path = clean_display_path(&path.to_string_lossy());
+    for (index, line) in lines.into_iter().enumerate() {
+        logs.push(json!({
+            "source": {
+                "kind": source.kind,
+                "label": source.label,
+                "path": rendered_path,
+                "source": source.source,
+                "confidence": source.confidence,
+            },
+            "line": line,
+            "line_number_from_tail": index + 1,
+            "sampled_at": now_iso(),
+        }));
+        if logs.len() >= limit {
+            return;
+        }
+    }
+}
+
+fn pm2_app_raw_logs(app: &WorkspaceRuntimeApp, limit: usize) -> Vec<JsonValue> {
+    if limit == 0 {
+        return Vec::new();
+    }
+    let lines_arg = limit.min(160).to_string();
+    let args = [
+        "logs",
+        app.name.as_str(),
+        "--nostream",
+        "--lines",
+        &lines_arg,
+    ];
+    let Some(output) = command_output_with_timeout("pm2", &args, 1_500) else {
+        return Vec::new();
+    };
+    let mut out = Vec::new();
+    for (stream, bytes) in [("stdout", output.stdout), ("stderr", output.stderr)] {
+        let body = String::from_utf8_lossy(&bytes);
+        for (index, line) in body
+            .lines()
+            .rev()
+            .take(limit.saturating_sub(out.len()))
+            .enumerate()
+        {
+            let line = line.trim_end_matches('\r');
+            if line.trim().is_empty() {
+                continue;
+            }
+            out.push(json!({
+                "source": {
+                    "kind": "manager",
+                    "label": "PM2 logs",
+                    "command": format!("pm2 logs {} --nostream --lines {}", app.name, lines_arg),
+                    "stream": stream,
+                    "source": "pm2",
+                    "confidence": 0.92,
+                },
+                "line": line,
+                "line_number_from_tail": index + 1,
+                "sampled_at": now_iso(),
+            }));
+            if out.len() >= limit {
+                break;
+            }
+        }
+        if out.len() >= limit {
+            break;
+        }
+    }
+    out.reverse();
+    out
+}
+
+fn command_output_with_timeout(
+    program: &str,
+    args: &[&str],
+    timeout_ms: u64,
+) -> Option<std::process::Output> {
+    let mut child = Command::new(program).args(args).spawn().ok()?;
+    let started = std::time::Instant::now();
+    loop {
+        match child.try_wait() {
+            Ok(Some(_)) => return child.wait_with_output().ok(),
+            Ok(None) if started.elapsed() >= std::time::Duration::from_millis(timeout_ms) => {
+                let _ = child.kill();
+                let _ = child.wait();
+                return None;
+            }
+            Ok(None) => std::thread::sleep(std::time::Duration::from_millis(25)),
+            Err(_) => {
+                let _ = child.kill();
+                let _ = child.wait();
+                return None;
+            }
+        }
+    }
+}
+
+fn tail_text_lines(path: &Path, limit: usize, max_bytes: u64) -> std::io::Result<Vec<String>> {
+    if limit == 0 {
+        return Ok(Vec::new());
+    }
+    let mut file = std::fs::File::open(path)?;
+    let len = file.metadata()?.len();
+    file.seek(SeekFrom::Start(len.saturating_sub(max_bytes)))?;
+    let mut body = String::new();
+    file.read_to_string(&mut body)?;
+    let mut lines: Vec<String> = body
+        .lines()
+        .rev()
+        .take(limit)
+        .map(|line| line.trim_end_matches('\r').to_string())
+        .collect();
+    lines.reverse();
+    Ok(lines)
+}
+
+fn is_sensitive_workspace_log_path(path: &str) -> bool {
+    let Some(name) = Path::new(path).file_name().and_then(|value| value.to_str()) else {
+        return false;
+    };
+    let lower = name.to_ascii_lowercase();
+    lower == ".env" || lower == ".env.local" || lower.starts_with(".env.")
 }
 
 async fn api_workspace_inspect(
@@ -2757,19 +3090,39 @@ fn string_array(value: Option<&JsonValue>) -> Vec<String> {
 
 fn stable_hash_json(value: &JsonValue) -> String {
     let serialized = serde_json::to_string(value).unwrap_or_default();
-    let mut hasher = std::collections::hash_map::DefaultHasher::new();
-    serialized.hash(&mut hasher);
-    format!("{:016x}", hasher.finish())
+    stable_hash_text(&serialized)
+}
+
+fn ai_generation_scope_key(focus: &str, mode: &str, question: &str, report: bool) -> String {
+    let normalized_question = question.trim();
+    format!(
+        "{}|mode={}|report={}|q={:016x}",
+        focus,
+        mode,
+        report,
+        stable_hash_u64(normalized_question)
+    )
 }
 
 fn artifact_id(prefix: &str, incident_id: &str, seed: &str) -> String {
-    let mut hasher = std::collections::hash_map::DefaultHasher::new();
-    seed.hash(&mut hasher);
     format!(
         "{prefix}-{incident_id}-{}-{:016x}",
         unix_seconds(),
-        hasher.finish()
+        stable_hash_u64(seed)
     )
+}
+
+fn stable_hash_text(text: &str) -> String {
+    format!("{:016x}", stable_hash_u64(text))
+}
+
+fn stable_hash_u64(text: &str) -> u64 {
+    let mut hash = 0xcbf29ce484222325u64;
+    for byte in text.as_bytes() {
+        hash ^= u64::from(*byte);
+        hash = hash.wrapping_mul(0x100000001b3);
+    }
+    hash
 }
 
 fn fallback_trace(kind: &str, reason: &str) -> JsonValue {
@@ -2807,6 +3160,15 @@ fn parse_offset_datetime(value: &str) -> Option<OffsetDateTime> {
     OffsetDateTime::parse(value, &time::format_description::well_known::Rfc3339).ok()
 }
 
+fn query_bool(params: &HashMap<String, String>, key: &str) -> Option<bool> {
+    params.get(key).map(|value| {
+        matches!(
+            value.trim().to_ascii_lowercase().as_str(),
+            "1" | "true" | "yes" | "on"
+        )
+    })
+}
+
 fn persist_ui_snapshot(
     paths: &Paths,
     data_type: &str,
@@ -2824,6 +3186,83 @@ fn persist_ui_snapshot(
         )?;
     }
     Ok(())
+}
+
+fn persist_ai_generation(
+    paths: &Paths,
+    scope_key: &str,
+    focus: &str,
+    mode: &str,
+    question: &str,
+    bundle: &JsonValue,
+    response: &JsonValue,
+) -> Result<StoredAiGeneration> {
+    initialize_databases(&paths.events_db, &paths.incidents_db)?;
+    let Some(store) = IncidentsStore::open(&paths.incidents_db)? else {
+        return Ok(StoredAiGeneration {
+            generation_id: artifact_id(
+                "ai-gen",
+                focus,
+                &format!("{scope_key}:{}", stable_hash_json(response)),
+            ),
+            scope_key: scope_key.to_string(),
+            focus: focus.to_string(),
+            mode: mode.to_string(),
+            question: question.to_string(),
+            response: response.clone(),
+            bundle_hash: stable_hash_json(bundle),
+            used_ai: response
+                .get("used_ai")
+                .and_then(JsonValue::as_bool)
+                .unwrap_or(false),
+            provider: response.get("provider").cloned().unwrap_or(JsonValue::Null),
+            created_at: now_iso(),
+        });
+    };
+    let provider = response.get("provider").cloned().unwrap_or(JsonValue::Null);
+    let generation = StoredAiGeneration {
+        generation_id: artifact_id(
+            "ai-gen",
+            focus,
+            &format!("{scope_key}:{}", stable_hash_json(response)),
+        ),
+        scope_key: scope_key.to_string(),
+        focus: focus.to_string(),
+        mode: mode.to_string(),
+        question: question.to_string(),
+        response: response.clone(),
+        bundle_hash: stable_hash_json(bundle),
+        used_ai: response
+            .get("used_ai")
+            .and_then(JsonValue::as_bool)
+            .unwrap_or(false),
+        provider,
+        created_at: now_iso(),
+    };
+    store.add_ai_generation(&generation)?;
+    Ok(generation)
+}
+
+fn ai_generation_metadata_json(generation: &StoredAiGeneration) -> JsonValue {
+    json!({
+        "generation_id": generation.generation_id,
+        "scope_key": generation.scope_key,
+        "focus": generation.focus,
+        "mode": generation.mode,
+        "question": generation.question,
+        "bundle_hash": generation.bundle_hash,
+        "used_ai": generation.used_ai,
+        "provider": generation.provider,
+        "created_at": generation.created_at,
+    })
+}
+
+fn load_saved_ai_generation(paths: &Paths, scope_key: &str) -> Result<Option<JsonValue>> {
+    initialize_databases(&paths.events_db, &paths.incidents_db)?;
+    let Some(store) = IncidentsStore::open(&paths.incidents_db)? else {
+        return Ok(None);
+    };
+    store.latest_ai_generation(scope_key)
 }
 
 fn read_ui_snapshot(paths: &Paths, data_type: &str) -> Result<Option<StoredUiSnapshot>> {
@@ -3045,8 +3484,17 @@ fn build_investigation_bundle(
                     "manager": app.manager.clone(),
                     "pid": app.pid,
                     "project_path": app.project_path.clone(),
+                    "app_url": app.app_url.clone(),
+                    "health_endpoint": app.health_endpoint.clone(),
+                    "endpoint_count": app.endpoints.len(),
+                    "log_source_count": app.log_sources.len(),
+                    "app_structure_count": app.app_structure.len(),
                     "log_hint_count": app.log_hints.len(),
                     "detected_signal_count": app.signals.len(),
+                    "app_state": app.app_state.clone(),
+                    "resources": app.resources.clone(),
+                    "location": app.app_location.clone(),
+                    "context_capabilities": app.context_capabilities.clone(),
                     "matching_event_count": events.len(),
                     "operator_question": question,
                 },
@@ -3062,7 +3510,17 @@ fn build_investigation_bundle(
                     "projects": workspace.projects,
                     "runtime_apps": workspace.runtime_apps,
                     "service_mappings": workspace.service_mappings,
-                    "selected_app": app,
+                    "selected_app": app.clone(),
+                    "selected_app_context": {
+                        "logs": app.log_sources.clone(),
+                        "endpoints": app.endpoints.clone(),
+                        "health_endpoint": app.health_endpoint.clone(),
+                        "state": app.app_state.clone(),
+                        "resources": app.resources.clone(),
+                        "location": app.app_location.clone(),
+                        "capabilities": app.context_capabilities.clone(),
+                        "app_structure": app.app_structure.clone(),
+                    },
                 },
                 "user_question": question,
                 "constraints": {
@@ -3379,6 +3837,7 @@ fn latest_incident_focus(paths: &Paths) -> Result<Option<String>> {
     };
     Ok(incidents
         .latest_active_incident_id()?
+        .or(incidents.latest_incident_id()?)
         .map(|incident_id| format!("incident:{incident_id}")))
 }
 
@@ -3983,6 +4442,27 @@ fn deterministic_investigation_response(
             "type": "workspace",
             "id": "projects",
             "summary": format!("{project_count} projects detected"),
+        }));
+    }
+    if let Some(selected_app) = workspace.get("selected_app").and_then(JsonValue::as_object) {
+        let app_name = selected_app
+            .get("name")
+            .and_then(JsonValue::as_str)
+            .unwrap_or("workspace_app");
+        let log_sources = selected_app
+            .get("log_sources")
+            .and_then(JsonValue::as_array)
+            .map(Vec::len)
+            .unwrap_or_default();
+        let endpoints = selected_app
+            .get("endpoints")
+            .and_then(JsonValue::as_array)
+            .map(Vec::len)
+            .unwrap_or_default();
+        evidence.push(json!({
+            "type": "workspace",
+            "id": app_name,
+            "summary": format!("{log_sources} log source(s), {endpoints} endpoint(s), runtime metadata attached"),
         }));
     }
 
@@ -4875,6 +5355,23 @@ enabled = false
             .expect("insert cluster");
     }
 
+    #[test]
+    fn workspace_log_tail_reads_bounded_text_and_blocks_env_files() {
+        let root = test_root("workspace-log-tail");
+        std::fs::create_dir_all(&root).expect("create root");
+        let log_path = root.join("app.log");
+        std::fs::write(&log_path, "one\ntwo\nthree\n").expect("write log");
+        let lines = tail_text_lines(&log_path, 2, 1024).expect("tail log");
+        assert_eq!(lines, vec!["two".to_string(), "three".to_string()]);
+        assert!(is_sensitive_workspace_log_path(
+            &root.join(".env.local").to_string_lossy()
+        ));
+        assert!(!is_sensitive_workspace_log_path(
+            &log_path.to_string_lossy()
+        ));
+        let _ = std::fs::remove_dir_all(root);
+    }
+
     async fn get_json(app: Router, path: &str) -> JsonValue {
         let response = app
             .oneshot(
@@ -4992,6 +5489,12 @@ enabled = false
 
         let logs = get_json(app.clone(), "/api/logs?limit=5").await;
         assert!(logs.get("logs").and_then(|v| v.as_array()).is_some());
+
+        let ai_generations = get_json(app.clone(), "/api/ai/generations?limit=5").await;
+        assert!(ai_generations
+            .get("generations")
+            .and_then(|v| v.as_array())
+            .is_some());
 
         let collectors = get_json(app.clone(), "/api/collectors").await;
         assert!(collectors
@@ -5292,6 +5795,22 @@ enabled = false
             .and_then(|audit| audit.get("latest_trace"))
             .and_then(JsonValue::as_object)
             .is_some());
+        assert!(payload.get("cached").is_none());
+        assert!(payload
+            .get("ai_generation")
+            .and_then(JsonValue::as_object)
+            .is_some());
+
+        let cached = get_json(
+            app.clone(),
+            "/api/investigate/incident/inc-1?monitor_seconds=0",
+        )
+        .await;
+        assert_eq!(cached.get("cached"), Some(&JsonValue::Bool(true)));
+        assert!(cached
+            .get("ai_generation")
+            .and_then(JsonValue::as_object)
+            .is_some());
 
         let detail = get_json(app, "/api/incidents/inc-1").await;
         assert!(detail
@@ -5308,6 +5827,7 @@ enabled = false
     async fn ai_ask_latest_scope_resolves_to_latest_incident_in_rust() {
         let app = app_router(seeded_test_state("ai-ask-latest", false));
         let response = app
+            .clone()
             .oneshot(
                 Request::builder()
                     .method("POST")
@@ -5340,6 +5860,46 @@ enabled = false
             Some(&JsonValue::String("what changed most recently?".into()))
         );
         assert_eq!(payload.get("used_ai"), Some(&JsonValue::Bool(false)));
+        assert!(payload
+            .get("ai_generation")
+            .and_then(JsonValue::as_object)
+            .is_some());
+        let saved_generations = get_json(
+            app.clone(),
+            "/api/ai/generations?scope=incident:inc-1&limit=5",
+        )
+        .await;
+        assert!(saved_generations
+            .get("generations")
+            .and_then(JsonValue::as_array)
+            .is_some_and(|items| !items.is_empty()));
+
+        let cached = app
+            .oneshot(
+                Request::builder()
+                    .method("POST")
+                    .uri("/api/ai/ask")
+                    .header(header::CONTENT_TYPE, "application/json")
+                    .body(Body::from(
+                        serde_json::to_vec(&json!({
+                            "question": "what changed most recently?",
+                            "scope": "latest",
+                            "mode": "expert",
+                            "monitor_seconds": 0,
+                        }))
+                        .expect("serialize request"),
+                    ))
+                    .expect("build request"),
+            )
+            .await
+            .expect("cached ai ask response");
+        assert_eq!(cached.status(), StatusCode::OK);
+        let cached_body = axum::body::to_bytes(cached.into_body(), usize::MAX)
+            .await
+            .expect("read cached body");
+        let cached_payload: JsonValue =
+            serde_json::from_slice(&cached_body).expect("parse cached json");
+        assert_eq!(cached_payload.get("cached"), Some(&JsonValue::Bool(true)));
     }
 
     #[tokio::test]

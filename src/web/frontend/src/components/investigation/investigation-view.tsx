@@ -44,6 +44,9 @@ export function InvestigationView({
                   )}
                 </Badge>
                 <Badge variant="outline">{Math.round((output.confidence ?? 0) * 100)}% confidence</Badge>
+                {result.cached ? (
+                  <Badge variant="success">Saved {result.ai_generation?.created_at ? formatRelativeDate(result.ai_generation.created_at) : ""}</Badge>
+                ) : null}
                 {result.attempts && result.attempts > 1 ? (
                   <Badge variant="warning">
                     <RefreshCcw className="size-3.5" />

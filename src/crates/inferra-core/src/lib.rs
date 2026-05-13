@@ -11,8 +11,10 @@ use inferra_config::{experience_from_config, Paths};
 use inferra_contracts::{
     AiStatusResponse, DashboardHealth, DashboardPayload, EventRow, IncidentRow, OverviewResponse,
     QuickAnalysis, RuntimeContainer, RuntimeContext, RuntimeProcess, ServiceRow, SeverityValue,
-    WorkspaceMapResponse, WorkspaceMapping, WorkspaceMappingSignal, WorkspaceProject,
-    WorkspaceRuntimeApp, WorkspaceSupportItem, WorkspaceSupportLayer,
+    WorkspaceAppCapability, WorkspaceAppEndpoint, WorkspaceAppLocation, WorkspaceAppResources,
+    WorkspaceAppState, WorkspaceAppStructureItem, WorkspaceLogSource, WorkspaceMapResponse,
+    WorkspaceMapping, WorkspaceMappingSignal, WorkspaceProject, WorkspaceRuntimeApp,
+    WorkspaceSupportItem, WorkspaceSupportLayer,
 };
 use inferra_storage::{
     AdaptiveLearningAuditQuery, AdaptiveLearningHistoryQuery, EventsStore, GovernanceSummary,
@@ -607,6 +609,39 @@ pub fn build_workspace_map(config: &TomlValue, paths: &Paths) -> Result<Workspac
         service_mappings,
         unmapped_services,
         config_mappings,
+    })
+}
+
+pub fn workspace_app_live_resources(
+    pid: Option<u32>,
+    name: Option<&str>,
+) -> Option<WorkspaceAppResources> {
+    let mut sys = System::new_all();
+    sys.refresh_all();
+    let name = name.map(|value| value.to_ascii_lowercase());
+    let process = sys.processes().values().find(|process| {
+        pid.map(|pid| process.pid().as_u32() == pid)
+            .unwrap_or(false)
+            || name
+                .as_ref()
+                .map(|needle| {
+                    process
+                        .name()
+                        .to_string_lossy()
+                        .to_ascii_lowercase()
+                        .contains(needle)
+                })
+                .unwrap_or(false)
+    })?;
+    Some(WorkspaceAppResources {
+        cpu_percent: Some(round_f64(f64::from(process.cpu_usage()), 2)),
+        memory_mb: Some(round_f64(process.memory() as f64 / (1024.0 * 1024.0), 2)),
+        virtual_memory_mb: Some(round_f64(
+            process.virtual_memory() as f64 / (1024.0 * 1024.0),
+            2,
+        )),
+        uptime_seconds: Some(process.run_time()),
+        process_status: Some(format!("{:?}", process.status())),
     })
 }
 
@@ -8306,6 +8341,9 @@ fn discover_projects(config: &TomlValue, root: &Path) -> Vec<WorkspaceProject> {
             if !path.is_dir() {
                 continue;
             }
+            if !should_accept_workspace_project(path) {
+                continue;
+            }
             for (name, kind) in WORKSPACE_PROJECT_MARKERS {
                 if workspace_marker_exists(path, name) {
                     let rel = display_path(path);
@@ -8527,6 +8565,9 @@ fn workspace_project_from_path(path: &Path) -> Option<WorkspaceProject> {
     if !root.is_dir() {
         return None;
     }
+    if !should_accept_workspace_project(&root) {
+        return None;
+    }
     for (marker, kind) in WORKSPACE_PROJECT_MARKERS {
         if workspace_marker_exists(&root, marker) {
             return Some(WorkspaceProject {
@@ -8537,6 +8578,37 @@ fn workspace_project_from_path(path: &Path) -> Option<WorkspaceProject> {
         }
     }
     None
+}
+
+fn should_accept_workspace_project(path: &Path) -> bool {
+    if path.join(".inferra").join("app.toml").exists()
+        || path.join(".inferra").join("inferra.toml").exists()
+        || path.join(".inferra").join("workspace.toml").exists()
+    {
+        return true;
+    }
+    let rendered = path
+        .to_string_lossy()
+        .replace('/', "\\")
+        .to_ascii_lowercase();
+    if std::env::var_os("USERPROFILE")
+        .or_else(|| std::env::var_os("HOME"))
+        .map(PathBuf::from)
+        .and_then(|home| home.canonicalize().ok())
+        .map(|home| home == path.canonicalize().unwrap_or_else(|_| path.to_path_buf()))
+        .unwrap_or(false)
+    {
+        return false;
+    }
+    if rendered.contains("\\windows\\")
+        || rendered.contains("\\program files\\")
+        || rendered.contains("\\program files (x86)\\")
+        || rendered.contains("\\node_modules\\")
+        || rendered.ends_with("\\node_modules")
+    {
+        return false;
+    }
+    true
 }
 
 fn discover_nearest_workspace_project(path: &Path) -> Option<WorkspaceProject> {
@@ -8569,6 +8641,7 @@ fn is_workspace_discovery_boundary(path: &Path) -> bool {
         || rendered == "c:\\program files"
         || rendered == "c:\\program files (x86)"
         || rendered == "c:\\programdata"
+        || rendered.ends_with("\\node_modules")
 }
 
 #[derive(Clone, Copy)]
@@ -8608,9 +8681,20 @@ const LANGUAGE_SIGNATURES: &[WorkspaceSignature] = &[
         label: "Node.js",
         support_type: "language",
         detects: &[
-            "node", "npm", "npx", "pnpm", "yarn", "tsx", "ts-node", "next", "vite", "nuxt", "nest",
+            "node",
+            "npm",
+            "npx",
+            "pnpm",
+            "yarn",
+            "tsx",
+            "ts-node",
+            "next",
+            "vite",
+            "nuxt",
+            "nest",
+            "node --watch",
         ],
-        log_hints: &["console", "pino", "winston", "morgan", "debug"],
+        log_hints: &["console", "pino", "winston", "morgan", "debug", "PM2"],
     },
     WorkspaceSignature {
         id: "bun",
@@ -8786,6 +8870,90 @@ const FRAMEWORK_SIGNATURES: &[WorkspaceSignature] = &[
         detects: &["spring"],
         log_hints: &["logback", "application logs"],
     },
+    WorkspaceSignature {
+        id: "express",
+        label: "Express",
+        support_type: "framework",
+        detects: &["express"],
+        log_hints: &["morgan", "pino-http", "winston", "stdout"],
+    },
+    WorkspaceSignature {
+        id: "fastify",
+        label: "Fastify",
+        support_type: "framework",
+        detects: &["fastify"],
+        log_hints: &["pino", "stdout", "logs/app.log"],
+    },
+    WorkspaceSignature {
+        id: "koa",
+        label: "Koa",
+        support_type: "framework",
+        detects: &["koa"],
+        log_hints: &["koa-logger", "pino", "winston"],
+    },
+    WorkspaceSignature {
+        id: "hono",
+        label: "Hono",
+        support_type: "framework",
+        detects: &["hono"],
+        log_hints: &["console", "pino"],
+    },
+    WorkspaceSignature {
+        id: "remix",
+        label: "Remix",
+        support_type: "framework",
+        detects: &["@remix-run/node", "remix"],
+        log_hints: &["server stdout", "logs/app.log"],
+    },
+    WorkspaceSignature {
+        id: "astro",
+        label: "Astro",
+        support_type: "framework",
+        detects: &["astro"],
+        log_hints: &["dev server stdout", "adapter logs"],
+    },
+    WorkspaceSignature {
+        id: "sveltekit",
+        label: "SvelteKit",
+        support_type: "framework",
+        detects: &["@sveltejs/kit", "sveltekit"],
+        log_hints: &["dev server stdout", "adapter logs"],
+    },
+    WorkspaceSignature {
+        id: "axum",
+        label: "Axum",
+        support_type: "framework",
+        detects: &["axum"],
+        log_hints: &["tracing", "stdout", "logs/app.log"],
+    },
+    WorkspaceSignature {
+        id: "actix-web",
+        label: "Actix Web",
+        support_type: "framework",
+        detects: &["actix-web"],
+        log_hints: &["tracing", "env_logger", "logs/app.log"],
+    },
+    WorkspaceSignature {
+        id: "rocket",
+        label: "Rocket",
+        support_type: "framework",
+        detects: &["rocket"],
+        log_hints: &["Rocket logs", "tracing"],
+    },
+    WorkspaceSignature {
+        id: "gin",
+        label: "Gin",
+        support_type: "framework",
+        detects: &["gin-gonic", "gin"],
+        log_hints: &["gin logger", "zap", "zerolog"],
+    },
+    WorkspaceSignature {
+        id: "fiber",
+        label: "Fiber",
+        support_type: "framework",
+        detects: &["gofiber", "fiber"],
+        log_hints: &["fiber logger", "zap", "zerolog"],
+    },
 ];
 
 const LIBRARY_SIGNATURES: &[WorkspaceSignature] = &[
@@ -8873,6 +9041,48 @@ const LIBRARY_SIGNATURES: &[WorkspaceSignature] = &[
         detects: &["zap"],
         log_hints: &["JSON/application logs"],
     },
+    WorkspaceSignature {
+        id: "zerolog",
+        label: "Zerolog",
+        support_type: "logging_library",
+        detects: &["zerolog"],
+        log_hints: &["JSON/application logs"],
+    },
+    WorkspaceSignature {
+        id: "slog",
+        label: "slog",
+        support_type: "logging_library",
+        detects: &["slog"],
+        log_hints: &["Rust structured logs"],
+    },
+    WorkspaceSignature {
+        id: "env_logger",
+        label: "env_logger",
+        support_type: "logging_library",
+        detects: &["env_logger"],
+        log_hints: &["RUST_LOG stdout/stderr"],
+    },
+    WorkspaceSignature {
+        id: "bunyan",
+        label: "Bunyan",
+        support_type: "logging_library",
+        detects: &["bunyan"],
+        log_hints: &["JSON stdout", "file streams"],
+    },
+    WorkspaceSignature {
+        id: "log4js",
+        label: "Log4js",
+        support_type: "logging_library",
+        detects: &["log4js"],
+        log_hints: &["appenders", "logs/app.log"],
+    },
+    WorkspaceSignature {
+        id: "debug",
+        label: "debug",
+        support_type: "logging_library",
+        detects: &["debug"],
+        log_hints: &["DEBUG namespace stderr"],
+    },
 ];
 
 fn workspace_support_layers() -> Vec<WorkspaceSupportLayer> {
@@ -8923,12 +9133,12 @@ fn language_support_layer() -> WorkspaceSupportLayer {
 fn language_library_ids(language_id: &str) -> &'static [&'static str] {
     match language_id {
         "python" => &["structlog", "loguru"],
-        "nodejs" | "bun" | "deno" => &["pino", "winston", "morgan"],
+        "nodejs" | "bun" | "deno" => &["pino", "winston", "morgan", "bunyan", "log4js", "debug"],
         "java" => &["logback", "log4j"],
         "dotnet" => &["serilog", "nlog"],
         "php" => &["monolog"],
-        "go" => &["zap"],
-        "rust" => &["tracing"],
+        "go" => &["zap", "zerolog"],
+        "rust" => &["tracing", "slog", "env_logger"],
         _ => &[],
     }
 }
@@ -9073,15 +9283,63 @@ fn discover_pm2_runtime_apps(projects: &[WorkspaceProject]) -> Vec<WorkspaceRunt
                 });
             }
             let confidence = if project_path.is_some() { 0.95 } else { 0.75 };
-            WorkspaceRuntimeApp {
+            let endpoints = workspace_app_endpoints(
+                command.as_deref(),
+                framework.as_deref(),
+                project_path.as_deref(),
+                Some(env),
+            );
+            let app_url = primary_app_url(&endpoints);
+            let log_sources = workspace_log_sources(
+                Some("pm2"),
+                &runtime,
+                framework.as_deref(),
+                &libraries,
+                project_path.as_deref(),
+                cwd.as_deref(),
+                script.as_deref(),
+                Some(env),
+            );
+            let resources = pm2_resources(env);
+            let app_state = pm2_app_state(env, status.clone());
+            let app_location =
+                workspace_app_location(project_path.clone(), cwd.clone(), script.clone(), None);
+            let context_capabilities = workspace_app_capabilities(
+                &log_sources,
+                &endpoints,
+                None,
+                app_location.as_ref(),
+                resources.as_ref(),
+                app_state.as_ref(),
+            );
+            let app_structure = project_path
+                .as_deref()
+                .map(project_structure)
+                .unwrap_or_default();
+            let mut app = WorkspaceRuntimeApp {
                 pid,
                 name,
+                display_name: Some(runtime_app_display_name(
+                    project_path.as_deref(),
+                    script.as_deref(),
+                    None,
+                ))
+                .filter(|value| !value.is_empty()),
                 language: Some(runtime.clone()),
                 process_kind: Some(process_kind_for(command.as_deref(), framework.as_deref())),
                 runtime,
                 framework,
                 libraries,
                 log_hints,
+                log_sources,
+                app_url,
+                endpoints,
+                health_endpoint: None,
+                app_location,
+                resources,
+                app_state,
+                context_capabilities,
+                app_structure,
                 manager: Some("pm2".into()),
                 status,
                 cwd,
@@ -9091,7 +9349,9 @@ fn discover_pm2_runtime_apps(projects: &[WorkspaceProject]) -> Vec<WorkspaceRunt
                 confidence,
                 source: "pm2".into(),
                 signals,
-            }
+            };
+            apply_workspace_manifest(&mut app);
+            app
         })
         .collect()
 }
@@ -9179,28 +9439,99 @@ fn discover_process_runtime_apps(projects: &[WorkspaceProject]) -> Vec<Workspace
                 detail: "Process cwd/script/executable is inside a detected project".into(),
             });
         }
-        upsert_runtime_app(
-            &mut apps,
-            WorkspaceRuntimeApp {
-                pid: Some(process.pid().as_u32()),
-                name: app_name,
-                language: Some(runtime.clone()).filter(|value| value != "native"),
-                process_kind: Some(process_kind_for(Some(&command), framework.as_deref())),
-                runtime,
-                framework,
-                libraries,
-                log_hints,
-                manager: None,
-                status: None,
-                cwd,
-                script,
-                command: Some(command),
-                project_path,
-                confidence,
-                source: "process".into(),
-                signals,
-            },
+        let endpoints = workspace_app_endpoints(
+            Some(&command),
+            framework.as_deref(),
+            project_path.as_deref(),
+            None,
         );
+        let app_url = primary_app_url(&endpoints);
+        let log_sources = workspace_log_sources(
+            None,
+            &runtime,
+            framework.as_deref(),
+            &libraries,
+            project_path.as_deref(),
+            cwd.as_deref(),
+            script.as_deref(),
+            None,
+        );
+        let resources = Some(WorkspaceAppResources {
+            cpu_percent: Some(round_f64(f64::from(process.cpu_usage()), 2)),
+            memory_mb: Some(round_f64(process.memory() as f64 / (1024.0 * 1024.0), 2)),
+            virtual_memory_mb: Some(round_f64(
+                process.virtual_memory() as f64 / (1024.0 * 1024.0),
+                2,
+            )),
+            uptime_seconds: Some(process.run_time()),
+            process_status: Some(format!("{:?}", process.status())),
+        });
+        let app_state = Some(WorkspaceAppState {
+            health: if process.pid().as_u32() > 0 {
+                "running".into()
+            } else {
+                "unknown".into()
+            },
+            status: Some(format!("{:?}", process.status())),
+            reason: Some("Observed in the local OS process table".into()),
+            started_at: None,
+            restarts: None,
+            observed_by: "process".into(),
+        });
+        let app_location = workspace_app_location(
+            project_path.clone(),
+            cwd.clone(),
+            script.clone(),
+            exe.clone(),
+        );
+        let context_capabilities = workspace_app_capabilities(
+            &log_sources,
+            &endpoints,
+            None,
+            app_location.as_ref(),
+            resources.as_ref(),
+            app_state.as_ref(),
+        );
+        let app_structure = project_path
+            .as_deref()
+            .map(project_structure)
+            .unwrap_or_default();
+        let mut app = WorkspaceRuntimeApp {
+            pid: Some(process.pid().as_u32()),
+            name: app_name,
+            display_name: Some(runtime_app_display_name(
+                project_path.as_deref(),
+                script.as_deref(),
+                Some(&name),
+            ))
+            .filter(|value| !value.is_empty()),
+            language: Some(runtime.clone()).filter(|value| value != "native"),
+            process_kind: Some(process_kind_for(Some(&command), framework.as_deref())),
+            runtime,
+            framework,
+            libraries,
+            log_hints,
+            log_sources,
+            app_url,
+            endpoints,
+            health_endpoint: None,
+            app_location,
+            resources,
+            app_state,
+            context_capabilities,
+            app_structure,
+            manager: None,
+            status: None,
+            cwd,
+            script,
+            command: Some(command),
+            project_path,
+            confidence,
+            source: "process".into(),
+            signals,
+        };
+        apply_workspace_manifest(&mut app);
+        upsert_runtime_app(&mut apps, app);
     }
     apps
 }
@@ -9371,6 +9702,1242 @@ fn project_for_paths(
         }
     }
     None
+}
+
+fn workspace_app_location(
+    project_path: Option<String>,
+    cwd: Option<String>,
+    script: Option<String>,
+    executable: Option<String>,
+) -> Option<WorkspaceAppLocation> {
+    let installation_dir = executable
+        .as_deref()
+        .and_then(|value| Path::new(value).parent())
+        .map(display_path);
+    if project_path.is_none() && cwd.is_none() && script.is_none() && executable.is_none() {
+        return None;
+    }
+    Some(WorkspaceAppLocation {
+        project_path,
+        cwd,
+        script,
+        executable,
+        installation_dir,
+    })
+}
+
+fn runtime_app_display_name(
+    project_path: Option<&str>,
+    script: Option<&str>,
+    fallback: Option<&str>,
+) -> String {
+    project_path
+        .and_then(|path| Path::new(path).file_name())
+        .or_else(|| script.and_then(|path| Path::new(path).file_stem()))
+        .map(|value| value.to_string_lossy().into_owned())
+        .filter(|value| !value.trim().is_empty())
+        .or_else(|| fallback.map(str::to_string))
+        .unwrap_or_default()
+}
+
+fn workspace_log_sources(
+    manager: Option<&str>,
+    runtime: &str,
+    framework: Option<&str>,
+    libraries: &[String],
+    project_path: Option<&str>,
+    cwd: Option<&str>,
+    script: Option<&str>,
+    pm2_env: Option<&serde_json::Value>,
+) -> Vec<WorkspaceLogSource> {
+    let mut sources = Vec::new();
+    if matches!(manager, Some("pm2")) {
+        sources.push(WorkspaceLogSource {
+            kind: "manager".into(),
+            label: "PM2 logs".into(),
+            path: None,
+            command: Some("pm2 logs <app>".into()),
+            stream: Some("stdout/stderr".into()),
+            exists: None,
+            readable: None,
+            source: "pm2".into(),
+            confidence: 0.92,
+        });
+    } else {
+        sources.push(WorkspaceLogSource {
+            kind: "stream".into(),
+            label: "Process stdout/stderr".into(),
+            path: None,
+            command: None,
+            stream: Some("stdout/stderr".into()),
+            exists: None,
+            readable: None,
+            source: "process".into(),
+            confidence: 0.55,
+        });
+    }
+    if let Some(env) = pm2_env {
+        for (key, label) in [
+            ("pm_out_log_path", "PM2 stdout file"),
+            ("pm_err_log_path", "PM2 stderr file"),
+            ("out_file", "PM2 stdout file"),
+            ("error_file", "PM2 stderr file"),
+        ] {
+            if let Some(path) = env
+                .get(key)
+                .and_then(serde_json::Value::as_str)
+                .map(clean_display_path)
+                .filter(|value| !value.trim().is_empty() && value != "/dev/null")
+            {
+                push_file_log_source(&mut sources, label, &path, "pm2", 0.95);
+            }
+        }
+    }
+    for root in [project_path, cwd].into_iter().flatten() {
+        for path in discover_project_log_files(root, runtime, framework, libraries, script) {
+            push_file_log_source(&mut sources, "Project log file", &path, "project", 0.78);
+        }
+    }
+    sources.sort_by(|left, right| {
+        right
+            .confidence
+            .partial_cmp(&left.confidence)
+            .unwrap_or(std::cmp::Ordering::Equal)
+            .then_with(|| left.label.cmp(&right.label))
+    });
+    sources.dedup_by(|left, right| {
+        left.kind == right.kind
+            && left.path == right.path
+            && left.command == right.command
+            && left.stream == right.stream
+    });
+    sources.truncate(16);
+    sources
+}
+
+fn push_file_log_source(
+    sources: &mut Vec<WorkspaceLogSource>,
+    label: &str,
+    path: &str,
+    source: &str,
+    confidence: f64,
+) {
+    let p = Path::new(path);
+    let exists = p.exists();
+    let readable = exists && std::fs::File::open(p).is_ok();
+    sources.push(WorkspaceLogSource {
+        kind: "file".into(),
+        label: label.into(),
+        path: Some(clean_display_path(path)),
+        command: None,
+        stream: None,
+        exists: Some(exists),
+        readable: Some(readable),
+        source: source.into(),
+        confidence,
+    });
+}
+
+fn discover_project_log_files(
+    root: &str,
+    runtime: &str,
+    framework: Option<&str>,
+    libraries: &[String],
+    script: Option<&str>,
+) -> Vec<String> {
+    let root = Path::new(root);
+    let mut candidates = Vec::new();
+    for rel in [
+        "logs",
+        "log",
+        "logger",
+        "storage/logs",
+        "storage/log",
+        "var/log",
+        "tmp/log",
+        "tmp/logs",
+        "runtime/logs",
+        "run/logs",
+        "output/logs",
+        ".pm2/logs",
+    ] {
+        collect_log_files(root.join(rel), &mut candidates);
+    }
+    for rel in framework_log_candidates(runtime, framework, libraries, script) {
+        collect_log_files(root.join(rel), &mut candidates);
+    }
+    candidates.sort();
+    candidates.dedup();
+    candidates.truncate(12);
+    candidates
+}
+
+fn collect_log_files(path: PathBuf, out: &mut Vec<String>) {
+    if path.is_file() && is_log_file(&path) {
+        out.push(display_path(&path));
+        return;
+    }
+    collect_log_files_inner(path, out, 0);
+}
+
+fn collect_log_files_inner(path: PathBuf, out: &mut Vec<String>, depth: usize) {
+    if depth > 2 || out.len() >= 40 {
+        return;
+    }
+    let Ok(entries) = std::fs::read_dir(path) else {
+        return;
+    };
+    for entry in entries.flatten().take(48) {
+        let p = entry.path();
+        if p.is_file() && is_log_file(&p) {
+            out.push(display_path(&p));
+        } else if p.is_dir()
+            && p.file_name()
+                .and_then(|value| value.to_str())
+                .map(|name| !matches!(name, "node_modules" | ".git" | "target" | ".venv" | "venv"))
+                .unwrap_or(true)
+        {
+            collect_log_files_inner(p, out, depth + 1);
+        }
+    }
+}
+
+fn is_log_file(path: &Path) -> bool {
+    let lower = path
+        .file_name()
+        .and_then(|value| value.to_str())
+        .unwrap_or_default()
+        .to_ascii_lowercase();
+    if lower == ".env" || lower == ".env.local" || lower.starts_with(".env.") {
+        return false;
+    }
+    lower.ends_with(".log")
+        || lower.ends_with(".log.json")
+        || lower.ends_with(".out")
+        || lower.ends_with(".err")
+        || lower.ends_with(".stderr")
+        || lower.ends_with(".stdout")
+        || matches!(
+            lower.as_str(),
+            "npm-debug.log"
+                | "yarn-error.log"
+                | "pnpm-debug.log"
+                | "uvicorn.log"
+                | "gunicorn.log"
+                | "celery.log"
+                | "django.log"
+                | "flask.log"
+                | "fastapi.log"
+                | "application.log"
+                | "server.log"
+                | "app.log"
+                | "error.log"
+                | "access.log"
+        )
+}
+
+fn framework_log_candidates(
+    runtime: &str,
+    framework: Option<&str>,
+    libraries: &[String],
+    script: Option<&str>,
+) -> Vec<&'static str> {
+    let mut out = Vec::new();
+    match framework {
+        Some("django" | "flask" | "fastapi") => out.extend([
+            "app.log",
+            "server.log",
+            "uvicorn.log",
+            "gunicorn.log",
+            "logs/app.log",
+            "logs/error.log",
+            "logs/access.log",
+        ]),
+        Some("rails") => out.extend(["log/development.log", "log/production.log"]),
+        Some("laravel") => out.extend(["storage/logs/laravel.log"]),
+        Some("spring") => {
+            out.extend(["logs/spring.log", "logs/application.log", "application.log"])
+        }
+        Some("nextjs" | "vite" | "nuxt" | "nestjs" | "express" | "fastify" | "koa" | "hono") => out
+            .extend([
+                "npm-debug.log",
+                "yarn-error.log",
+                "pnpm-debug.log",
+                "logs/app.log",
+                "logs/server.log",
+                "logs/error.log",
+                "logs/access.log",
+                "server.log",
+                "app.log",
+            ]),
+        Some("phoenix") => out.extend(["log/dev.log", "log/prod.log"]),
+        Some("symfony") => out.extend(["var/log/dev.log", "var/log/prod.log"]),
+        _ => {}
+    }
+    if runtime == "python" {
+        out.extend([
+            "app.log",
+            "error.log",
+            "access.log",
+            "logs/app.log",
+            "logs/error.log",
+            "logs/access.log",
+        ]);
+    }
+    if matches!(runtime, "go" | "rust" | "java" | "dotnet") {
+        out.extend(["logs/app.log", "logs/error.log", "application.log"]);
+    }
+    if libraries.iter().any(|item| {
+        matches!(
+            item.as_str(),
+            "winston" | "pino" | "bunyan" | "log4js" | "morgan"
+        )
+    }) {
+        out.extend(["logs/app.log", "logs/error.log", "logs/access.log"]);
+    }
+    if libraries
+        .iter()
+        .any(|item| matches!(item.as_str(), "structlog" | "loguru" | "logging"))
+    {
+        out.extend(["logs/app.log", "logs/error.log", "app.log"]);
+    }
+    if script
+        .map(|value| value.to_ascii_lowercase().contains("celery"))
+        .unwrap_or(false)
+    {
+        out.push("logs/celery.log");
+    }
+    out
+}
+
+fn workspace_app_endpoints(
+    command: Option<&str>,
+    framework: Option<&str>,
+    project_path: Option<&str>,
+    pm2_env: Option<&serde_json::Value>,
+) -> Vec<WorkspaceAppEndpoint> {
+    let mut endpoints = Vec::new();
+    if let Some(env) = pm2_env {
+        if let Some(url) = env_value(env, &["APP_URL", "URL", "BASE_URL", "PUBLIC_URL"]) {
+            endpoints.push(endpoint_from_url(&url, "env", 0.92));
+        }
+        if let Some(port) = env_port(env) {
+            let host = env_value(env, &["HOST", "HOSTNAME"]).unwrap_or_else(|| "127.0.0.1".into());
+            endpoints.push(endpoint_from_host_port(&host, port, "env", 0.86));
+        }
+    }
+    if let Some(command) = command {
+        if let Some(port) = port_from_command(command) {
+            endpoints.push(endpoint_from_host_port("127.0.0.1", port, "command", 0.72));
+        }
+    }
+    if endpoints.is_empty() {
+        if let Some(port) = default_port_for_framework(framework, project_path) {
+            endpoints.push(endpoint_from_host_port(
+                "127.0.0.1",
+                port,
+                "framework_default",
+                0.45,
+            ));
+        }
+    }
+    endpoints.sort_by(|left, right| {
+        right
+            .confidence
+            .partial_cmp(&left.confidence)
+            .unwrap_or(std::cmp::Ordering::Equal)
+    });
+    endpoints.dedup_by(|left, right| left.url == right.url);
+    endpoints.truncate(4);
+    endpoints
+}
+
+fn primary_app_url(endpoints: &[WorkspaceAppEndpoint]) -> Option<String> {
+    endpoints
+        .iter()
+        .find(|endpoint| endpoint.confidence >= 0.7)
+        .map(|endpoint| endpoint.url.clone())
+}
+
+fn endpoint_from_url(url: &str, source: &str, confidence: f64) -> WorkspaceAppEndpoint {
+    let protocol = url.split("://").next().unwrap_or("http").to_string();
+    WorkspaceAppEndpoint {
+        url: url.to_string(),
+        host: None,
+        port: None,
+        protocol,
+        source: source.into(),
+        confidence,
+    }
+}
+
+fn endpoint_from_host_port(
+    host: &str,
+    port: u16,
+    source: &str,
+    confidence: f64,
+) -> WorkspaceAppEndpoint {
+    let host = if host.trim().is_empty() {
+        "127.0.0.1"
+    } else {
+        host.trim()
+    };
+    WorkspaceAppEndpoint {
+        url: format!("http://{host}:{port}"),
+        host: Some(host.into()),
+        port: Some(port),
+        protocol: "http".into(),
+        source: source.into(),
+        confidence,
+    }
+}
+
+fn env_value(env: &serde_json::Value, keys: &[&str]) -> Option<String> {
+    for key in keys {
+        if let Some(value) = env.get(*key).and_then(serde_json::Value::as_str) {
+            if !value.trim().is_empty() {
+                return Some(value.trim().to_string());
+            }
+        }
+        if let Some(value) = env
+            .get("env")
+            .and_then(|inner| inner.get(*key))
+            .and_then(serde_json::Value::as_str)
+        {
+            if !value.trim().is_empty() {
+                return Some(value.trim().to_string());
+            }
+        }
+    }
+    None
+}
+
+fn env_port(env: &serde_json::Value) -> Option<u16> {
+    for key in [
+        "PORT",
+        "SERVER_PORT",
+        "APP_PORT",
+        "VITE_PORT",
+        "NEXT_PORT",
+        "FLASK_RUN_PORT",
+    ] {
+        if let Some(value) = env
+            .get(key)
+            .or_else(|| env.get("env").and_then(|inner| inner.get(key)))
+        {
+            if let Some(port) = value.as_u64().and_then(|value| u16::try_from(value).ok()) {
+                return Some(port);
+            }
+            if let Some(port) = value
+                .as_str()
+                .and_then(|raw| raw.trim().parse::<u16>().ok())
+            {
+                return Some(port);
+            }
+        }
+    }
+    None
+}
+
+fn port_from_command(command: &str) -> Option<u16> {
+    let parts = split_command_like(command);
+    for (idx, part) in parts.iter().enumerate() {
+        let lower = part.to_ascii_lowercase();
+        if matches!(lower.as_str(), "--port" | "--http-port" | "--listen") {
+            if let Some(port) = parts.get(idx + 1).and_then(|next| parse_port_token(next)) {
+                return Some(port);
+            }
+        }
+        if let Some(raw) = lower
+            .strip_prefix("--port=")
+            .or_else(|| lower.strip_prefix("--http-port="))
+        {
+            if let Some(port) = parse_port_token(raw) {
+                return Some(port);
+            }
+        }
+        if let Some(port) = parse_host_port_token(&lower) {
+            return Some(port);
+        }
+    }
+    None
+}
+
+fn split_command_like(command: &str) -> Vec<String> {
+    command
+        .split_whitespace()
+        .map(|part| part.trim_matches('"').trim_matches('\'').to_string())
+        .collect()
+}
+
+fn parse_port_token(token: &str) -> Option<u16> {
+    token
+        .trim()
+        .trim_start_matches(':')
+        .split(|ch: char| !ch.is_ascii_digit())
+        .find(|part| !part.is_empty())
+        .and_then(|part| part.parse::<u16>().ok())
+}
+
+fn parse_host_port_token(token: &str) -> Option<u16> {
+    if !(token.starts_with("http://")
+        || token.starts_with("https://")
+        || token.starts_with("localhost:")
+        || token.starts_with("127.0.0.1:"))
+    {
+        return None;
+    }
+    let pos = token.rfind(':')?;
+    parse_port_token(&token[pos + 1..]).filter(|port| *port >= 1024 || matches!(*port, 80 | 443))
+}
+
+fn default_port_for_framework(framework: Option<&str>, project_path: Option<&str>) -> Option<u16> {
+    match framework {
+        Some("nextjs" | "nestjs" | "rails") => Some(3000),
+        Some("vite") => Some(5173),
+        Some("flask") => Some(5000),
+        Some("django" | "fastapi" | "uvicorn" | "laravel") => Some(8000),
+        Some("spring") => Some(8080),
+        _ => project_path.and_then(project_default_port),
+    }
+}
+
+fn project_default_port(project_path: &str) -> Option<u16> {
+    let package = Path::new(project_path).join("package.json");
+    if package.exists() {
+        return Some(3000);
+    }
+    let pyproject = Path::new(project_path).join("pyproject.toml");
+    if pyproject.exists() {
+        return Some(8000);
+    }
+    None
+}
+
+fn apply_workspace_manifest(app: &mut WorkspaceRuntimeApp) {
+    let Some(project_path) = app.project_path.clone() else {
+        return;
+    };
+    let deps = project_dependency_hints(&project_path);
+    extend_unique(&mut app.libraries, deps.libraries);
+    if app.framework.is_none() {
+        app.framework = deps.framework;
+    }
+    if app.language.is_none() {
+        app.language = deps.language.clone();
+    }
+    if app.runtime == "unknown" {
+        if let Some(language) = deps.language {
+            app.runtime = language;
+        }
+    }
+    if app.app_structure.is_empty() {
+        app.app_structure = project_structure(&project_path);
+    }
+    for root in [Some(project_path.as_str()), app.cwd.as_deref()]
+        .into_iter()
+        .flatten()
+    {
+        for path in discover_project_log_files(
+            root,
+            &app.runtime,
+            app.framework.as_deref(),
+            &app.libraries,
+            app.script.as_deref(),
+        ) {
+            upsert_log_source(
+                &mut app.log_sources,
+                WorkspaceLogSource {
+                    kind: "file".into(),
+                    label: "Project log file".into(),
+                    path: Some(path),
+                    command: None,
+                    stream: None,
+                    exists: Some(true),
+                    readable: Some(true),
+                    source: "project_dependency_scan".into(),
+                    confidence: 0.82,
+                },
+            );
+        }
+    }
+    if let Some(manifest) = read_inferra_app_manifest(&project_path) {
+        apply_manifest_value(app, &project_path, &manifest);
+    }
+    app.log_hints = runtime_log_hints(
+        &app.runtime,
+        app.framework.as_deref(),
+        &app.libraries,
+        app.manager.as_deref(),
+    );
+    app.context_capabilities = workspace_app_capabilities(
+        &app.log_sources,
+        &app.endpoints,
+        app.health_endpoint.as_ref(),
+        app.app_location.as_ref(),
+        app.resources.as_ref(),
+        app.app_state.as_ref(),
+    );
+}
+
+#[derive(Default)]
+struct ProjectDependencyHints {
+    language: Option<String>,
+    framework: Option<String>,
+    libraries: Vec<String>,
+}
+
+fn project_dependency_hints(project_path: &str) -> ProjectDependencyHints {
+    let mut hints = ProjectDependencyHints::default();
+    let project = Path::new(project_path);
+    let package = project.join("package.json");
+    if let Ok(text) = std::fs::read_to_string(package) {
+        if let Ok(value) = serde_json::from_str::<serde_json::Value>(&text) {
+            hints.language = Some("nodejs".into());
+            let deps = package_dependency_names(&value);
+            hints.framework = node_framework_from_deps(&deps);
+            hints
+                .libraries
+                .extend(deps.into_iter().filter_map(|dep| node_package_signal(&dep)));
+        }
+    }
+    let pyproject = project.join("pyproject.toml");
+    if let Ok(text) = std::fs::read_to_string(pyproject) {
+        if let Ok(value) = text.parse::<TomlValue>() {
+            hints.language.get_or_insert_with(|| "python".into());
+            let deps = toml_dependency_names(&value);
+            hints.framework = hints
+                .framework
+                .or_else(|| python_framework_from_deps(&deps));
+            hints.libraries.extend(
+                deps.into_iter()
+                    .filter_map(|dep| python_package_signal(&dep)),
+            );
+        }
+    }
+    for req in [
+        "requirements.txt",
+        "requirements/base.txt",
+        "requirements/dev.txt",
+    ] {
+        if let Ok(text) = std::fs::read_to_string(project.join(req)) {
+            hints.language.get_or_insert_with(|| "python".into());
+            let deps = requirements_dependency_names(&text);
+            hints.framework = hints
+                .framework
+                .or_else(|| python_framework_from_deps(&deps));
+            hints.libraries.extend(
+                deps.into_iter()
+                    .filter_map(|dep| python_package_signal(&dep)),
+            );
+        }
+    }
+    if project.join("Cargo.toml").exists() {
+        hints.language.get_or_insert_with(|| "rust".into());
+        if let Ok(text) = std::fs::read_to_string(project.join("Cargo.toml")) {
+            if let Ok(value) = text.parse::<TomlValue>() {
+                let deps = toml_dependency_names(&value);
+                hints.framework = hints.framework.or_else(|| rust_framework_from_deps(&deps));
+                hints
+                    .libraries
+                    .extend(deps.into_iter().filter_map(|dep| rust_package_signal(&dep)));
+            }
+        }
+    }
+    hints.libraries.sort();
+    hints.libraries.dedup();
+    hints
+}
+
+fn package_dependency_names(value: &serde_json::Value) -> Vec<String> {
+    let mut names = Vec::new();
+    for section in [
+        "dependencies",
+        "devDependencies",
+        "peerDependencies",
+        "optionalDependencies",
+    ] {
+        if let Some(obj) = value.get(section).and_then(serde_json::Value::as_object) {
+            names.extend(obj.keys().map(|key| key.to_ascii_lowercase()));
+        }
+    }
+    names
+}
+
+fn toml_dependency_names(value: &TomlValue) -> Vec<String> {
+    let mut names = Vec::new();
+    collect_toml_dependency_names(value, &mut names);
+    names.sort();
+    names.dedup();
+    names
+}
+
+fn collect_toml_dependency_names(value: &TomlValue, names: &mut Vec<String>) {
+    let Some(table) = value.as_table() else {
+        return;
+    };
+    for (key, value) in table {
+        if key.to_ascii_lowercase().contains("dependencies") {
+            if let Some(dep_table) = value.as_table() {
+                names.extend(dep_table.keys().map(|name| name.to_ascii_lowercase()));
+            }
+            if let Some(arr) = value.as_array() {
+                names.extend(
+                    arr.iter()
+                        .filter_map(TomlValue::as_str)
+                        .filter_map(|raw| raw.split(['=', '<', '>', '~', ' ']).next())
+                        .map(|name| name.trim().to_ascii_lowercase())
+                        .filter(|name| !name.is_empty()),
+                );
+            }
+        }
+        collect_toml_dependency_names(value, names);
+    }
+}
+
+fn requirements_dependency_names(text: &str) -> Vec<String> {
+    text.lines()
+        .map(str::trim)
+        .filter(|line| !line.is_empty() && !line.starts_with('#'))
+        .filter_map(|line| line.split(['=', '<', '>', '~', '[', ';', ' ']).next())
+        .map(|name| name.trim().to_ascii_lowercase())
+        .filter(|name| !name.is_empty())
+        .collect()
+}
+
+fn node_framework_from_deps(deps: &[String]) -> Option<String> {
+    for (dep, framework) in [
+        ("next", "nextjs"),
+        ("@nestjs/core", "nestjs"),
+        ("vite", "vite"),
+        ("nuxt", "nuxt"),
+        ("express", "express"),
+        ("fastify", "fastify"),
+        ("koa", "koa"),
+        ("hono", "hono"),
+        ("@hapi/hapi", "hapi"),
+        ("@remix-run/node", "remix"),
+        ("astro", "astro"),
+        ("@sveltejs/kit", "sveltekit"),
+        ("apollo-server", "apollo"),
+        ("graphql-yoga", "graphql-yoga"),
+    ] {
+        if deps.iter().any(|item| item == dep) {
+            return Some(framework.into());
+        }
+    }
+    None
+}
+
+fn python_framework_from_deps(deps: &[String]) -> Option<String> {
+    for (dep, framework) in [
+        ("fastapi", "fastapi"),
+        ("django", "django"),
+        ("flask", "flask"),
+        ("celery", "celery"),
+        ("uvicorn", "uvicorn"),
+        ("gunicorn", "gunicorn"),
+        ("starlette", "starlette"),
+        ("litestar", "litestar"),
+        ("starlite", "litestar"),
+        ("tornado", "tornado"),
+        ("sanic", "sanic"),
+        ("aiohttp", "aiohttp"),
+        ("rq", "rq"),
+        ("dramatiq", "dramatiq"),
+    ] {
+        if deps.iter().any(|item| item == dep) {
+            return Some(framework.into());
+        }
+    }
+    None
+}
+
+fn rust_framework_from_deps(deps: &[String]) -> Option<String> {
+    for (dep, framework) in [
+        ("axum", "axum"),
+        ("actix-web", "actix-web"),
+        ("rocket", "rocket"),
+        ("warp", "warp"),
+        ("poem", "poem"),
+        ("salvo", "salvo"),
+        ("tonic", "tonic"),
+    ] {
+        if deps.iter().any(|item| item == dep) {
+            return Some(framework.into());
+        }
+    }
+    None
+}
+
+fn node_package_signal(dep: &str) -> Option<String> {
+    match dep {
+        "express" | "fastify" | "koa" | "@hapi/hapi" | "hono" | "apollo-server"
+        | "graphql-yoga" => Some(dep.to_string()),
+        "next" => Some("nextjs".into()),
+        "@nestjs/core" => Some("nestjs".into()),
+        "@remix-run/node" => Some("remix".into()),
+        "@sveltejs/kit" => Some("sveltekit".into()),
+        "nuxt" | "vite" | "astro" | "sveltekit" | "webpack" | "esbuild" | "tsx" | "ts-node" => {
+            Some(dep.to_string())
+        }
+        "pino" | "pino-http" | "winston" | "morgan" | "debug" | "bunyan" | "log4js"
+        | "koa-logger" => Some(dep.to_string()),
+        "prisma" | "@prisma/client" => Some("prisma".into()),
+        "typeorm" | "sequelize" | "mongoose" | "knex" | "drizzle-orm" | "mikro-orm" => {
+            Some(dep.to_string())
+        }
+        "pg" | "mysql2" | "mongodb" | "redis" | "ioredis" | "amqplib" | "kafkajs" => {
+            Some(dep.to_string())
+        }
+        "bullmq" | "bull" | "bee-queue" | "agenda" => Some(dep.to_string()),
+        "socket.io" | "ws" | "graphql" | "axios" | "got" | "undici" | "superagent" => {
+            Some(dep.to_string())
+        }
+        "prom-client" | "@opentelemetry/api" | "@opentelemetry/sdk-node" | "@sentry/node" => {
+            Some(dep.to_string())
+        }
+        _ => None,
+    }
+}
+
+fn python_package_signal(dep: &str) -> Option<String> {
+    match dep {
+        "fastapi" | "django" | "flask" | "celery" | "uvicorn" | "gunicorn" | "starlette"
+        | "litestar" | "starlite" | "tornado" | "sanic" | "aiohttp" | "rq" | "dramatiq" => {
+            Some(dep.to_string())
+        }
+        "structlog" | "loguru" | "sentry-sdk" | "opentelemetry-api" | "opentelemetry-sdk" => {
+            Some(dep.to_string())
+        }
+        "sqlalchemy" | "psycopg2" | "psycopg" | "asyncpg" | "pymongo" | "redis" | "aioredis"
+        | "celery-redbeat" | "kombu" | "pika" | "confluent-kafka" => Some(dep.to_string()),
+        _ => None,
+    }
+}
+
+fn rust_package_signal(dep: &str) -> Option<String> {
+    match dep {
+        "tracing" | "log" | "env_logger" | "slog" | "tracing-subscriber" => Some(dep.to_string()),
+        "axum" | "actix-web" | "rocket" | "warp" | "poem" | "salvo" => Some(dep.to_string()),
+        "sqlx" | "diesel" | "redis" | "mongodb" | "tonic" | "opentelemetry" | "sentry"
+        | "lapin" | "rdkafka" => Some(dep.to_string()),
+        _ => None,
+    }
+}
+
+fn read_inferra_app_manifest(project_path: &str) -> Option<TomlValue> {
+    let root = Path::new(project_path).join(".inferra");
+    for name in ["app.toml", "inferra.toml", "workspace.toml"] {
+        let path = root.join(name);
+        if path.is_file() {
+            if let Ok(text) = std::fs::read_to_string(path) {
+                if let Ok(value) = text.parse::<TomlValue>() {
+                    return Some(value);
+                }
+            }
+        }
+    }
+    None
+}
+
+fn apply_manifest_value(app: &mut WorkspaceRuntimeApp, project_path: &str, manifest: &TomlValue) {
+    let app_table = manifest.get("app").unwrap_or(manifest);
+    if let Some(name) = toml_string(app_table, "name") {
+        app.display_name = Some(name);
+    }
+    if let Some(runtime) = toml_string(app_table, "runtime") {
+        app.runtime = runtime.clone();
+        app.language = Some(runtime);
+    }
+    if let Some(framework) = toml_string(app_table, "framework") {
+        app.framework = Some(framework);
+    }
+    if let Some(process_kind) = toml_string(app_table, "process_kind") {
+        app.process_kind = Some(process_kind);
+    }
+    if let Some(url) = toml_string(app_table, "url").or_else(|| toml_string(app_table, "app_url")) {
+        let endpoint = endpoint_from_url(&url, "inferra_manifest", 1.0);
+        app.app_url = Some(endpoint.url.clone());
+        upsert_endpoint(&mut app.endpoints, endpoint);
+    }
+    if let Some(health) = manifest.get("health").or_else(|| manifest.get("heartbeat")) {
+        if let Some(endpoint) = manifest_health_endpoint(health, app.app_url.as_deref()) {
+            app.health_endpoint = Some(endpoint.clone());
+            upsert_endpoint(&mut app.endpoints, endpoint);
+        }
+    }
+    if let Some(items) = manifest.get("endpoints").and_then(TomlValue::as_array) {
+        for item in items {
+            if let Some(endpoint) = manifest_endpoint(item) {
+                upsert_endpoint(&mut app.endpoints, endpoint);
+            }
+        }
+    }
+    if let Some(items) = manifest.get("logs").and_then(TomlValue::as_array) {
+        for item in items {
+            if let Some(source) = manifest_log_source(project_path, item) {
+                upsert_log_source(&mut app.log_sources, source);
+            }
+        }
+    }
+    if let Some(table) = manifest.get("logs").and_then(TomlValue::as_table) {
+        if let Some(source) = manifest_log_source(project_path, &TomlValue::Table(table.clone())) {
+            upsert_log_source(&mut app.log_sources, source);
+        }
+    }
+    if let Some(resources) = manifest.get("resources") {
+        if let Some(process_name) = toml_string(resources, "process_name") {
+            app.context_capabilities.push(WorkspaceAppCapability {
+                key: "resource_match".into(),
+                supported: true,
+                source: "inferra_manifest".into(),
+                detail: Some(process_name),
+            });
+        }
+    }
+    app.signals.push(WorkspaceMappingSignal {
+        name: "inferra_manifest".into(),
+        confidence: 1.0,
+        detail: ".inferra/app.toml provided explicit workspace metadata".into(),
+    });
+    app.endpoints.sort_by(|left, right| {
+        right
+            .confidence
+            .partial_cmp(&left.confidence)
+            .unwrap_or(std::cmp::Ordering::Equal)
+    });
+    app.app_url = app
+        .endpoints
+        .iter()
+        .find(|endpoint| endpoint.confidence >= 0.7)
+        .map(|endpoint| endpoint.url.clone());
+}
+
+fn toml_string(value: &TomlValue, key: &str) -> Option<String> {
+    value
+        .get(key)
+        .and_then(TomlValue::as_str)
+        .map(str::trim)
+        .filter(|value| !value.is_empty())
+        .map(str::to_string)
+}
+
+fn manifest_endpoint(value: &TomlValue) -> Option<WorkspaceAppEndpoint> {
+    if let Some(url) = toml_string(value, "url") {
+        return Some(endpoint_from_url(&url, "inferra_manifest", 1.0));
+    }
+    let port = value
+        .get("port")
+        .and_then(TomlValue::as_integer)
+        .and_then(|value| u16::try_from(value).ok())?;
+    let host = toml_string(value, "host").unwrap_or_else(|| "127.0.0.1".into());
+    Some(endpoint_from_host_port(
+        &host,
+        port,
+        "inferra_manifest",
+        1.0,
+    ))
+}
+
+fn manifest_health_endpoint(
+    value: &TomlValue,
+    app_url: Option<&str>,
+) -> Option<WorkspaceAppEndpoint> {
+    if let Some(url) = toml_string(value, "url") {
+        return Some(endpoint_from_url(&url, "inferra_manifest_health", 1.0));
+    }
+    if let Some(path) = toml_string(value, "path") {
+        if let Some(base) = app_url {
+            return Some(endpoint_from_url(
+                &format!(
+                    "{}{}",
+                    base.trim_end_matches('/'),
+                    ensure_leading_slash(&path)
+                ),
+                "inferra_manifest_health",
+                1.0,
+            ));
+        }
+    }
+    manifest_endpoint(value).map(|mut endpoint| {
+        endpoint.source = "inferra_manifest_health".into();
+        endpoint
+    })
+}
+
+fn ensure_leading_slash(value: &str) -> String {
+    if value.starts_with('/') {
+        value.to_string()
+    } else {
+        format!("/{value}")
+    }
+}
+
+fn manifest_log_source(project_path: &str, value: &TomlValue) -> Option<WorkspaceLogSource> {
+    let path =
+        toml_string(value, "path").map(|raw| resolve_project_manifest_path(project_path, &raw));
+    let command = toml_string(value, "command");
+    let stream = toml_string(value, "stream");
+    if path.is_none() && command.is_none() && stream.is_none() {
+        return None;
+    }
+    let kind = toml_string(value, "kind")
+        .unwrap_or_else(|| if path.is_some() { "file" } else { "stream" }.into());
+    let label = toml_string(value, "label").unwrap_or_else(|| "Inferra manifest log source".into());
+    let (exists, readable) = path
+        .as_deref()
+        .map(|path| {
+            let p = Path::new(path);
+            (
+                Some(p.exists()),
+                Some(p.exists() && std::fs::File::open(p).is_ok()),
+            )
+        })
+        .unwrap_or((None, None));
+    Some(WorkspaceLogSource {
+        kind,
+        label,
+        path,
+        command,
+        stream,
+        exists,
+        readable,
+        source: "inferra_manifest".into(),
+        confidence: 1.0,
+    })
+}
+
+fn resolve_project_manifest_path(project_path: &str, raw: &str) -> String {
+    let path = Path::new(raw);
+    if path.is_absolute() {
+        clean_display_path(raw)
+    } else {
+        display_path(&Path::new(project_path).join(path))
+    }
+}
+
+fn upsert_endpoint(endpoints: &mut Vec<WorkspaceAppEndpoint>, endpoint: WorkspaceAppEndpoint) {
+    if let Some(existing) = endpoints.iter_mut().find(|item| item.url == endpoint.url) {
+        if endpoint.confidence > existing.confidence {
+            *existing = endpoint;
+        }
+    } else {
+        endpoints.push(endpoint);
+    }
+}
+
+fn upsert_log_source(sources: &mut Vec<WorkspaceLogSource>, source: WorkspaceLogSource) {
+    if let Some(existing) = sources.iter_mut().find(|item| {
+        item.kind == source.kind
+            && item.path == source.path
+            && item.command == source.command
+            && item.stream == source.stream
+    }) {
+        if source.source == "inferra_manifest" || source.confidence > existing.confidence {
+            *existing = source;
+        }
+        return;
+    }
+    sources.push(source);
+}
+
+fn project_structure(project_path: &str) -> Vec<WorkspaceAppStructureItem> {
+    let root = Path::new(project_path);
+    let Ok(entries) = std::fs::read_dir(root) else {
+        return Vec::new();
+    };
+    let mut out = Vec::new();
+    for entry in entries.flatten().take(80) {
+        let path = entry.path();
+        let Some(file_name) = path
+            .file_name()
+            .map(|name| name.to_string_lossy().into_owned())
+        else {
+            continue;
+        };
+        if should_hide_project_structure_entry(&file_name) {
+            continue;
+        }
+        out.push(WorkspaceAppStructureItem {
+            path: file_name.clone(),
+            kind: if path.is_dir() { "directory" } else { "file" }.into(),
+            role: project_structure_role(&file_name, path.is_dir()),
+        });
+    }
+    out.sort_by(|left, right| left.path.cmp(&right.path));
+    out.truncate(40);
+    out
+}
+
+fn should_hide_project_structure_entry(name: &str) -> bool {
+    let lower = name.to_ascii_lowercase();
+    lower == ".env"
+        || lower == ".env.local"
+        || lower.starts_with(".env.")
+        || matches!(
+            lower.as_str(),
+            ".git"
+                | "node_modules"
+                | "target"
+                | ".venv"
+                | "venv"
+                | "__pycache__"
+                | ".next"
+                | "dist"
+                | "build"
+        )
+}
+
+fn project_structure_role(name: &str, is_dir: bool) -> String {
+    let lower = name.to_ascii_lowercase();
+    if lower == ".inferra" {
+        "inferra_config".into()
+    } else if matches!(
+        lower.as_str(),
+        "package.json" | "pyproject.toml" | "cargo.toml" | "composer.json" | "pom.xml" | "go.mod"
+    ) {
+        "manifest".into()
+    } else if matches!(
+        lower.as_str(),
+        "src" | "app" | "pages" | "api" | "server" | "cmd" | "crates"
+    ) && is_dir
+    {
+        "source".into()
+    } else if matches!(lower.as_str(), "logs" | "log" | "storage") && is_dir {
+        "logs".into()
+    } else if matches!(
+        lower.as_str(),
+        "dockerfile" | "docker-compose.yml" | "compose.yml"
+    ) {
+        "runtime".into()
+    } else {
+        "project".into()
+    }
+}
+
+fn extend_unique(target: &mut Vec<String>, items: Vec<String>) {
+    for item in items {
+        if !target.iter().any(|existing| existing == &item) {
+            target.push(item);
+        }
+    }
+    target.sort();
+    target.dedup();
+}
+
+fn pm2_resources(env: &serde_json::Value) -> Option<WorkspaceAppResources> {
+    let monit = env.get("monit").unwrap_or(&serde_json::Value::Null);
+    let cpu_percent = monit
+        .get("cpu")
+        .and_then(serde_json::Value::as_f64)
+        .map(|v| round_f64(v, 2));
+    let memory_mb = monit
+        .get("memory")
+        .and_then(serde_json::Value::as_f64)
+        .map(|value| round_f64(value / (1024.0 * 1024.0), 2));
+    if cpu_percent.is_none() && memory_mb.is_none() {
+        return None;
+    }
+    Some(WorkspaceAppResources {
+        cpu_percent,
+        memory_mb,
+        virtual_memory_mb: None,
+        uptime_seconds: None,
+        process_status: env
+            .get("status")
+            .and_then(serde_json::Value::as_str)
+            .map(str::to_string),
+    })
+}
+
+fn pm2_app_state(env: &serde_json::Value, status: Option<String>) -> Option<WorkspaceAppState> {
+    let restarts = env
+        .get("restart_time")
+        .or_else(|| env.get("unstable_restarts"))
+        .and_then(serde_json::Value::as_u64);
+    let started_at = env
+        .get("pm_uptime")
+        .and_then(serde_json::Value::as_i64)
+        .map(|value| format!("unix_ms:{value}"));
+    Some(WorkspaceAppState {
+        health: match status.as_deref() {
+            Some("online") => "running".into(),
+            Some("stopped" | "errored") => "degraded".into(),
+            Some(_) => "unknown".into(),
+            None => "unknown".into(),
+        },
+        status,
+        reason: Some("Reported by PM2 jlist".into()),
+        started_at,
+        restarts,
+        observed_by: "pm2".into(),
+    })
+}
+
+fn workspace_app_capabilities(
+    log_sources: &[WorkspaceLogSource],
+    endpoints: &[WorkspaceAppEndpoint],
+    health_endpoint: Option<&WorkspaceAppEndpoint>,
+    location: Option<&WorkspaceAppLocation>,
+    resources: Option<&WorkspaceAppResources>,
+    state: Option<&WorkspaceAppState>,
+) -> Vec<WorkspaceAppCapability> {
+    vec![
+        WorkspaceAppCapability {
+            key: "logs".into(),
+            supported: !log_sources.is_empty(),
+            source: "workspace_detector".into(),
+            detail: Some(format!("{} log source(s) discovered or inferred", log_sources.len())),
+        },
+        WorkspaceAppCapability {
+            key: "app_state".into(),
+            supported: state.is_some(),
+            source: "workspace_detector".into(),
+            detail: state.and_then(|value| value.status.clone()),
+        },
+        WorkspaceAppCapability {
+            key: "app_url".into(),
+            supported: !endpoints.is_empty(),
+            source: "workspace_detector".into(),
+            detail: endpoints.first().map(|value| value.url.clone()),
+        },
+        WorkspaceAppCapability {
+            key: "heartbeat".into(),
+            supported: health_endpoint.is_some(),
+            source: "workspace_detector".into(),
+            detail: health_endpoint.map(|value| value.url.clone()),
+        },
+        WorkspaceAppCapability {
+            key: "app_location".into(),
+            supported: location.is_some(),
+            source: "workspace_detector".into(),
+            detail: location
+                .and_then(|value| value.project_path.clone().or_else(|| value.cwd.clone())),
+        },
+        WorkspaceAppCapability {
+            key: "resources".into(),
+            supported: resources.is_some(),
+            source: "workspace_detector".into(),
+            detail: resources.and_then(|value| {
+                value
+                    .memory_mb
+                    .map(|mb| format!("memory {mb:.1} MB"))
+                    .or_else(|| value.cpu_percent.map(|cpu| format!("cpu {cpu:.1}%")))
+            }),
+        },
+        WorkspaceAppCapability {
+            key: "ai_context".into(),
+            supported: true,
+            source: "workspace_detector".into(),
+            detail: Some("Logs, runtime state, location, endpoints, resources, and detection signals are forwarded to AI when available.".into()),
+        },
+    ]
+}
+
+fn round_f64(value: f64, decimals: u32) -> f64 {
+    let factor = 10_f64.powi(decimals as i32);
+    (value * factor).round() / factor
 }
 
 fn classify_runtime(name: &str, command: &str, script: Option<&str>) -> String {

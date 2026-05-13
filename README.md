@@ -19,9 +19,9 @@ Product positioning and AI boundaries are documented in [ADR 0001: Local-first g
 - Native CLI for setup, database initialization, service management, incidents, events, services, collectors, config, workspace inspection, and AI investigation flows.
 - Experience modes are reflected in configuration defaults and the web UI.
 - React control plane under `src/web/frontend` with an Overview, Incidents, Systems, Evidence, AI Investigator, Workspace, Control, and Settings layout (no raw-JSON-first pages).
-- Structured AI investigation contract (`/api/investigate/now|incident|service`, `/api/ai/ask`, `/api/ai/report/{incident_id}`, `/api/ai/investigate-stream`, `/api/ai/status`, `/api/ai/doctor`) with cited evidence, explicit uncertainty, a deterministic fallback when AI is disabled, optional **`monitor_seconds`** on investigate/report URLs and on `ai ask`, and **SSE streaming** for token deltas plus a final JSON payload on `/api/ai/investigate-stream`.
+- Structured AI investigation contract (`/api/investigate/now|incident|service`, `/api/ai/ask`, `/api/ai/report/{incident_id}`, `/api/ai/investigate-stream`, `/api/ai/status`, `/api/ai/doctor`) with cited evidence, explicit uncertainty, a deterministic fallback when AI is disabled, persisted AI generations by scope, optional **`monitor_seconds`** on investigate/report URLs and on `ai ask`, and **SSE streaming** for token deltas plus a final JSON payload on `/api/ai/investigate-stream`.
 - Native Ollama-backed investigation when `ai.enabled = true` and the configured local model is available.
-- Workspace intelligence: project discovery, service-to-project mapping with confidence and signals, and explicit user mappings persisted into `inferra.toml` (`/api/workspace/*`).
+- Workspace intelligence: project discovery, runtime app detection, live app resources, app-specific logs, service-to-project mapping with confidence and signals, explicit user mappings persisted into `inferra.toml`, and optional app-owned `.inferra/app.toml` manifests (`/api/workspace/*`).
 - Native Rust-hosted local web dashboard/control plane.
 - Native collectors across Windows/Linux/container/Kubernetes surfaces:
   - Windows Event Log with bookmark persistence.
@@ -196,7 +196,7 @@ Archived Python reference code lives under `deprecated/` and is not part of the 
 
 Built HTML docs: `python -m pip install -e ".[docs]"` then `mkdocs build` (see `mkdocs.yml`).
 
-**Licensing:** the project is dual-licensed under MIT and Apache-2.0; see the `LICENSE` pointer file plus `LICENSE-MIT` and `LICENSE-APACHE` in the repository root (matching `license` in `src/Cargo.toml`).
+**Licensing:** the project is licensed under Apache-2.0; see the root `LICENSE` file (matching `license` in `src/Cargo.toml`).
 
 ## Development
 

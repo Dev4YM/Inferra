@@ -805,19 +805,140 @@ export type InvestigationResponse = {
   focus?: string;
   question?: string;
   report?: boolean;
+  cached?: boolean;
+  ai_generation?: {
+    generation_id: string;
+    scope_key: string;
+    focus: string;
+    mode: string;
+    question: string;
+    bundle_hash: string;
+    used_ai: boolean;
+    created_at: string;
+  };
+};
+
+export type AiGeneration = {
+  generation_id: string;
+  scope_key: string;
+  focus: string;
+  mode: string;
+  question: string;
+  response: InvestigationResponse;
+  bundle_hash: string;
+  used_ai: boolean;
+  provider?: Record<string, unknown> | null;
+  created_at: string;
+};
+
+export type AiGenerationsResponse = {
+  generations: AiGeneration[];
+  count: number;
 };
 
 export type WorkspaceMappingSignal = { name: string; confidence: number; detail: string };
 
+export type WorkspaceLogSource = {
+  kind: string;
+  label: string;
+  path?: string | null;
+  command?: string | null;
+  stream?: string | null;
+  exists?: boolean | null;
+  readable?: boolean | null;
+  source: string;
+  confidence: number;
+};
+
+export type WorkspaceAppEndpoint = {
+  url: string;
+  host?: string | null;
+  port?: number | null;
+  protocol: string;
+  source: string;
+  confidence: number;
+};
+
+export type WorkspaceAppLocation = {
+  project_path?: string | null;
+  cwd?: string | null;
+  script?: string | null;
+  executable?: string | null;
+  installation_dir?: string | null;
+};
+
+export type WorkspaceAppResources = {
+  cpu_percent?: number | null;
+  memory_mb?: number | null;
+  virtual_memory_mb?: number | null;
+  uptime_seconds?: number | null;
+  process_status?: string | null;
+};
+
+export type WorkspaceAppResourcesResponse = {
+  app_name: string;
+  pid?: number | null;
+  sampled_at: string;
+  live: boolean;
+  resources?: WorkspaceAppResources | null;
+};
+
+export type WorkspaceAppRawLog = {
+  source?: {
+    kind?: string | null;
+    label?: string | null;
+    path?: string | null;
+    source?: string | null;
+    confidence?: number | null;
+  } | null;
+  line: string;
+  line_number_from_tail?: number | null;
+  sampled_at?: string | null;
+};
+
+export type WorkspaceAppLogsResponse = {
+  app_name: string;
+  events: EventRow[];
+  raw_logs: WorkspaceAppRawLog[];
+  log_sources: WorkspaceLogSource[];
+  sampled_at: string;
+};
+
+export type WorkspaceAppState = {
+  health: string;
+  status?: string | null;
+  reason?: string | null;
+  started_at?: string | null;
+  restarts?: number | null;
+  observed_by: string;
+};
+
+export type WorkspaceAppCapability = {
+  key: string;
+  supported: boolean;
+  source: string;
+  detail?: string | null;
+};
+
 export type WorkspaceRuntimeApp = {
   pid?: number | null;
   name: string;
+  display_name?: string | null;
   runtime: string;
   language?: string | null;
   process_kind?: string | null;
   framework?: string | null;
   libraries?: string[];
   log_hints?: string[];
+  log_sources?: WorkspaceLogSource[];
+  app_url?: string | null;
+  endpoints?: WorkspaceAppEndpoint[];
+  health_endpoint?: WorkspaceAppEndpoint | null;
+  app_location?: WorkspaceAppLocation | null;
+  resources?: WorkspaceAppResources | null;
+  app_state?: WorkspaceAppState | null;
+  context_capabilities?: WorkspaceAppCapability[];
+  app_structure?: Array<{ path: string; kind: string; role: string }>;
   manager?: string | null;
   status?: string | null;
   cwd?: string | null;
