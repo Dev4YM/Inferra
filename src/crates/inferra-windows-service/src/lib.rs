@@ -390,6 +390,79 @@ mod tests {
         assert_eq!(parse_sc_field(text, "STATE").as_deref(), Some("4  RUNNING"));
         assert!(parse_sc_field(text, "ATE").is_none());
     }
+
+    #[test]
+    fn service_startup_from_cli_accepts_aliases() {
+        assert!(ServiceStartup::from_cli("auto").is_ok());
+        assert!(ServiceStartup::from_cli("automatic").is_ok());
+        assert!(ServiceStartup::from_cli("manual").is_ok());
+        assert!(ServiceStartup::from_cli("demand").is_ok());
+        assert!(ServiceStartup::from_cli("disabled").is_ok());
+        assert!(ServiceStartup::from_cli("bogus").is_err());
+    }
+
+    #[test]
+    fn service_startup_as_sc_value_matches_expectations() {
+        assert_eq!(ServiceStartup::Auto.as_sc_value(), "auto");
+        assert_eq!(ServiceStartup::Manual.as_sc_value(), "demand");
+        assert_eq!(ServiceStartup::Disabled.as_sc_value(), "disabled");
+    }
+
+    #[test]
+    fn quote_windows_executable_escapes_embedded_quotes() {
+        assert_eq!(
+            quote_windows_executable(r"C:\Apps\inferra.exe"),
+            r#""C:\Apps\inferra.exe""#
+        );
+        assert_eq!(
+            quote_windows_executable(r#"C:\Apps"inf"exe"#),
+            r#""C:\Apps\"inf\"exe""#
+        );
+    }
+
+    #[test]
+    fn quote_windows_arg_quotes_only_when_spaces() {
+        assert_eq!(quote_windows_arg("simple"), "simple");
+        assert_eq!(quote_windows_arg("has space"), r#""has space""#);
+    }
+
+    #[test]
+    fn is_missing_service_error_detects_known_patterns() {
+        assert!(is_missing_service_error(
+            "The specified service does not exist."
+        ));
+        assert!(is_missing_service_error("error 1060"));
+        assert!(!is_missing_service_error("access denied"));
+    }
+
+    #[test]
+    fn is_non_running_service_error_detects_known_patterns() {
+        assert!(is_non_running_service_error(
+            "The service has not been started."
+        ));
+        assert!(is_non_running_service_error("error 1062"));
+        assert!(!is_non_running_service_error("already running"));
+    }
+
+    #[test]
+    fn parse_state_value_extracts_text_after_numeric_code() {
+        assert_eq!(
+            parse_state_value("4  RUNNING".into()).as_deref(),
+            Some("running")
+        );
+        assert_eq!(
+            parse_state_value("RUNNING".into()).as_deref(),
+            Some("running")
+        );
+    }
+
+    #[test]
+    fn service_log_path_uses_programdata() {
+        let path = service_log_path();
+        assert!(path.to_string_lossy().contains("Inferra"));
+        assert!(path.to_string_lossy().contains("logs"));
+        assert!(path.to_string_lossy().contains("serve.log"));
+    }
 }
 
 #[cfg(windows)]

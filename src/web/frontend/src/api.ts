@@ -634,7 +634,15 @@ export type DashboardPayload = {
 export type RuntimeContext = {
   hostname?: string;
   containers?: { name: string; image: string; state: string }[];
-  processes?: { pid: number; name: string; cpu_percent: number; memory_mb: number }[];
+  processes?: {
+    pid: number;
+    name: string;
+    cpu_percent: number;
+    cpu_raw_percent?: number | null;
+    cpu_percent_scope?: string | null;
+    cpu_logical_processors?: number | null;
+    memory_mb: number;
+  }[];
 };
 
 export type WorkspaceProject = { path: string; kind: string; marker: string };
@@ -659,6 +667,9 @@ export type CollectorRow = {
   dropped_events?: number;
   queue_depth?: number;
   last_error?: string | null;
+  last_error_at?: string | null;
+  error_hint?: string | null;
+  log_query?: string | null;
   lag_seconds?: number;
 };
 
@@ -869,6 +880,9 @@ export type WorkspaceAppLocation = {
 
 export type WorkspaceAppResources = {
   cpu_percent?: number | null;
+  cpu_raw_percent?: number | null;
+  cpu_percent_scope?: string | null;
+  cpu_logical_processors?: number | null;
   memory_mb?: number | null;
   virtual_memory_mb?: number | null;
   uptime_seconds?: number | null;
@@ -888,6 +902,8 @@ export type WorkspaceAppRawLog = {
     kind?: string | null;
     label?: string | null;
     path?: string | null;
+    command?: string | null;
+    stream?: string | null;
     source?: string | null;
     confidence?: number | null;
   } | null;

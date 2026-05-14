@@ -114,6 +114,14 @@ pub fn resolve_ui_dist(override_path: Option<PathBuf>) -> Result<PathBuf> {
     if let Some(path) = override_path {
         return Ok(path);
     }
+    for key in ["INFERRA_UI_DIST", "INFERRA_UI_PATH"] {
+        if let Ok(path) = std::env::var(key) {
+            let trimmed = path.trim();
+            if !trimmed.is_empty() {
+                return Ok(PathBuf::from(trimmed));
+            }
+        }
+    }
     if let Ok(exe) = std::env::current_exe() {
         for candidate in ui_dist_candidates_from_executable(&exe) {
             if candidate.exists() {
@@ -121,8 +129,14 @@ pub fn resolve_ui_dist(override_path: Option<PathBuf>) -> Result<PathBuf> {
             }
         }
     }
-    let repo_root = resolve_repo_root_from_manifest()?;
-    Ok(repo_root.join("src").join("web").join("ui_dist"))
+    for candidate in ui_dist_candidates_from_working_dir()? {
+        if candidate.exists() {
+            return Ok(candidate);
+        }
+    }
+    anyhow::bail!(
+        "UI bundle not found. Install runtime-assets/ui_dist beside inferra, set INFERRA_UI_DIST, or pass --ui-dist."
+    )
 }
 
 pub fn ui_dist_candidates_from_executable(exe: &Path) -> Vec<PathBuf> {
@@ -136,13 +150,13 @@ pub fn ui_dist_candidates_from_executable(exe: &Path) -> Vec<PathBuf> {
     candidates
 }
 
-fn resolve_repo_root_from_manifest() -> Result<PathBuf> {
-    let manifest_dir = PathBuf::from(env!("CARGO_MANIFEST_DIR"));
-    manifest_dir
-        .ancestors()
-        .find(|path| path.join("pyproject.toml").exists() && path.join("README.md").exists())
-        .map(Path::to_path_buf)
-        .context("resolve repo root from manifest dir")
+fn ui_dist_candidates_from_working_dir() -> Result<Vec<PathBuf>> {
+    let cwd = std::env::current_dir().context("resolve current directory")?;
+    Ok(vec![
+        cwd.join("runtime-assets").join("ui_dist"),
+        cwd.join("src").join("web").join("ui_dist"),
+        cwd.join("web").join("ui_dist"),
+    ])
 }
 
 #[cfg(test)]

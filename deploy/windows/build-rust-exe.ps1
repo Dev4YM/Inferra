@@ -67,18 +67,17 @@ catch {
     Write-Warning "Could not overwrite $stableExe because it is locked. Native artifact remains available at $publishedExe"
 }
 
-if ($CopyUiBundle -and (Test-Path $uiDist)) {
-    $uiTarget = Join-Path $runtimeAssets "ui_dist"
-    New-Item -ItemType Directory -Force -Path $uiTarget | Out-Null
-    Copy-Item (Join-Path $uiDist "*") $uiTarget -Recurse -Force
+if (-not (Test-Path $uiDist)) {
+    throw "UI bundle not found at $uiDist. Run npm run build in src\web\frontend before building the runtime package."
 }
 
+$uiTarget = Join-Path $runtimeAssets "ui_dist"
+New-Item -ItemType Directory -Force -Path $uiTarget | Out-Null
+Remove-Item (Join-Path $uiTarget "*") -Recurse -Force -ErrorAction SilentlyContinue
+Copy-Item (Join-Path $uiDist "*") $uiTarget -Recurse -Force
+
 if ($CopyPythonWorker) {
-    $srcTarget = Join-Path $runtimeAssets "src"
-    New-Item -ItemType Directory -Force -Path $srcTarget | Out-Null
-    Remove-Item (Join-Path $srcTarget "*") -Recurse -Force -ErrorAction SilentlyContinue
-    Write-Warning "Legacy Python runtime assets now live under deprecated/ and are not bundled by the Rust build."
-    Copy-Item (Join-Path $repoRoot "src\*") $srcTarget -Recurse -Force
+    Write-Warning "CopyPythonWorker is ignored. The Rust build is self-contained and does not bundle the source tree or legacy Python runtime."
 }
 
 Write-Host "Primary artifact: $publishedExe"

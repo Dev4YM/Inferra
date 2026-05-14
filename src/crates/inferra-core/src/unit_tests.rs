@@ -6,6 +6,7 @@ use inferra_storage::{
     StoredFeedback, StoredHypothesis, StoredInferenceGraphSnapshot,
 };
 use std::fs;
+use std::sync::{Mutex, OnceLock};
 use std::time::{SystemTime, UNIX_EPOCH};
 
 fn temp_dir(name: &str) -> std::path::PathBuf {
@@ -14,6 +15,18 @@ fn temp_dir(name: &str) -> std::path::PathBuf {
         .expect("time after epoch")
         .as_nanos();
     std::env::temp_dir().join(format!("inferra-core-{name}-{unique}"))
+}
+
+fn env_lock() -> &'static Mutex<()> {
+    static LOCK: OnceLock<Mutex<()>> = OnceLock::new();
+    LOCK.get_or_init(|| Mutex::new(()))
+}
+
+#[test]
+fn process_cpu_is_normalized_to_total_host_share() {
+    assert_eq!(normalize_process_cpu_to_host_percent(100.0, 8), 12.5);
+    assert_eq!(normalize_process_cpu_to_host_percent(400.0, 8), 50.0);
+    assert_eq!(normalize_process_cpu_to_host_percent(1200.0, 8), 100.0);
 }
 
 fn event(
@@ -255,6 +268,155 @@ kind = "file"
         .signals
         .iter()
         .any(|signal| signal.name == "inferra_manifest"));
+
+    let _ = fs::remove_dir_all(&root);
+}
+
+#[test]
+fn project_log_discovery_finds_nested_and_rotated_logs() {
+    let root = temp_dir("workspace-log-discovery");
+    let app_dir = root.join("api");
+    fs::create_dir_all(app_dir.join("var/runtime/deep")).expect("create nested logs");
+    fs::create_dir_all(app_dir.join(".next/diagnostics")).expect("create next diagnostics");
+    fs::write(
+        app_dir.join("package.json"),
+        r#"{"dependencies":{"express":"latest"}}"#,
+    )
+    .expect("write package");
+    fs::write(app_dir.join("var/runtime/deep/server.log.1"), "old\n").expect("write rotated log");
+    fs::write(app_dir.join("events-log.jsonl"), "{}\n").expect("write jsonl log");
+    fs::write(app_dir.join(".next/trace"), "{}\n").expect("write next trace");
+
+    let logs = discover_project_log_files(
+        &display_path(&app_dir),
+        "nodejs",
+        Some("express"),
+        &[],
+        None,
+    );
+
+    assert!(logs.iter().any(|path| path.contains("server.log.1")));
+    assert!(logs.iter().any(|path| path.contains("events-log.jsonl")));
+    assert!(logs
+        .iter()
+        .any(|path| path.contains(".next") && path.ends_with("trace")));
+
+    let _ = fs::remove_dir_all(&root);
+}
+
+#[test]
+fn npm_cache_logs_are_discovered_for_node_apps() {
+    let _guard = env_lock()
+        .lock()
+        .unwrap_or_else(|poisoned| poisoned.into_inner());
+    let root = temp_dir("workspace-npm-cache-logs");
+    let cache = root.join("npm-cache");
+    fs::create_dir_all(cache.join("_logs")).expect("create npm logs");
+    fs::write(
+        cache.join("_logs/2026-05-14T08_39_16_795Z-debug-0.log"),
+        "npm start\n",
+    )
+    .expect("write npm debug log");
+
+    let old_cache = std::env::var_os("NPM_CONFIG_CACHE");
+    let old_local = std::env::var_os("LOCALAPPDATA");
+    let old_appdata = std::env::var_os("APPDATA");
+    unsafe {
+        std::env::set_var("NPM_CONFIG_CACHE", &cache);
+        std::env::remove_var("LOCALAPPDATA");
+        std::env::remove_var("APPDATA");
+    }
+
+    let sources = workspace_log_sources(
+        None,
+        "nodejs",
+        Some("nextjs"),
+        &[],
+        Some(&display_path(&root)),
+        Some(&display_path(&root)),
+        None,
+        None,
+    );
+
+    unsafe {
+        if let Some(value) = old_cache {
+            std::env::set_var("NPM_CONFIG_CACHE", value);
+        } else {
+            std::env::remove_var("NPM_CONFIG_CACHE");
+        }
+        if let Some(value) = old_local {
+            std::env::set_var("LOCALAPPDATA", value);
+        } else {
+            std::env::remove_var("LOCALAPPDATA");
+        }
+        if let Some(value) = old_appdata {
+            std::env::set_var("APPDATA", value);
+        } else {
+            std::env::remove_var("APPDATA");
+        }
+    }
+
+    assert!(sources.iter().any(|source| {
+        source.source == "npm_cache"
+            && source
+                .path
+                .as_deref()
+                .is_some_and(|path| path.contains("-debug-0.log"))
+    }));
+
+    let _ = fs::remove_dir_all(&root);
+}
+
+#[test]
+fn workspace_log_sources_include_pm2_home_files() {
+    let _guard = env_lock()
+        .lock()
+        .unwrap_or_else(|poisoned| poisoned.into_inner());
+    let root = temp_dir("workspace-pm2-home");
+    let home = root.join("home");
+    let project = root.join("apps/api");
+    fs::create_dir_all(home.join(".pm2/logs")).expect("create pm2 logs");
+    fs::create_dir_all(&project).expect("create project");
+    fs::write(home.join(".pm2/logs/api-out.log"), "online\n").expect("write pm2 out");
+
+    let old_home = std::env::var_os("HOME");
+    let old_userprofile = std::env::var_os("USERPROFILE");
+    unsafe {
+        std::env::set_var("HOME", &home);
+        std::env::set_var("USERPROFILE", &home);
+    }
+
+    let sources = workspace_log_sources(
+        Some("pm2"),
+        "nodejs",
+        Some("express"),
+        &[],
+        Some(&display_path(&project)),
+        Some(&display_path(&project)),
+        Some(&display_path(&project.join("server.js"))),
+        None,
+    );
+
+    unsafe {
+        if let Some(value) = old_home {
+            std::env::set_var("HOME", value);
+        } else {
+            std::env::remove_var("HOME");
+        }
+        if let Some(value) = old_userprofile {
+            std::env::set_var("USERPROFILE", value);
+        } else {
+            std::env::remove_var("USERPROFILE");
+        }
+    }
+
+    assert!(sources.iter().any(|source| {
+        source.source == "pm2_home"
+            && source
+                .path
+                .as_deref()
+                .is_some_and(|path| path.contains("api-out.log"))
+    }));
 
     let _ = fs::remove_dir_all(&root);
 }

@@ -291,14 +291,51 @@ pub async fn run_collector_command(ctx: &AppContext, action: CollectorAction) ->
                             .and_then(JsonValue::as_str)
                             .unwrap_or("-")
                             .to_string(),
+                        collector
+                            .get("error_count")
+                            .and_then(JsonValue::as_u64)
+                            .unwrap_or(0)
+                            .to_string(),
+                        collector
+                            .get("last_error")
+                            .and_then(JsonValue::as_str)
+                            .map(shorten_cli_cell)
+                            .unwrap_or_else(|| "-".to_string()),
                     ]
                 })
                 .collect::<Vec<_>>();
-            ctx.ui
-                .table(&["Collector", "Status", "Running", "Source"], rows);
+            ctx.ui.table(
+                &[
+                    "Collector",
+                    "Status",
+                    "Running",
+                    "Source",
+                    "Errors",
+                    "Last error",
+                ],
+                rows,
+            );
             if payload.get("fallback") == Some(&JsonValue::Bool(true)) {
                 ctx.ui
                     .warning("The runtime API was not reachable, so this view used static config.");
+            } else {
+                let problem_collectors = payload["collectors"]
+                    .as_array()
+                    .into_iter()
+                    .flatten()
+                    .filter(|collector| {
+                        collector
+                            .get("error_count")
+                            .and_then(JsonValue::as_u64)
+                            .unwrap_or(0)
+                            > 0
+                    })
+                    .collect::<Vec<_>>();
+                if !problem_collectors.is_empty() {
+                    ctx.ui.warning(
+                        "Collector diagnostics include last_error, last_error_at, error_hint, and log_query in `inferra collectors status --json`.",
+                    );
+                }
             }
             Ok(())
         }
@@ -329,6 +366,16 @@ pub async fn run_collector_command(ctx: &AppContext, action: CollectorAction) ->
             Ok(())
         }
     }
+}
+
+fn shorten_cli_cell(value: &str) -> String {
+    const MAX_LEN: usize = 96;
+    if value.chars().count() <= MAX_LEN {
+        return value.to_string();
+    }
+    let mut shortened = value.chars().take(MAX_LEN - 3).collect::<String>();
+    shortened.push_str("...");
+    shortened
 }
 
 pub fn run_config_command(ctx: &AppContext, action: ConfigAction) -> Result<()> {

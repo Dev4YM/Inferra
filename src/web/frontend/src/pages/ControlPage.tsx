@@ -1,4 +1,4 @@
-import { DatabaseZap, Play, RefreshCcw, Square } from "lucide-react";
+import { Copy, DatabaseZap, Play, RefreshCcw, Square } from "lucide-react";
 import { useCallback } from "react";
 import { toast } from "sonner";
 
@@ -25,6 +25,10 @@ export function ControlPage({ mode }: { mode: Mode }) {
   const scannerRun = useApiMutation(async () => postJson("/api/scanner/run", {}));
   const aiMetric = ai.data?.enabled ? (ai.data.available ? "ready" : "degraded") : "disabled";
   const aiMetricNote = ai.data?.enabled ? (ai.data?.resolved_model ?? ai.data?.model ?? "No model") : "AI is disabled in config";
+  const collectorRows = collectors.data?.collectors ?? [];
+  const problemCollectors = collectorRows.filter((collector) => (collector.error_count ?? 0) > 0 || Boolean(collector.last_error));
+  const activeProblemCollectors = problemCollectors.filter((collector) => collector.status === "error");
+  const collectorLogRows = collectorLogs.data?.logs ?? [];
 
   const run = useCallback(
     async (verb: "start" | "stop") => {
@@ -39,6 +43,16 @@ export function ControlPage({ mode }: { mode: Mode }) {
     },
     [action, collectors],
   );
+
+  const copyCollectorReport = useCallback(async () => {
+    const report = buildCollectorReport(collectorRows, collectorLogRows, collectors.data?.queue_depth ?? 0);
+    try {
+      await navigator.clipboard.writeText(report);
+      toast.success("Collector report copied");
+    } catch (error) {
+      toast.error("Could not copy collector report", { description: error instanceof Error ? error.message : String(error) });
+    }
+  }, [collectorRows, collectorLogRows, collectors.data?.queue_depth]);
 
   if ((collectors.isLoading && !collectors.data) || (ai.isLoading && !ai.data) || (doctor.isLoading && !doctor.data)) {
     return (
@@ -81,6 +95,7 @@ export function ControlPage({ mode }: { mode: Mode }) {
 
       <div className="dashboard-grid">
         <Metric title="Collectors" value={String(collectors.data?.collectors.length ?? 0)} note={`queue depth ${collectors.data?.queue_depth ?? 0}`} />
+        <Metric title="Collector errors" value={String(activeProblemCollectors.reduce((sum, row) => sum + (row.error_count ?? 0), 0))} note={`${problemCollectors.length} collectors have error history`} />
         <Metric title="AI provider" value={aiMetric} note={aiMetricNote} />
       </div>
 
@@ -99,17 +114,35 @@ export function ControlPage({ mode }: { mode: Mode }) {
                 <Square className="size-4" />
                 Stop
               </Button>
+              <Button variant="outline" onClick={() => void copyCollectorReport()} disabled={!collectorRows.length}>
+                <Copy className="size-4" />
+                Copy collector report
+              </Button>
             </div>
+            {problemCollectors.length ? (
+              <Alert variant={activeProblemCollectors.length ? "warning" : "default"}>
+                <div className="min-w-0">
+                  <AlertTitle>
+                    {activeProblemCollectors.length ? "Collector errors are active" : "Collector error history"}
+                  </AlertTitle>
+                  <AlertDescription>
+                    {activeProblemCollectors.length
+                      ? "System health is degraded while collectors remain in error state. Copy the report to share status, last errors, hints, and log extraction routes."
+                      : "Collectors have recovered, so health should not stay degraded. The report still includes the last errors for support context."}
+                  </AlertDescription>
+                </div>
+              </Alert>
+            ) : null}
             <div className="space-y-3">
-              {(collectors.data?.collectors ?? []).map((collector) => (
+              {collectorRows.map((collector) => (
                 <div key={collector.collector_id} className="rounded-2xl border border-border/60 bg-background/30 p-4">
                   <div className="flex items-center justify-between gap-3">
                     <div>
                       <p className="font-medium">{collector.collector_id}</p>
                       <p className="text-sm text-muted-foreground">{formatDisplayValue(collector.source_type ?? "unknown source")}</p>
                     </div>
-                    <Badge variant={collector.is_running ? "success" : "secondary"}>
-                      {collector.is_running ? "Running" : formatDisplayValue(collector.status ?? "idle")}
+                    <Badge variant={collectorBadgeVariant(collector)}>
+                      {formatDisplayValue(collector.status ?? (collector.is_running ? "running" : "idle"))}
                     </Badge>
                   </div>
                   <div className="mt-3 grid gap-2 text-sm text-muted-foreground md:grid-cols-2">
@@ -119,12 +152,22 @@ export function ControlPage({ mode }: { mode: Mode }) {
                     <p>Lag: {collector.lag_seconds ?? 0}s</p>
                     <p>Last event: {collector.last_event_at ?? "never"}</p>
                     <p>EPS: {collector.events_per_second?.toFixed?.(2) ?? collector.events_per_second ?? 0}</p>
+                    <p>Last error: {collector.last_error_at ?? "none"}</p>
+                    <p>Log route: {collector.log_query ?? `/api/logs?search=${collector.collector_id}&limit=100`}</p>
                   </div>
                   {collector.last_error ? (
                     <Alert className="mt-3" variant="warning">
                       <div className="min-w-0">
                         <AlertTitle>Last collector error</AlertTitle>
                         <AlertDescription>{collector.last_error}</AlertDescription>
+                      </div>
+                    </Alert>
+                  ) : null}
+                  {collector.error_hint ? (
+                    <Alert className="mt-3" variant="default">
+                      <div className="min-w-0">
+                        <AlertTitle>Likely fix</AlertTitle>
+                        <AlertDescription>{collector.error_hint}</AlertDescription>
                       </div>
                     </Alert>
                   ) : null}
@@ -184,11 +227,21 @@ export function ControlPage({ mode }: { mode: Mode }) {
 
       <div className="grid gap-4 xl:grid-cols-[minmax(0,1.1fr)_minmax(360px,0.9fr)]">
         <Card>
-          <CardHeader>
+          <CardHeader className="flex flex-row items-center justify-between gap-3">
             <CardTitle>Collector logs</CardTitle>
+            <Button variant="outline" size="sm" onClick={() => void copyCollectorReport()} disabled={!collectorRows.length}>
+              <Copy className="size-4" />
+              Copy report
+            </Button>
           </CardHeader>
-          <CardContent>
-            <TimelineView events={collectorLogs.data?.logs ?? []} limit={10} compact />
+          <CardContent className="space-y-3">
+            {collectorLogRows.length ? (
+              <TimelineView events={collectorLogRows} limit={10} compact />
+            ) : (
+              <p className="text-sm text-muted-foreground">
+                No normalized collector log events were found. Runtime collector errors are shown on the collector rows above and included in the copied report.
+              </p>
+            )}
           </CardContent>
         </Card>
 
@@ -236,6 +289,46 @@ export function ControlPage({ mode }: { mode: Mode }) {
       </div>
     </div>
   );
+}
+
+function buildCollectorReport(collectors: CollectorRow[], logs: EventRow[], queueDepth: number) {
+  const lines = [
+    "Inferra collector diagnostic report",
+    `Generated: ${new Date().toISOString()}`,
+    `Queue depth: ${queueDepth}`,
+    "",
+    "Collectors:",
+  ];
+  for (const collector of collectors) {
+    lines.push(`- ${collector.collector_id}`);
+    lines.push(`  status: ${collector.status ?? "unknown"}`);
+    lines.push(`  running: ${String(collector.is_running ?? false)}`);
+    lines.push(`  source: ${collector.source_type ?? "unknown"}`);
+    lines.push(`  emitted: ${collector.events_emitted ?? 0}`);
+    lines.push(`  dropped: ${collector.dropped_events ?? 0}`);
+    lines.push(`  errors: ${collector.error_count ?? 0}`);
+    lines.push(`  last_event_at: ${collector.last_event_at ?? "never"}`);
+    lines.push(`  last_error_at: ${collector.last_error_at ?? "none"}`);
+    lines.push(`  log_query: ${collector.log_query ?? `/api/logs?search=${collector.collector_id}&limit=100`}`);
+    if (collector.last_error) lines.push(`  last_error: ${collector.last_error}`);
+    if (collector.error_hint) lines.push(`  likely_fix: ${collector.error_hint}`);
+  }
+  lines.push("");
+  lines.push("Recent normalized collector logs:");
+  if (logs.length) {
+    for (const log of logs.slice(0, 25)) {
+      lines.push(`- ${log.timestamp ?? ""} ${log.severity ?? ""} ${log.service_id ?? ""}: ${log.message ?? ""}`);
+    }
+  } else {
+    lines.push("- none returned by /api/logs?search=collector&limit=25");
+  }
+  return lines.join("\n");
+}
+
+function collectorBadgeVariant(collector: CollectorRow) {
+  if (collector.status === "error") return "warning" as const;
+  if (collector.status === "unavailable") return "secondary" as const;
+  return collector.is_running ? "success" as const : "secondary" as const;
 }
 
 function Metric({ title, value, note }: { title: string; value: string; note: string }) {

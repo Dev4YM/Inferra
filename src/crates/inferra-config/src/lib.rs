@@ -68,14 +68,65 @@ fn resolve_config_path(config_override: Option<PathBuf>) -> Result<PathBuf> {
             }
         }
     }
+
+    if let Ok(exe) = std::env::current_exe() {
+        let candidates = config_path_candidates_from_executable(&exe);
+        if executable_looks_installed(&exe) {
+            if let Some(candidate) = candidates.first() {
+                return Ok(candidate.clone());
+            }
+        }
+        for candidate in candidates {
+            if candidate.exists() {
+                return Ok(candidate);
+            }
+        }
+    }
+
     if cfg!(windows) {
-        let pd = std::env::var("PROGRAMDATA").unwrap_or_else(|_| "C:\\ProgramData".into());
-        let candidate = PathBuf::from(pd).join("Inferra").join("inferra.toml");
+        let candidate = windows_programdata_config_path();
         if candidate.exists() {
             return Ok(candidate);
         }
     }
-    Ok(PathBuf::from("inferra.toml"))
+    let cwd_config = PathBuf::from("inferra.toml");
+    if cwd_config.exists() {
+        return Ok(cwd_config);
+    }
+    if cfg!(windows) {
+        return Ok(windows_programdata_config_path());
+    }
+    Ok(cwd_config)
+}
+
+pub fn config_path_candidates_from_executable(exe: &Path) -> Vec<PathBuf> {
+    let mut candidates = Vec::new();
+    if let Some(parent) = exe.parent() {
+        candidates.push(parent.join("inferra.toml"));
+        candidates.push(parent.join("config").join("inferra.toml"));
+        if let Some(grandparent) = parent.parent() {
+            candidates.push(grandparent.join("inferra.toml"));
+            candidates.push(grandparent.join("etc").join("inferra.toml"));
+            candidates.push(grandparent.join("etc").join("inferra").join("inferra.toml"));
+        }
+    }
+    candidates
+}
+
+fn executable_looks_installed(exe: &Path) -> bool {
+    let Some(parent) = exe.parent() else {
+        return false;
+    };
+    parent.join("runtime-assets").exists()
+        || parent
+            .parent()
+            .map(|grandparent| grandparent.join("runtime-assets").exists())
+            .unwrap_or(false)
+}
+
+fn windows_programdata_config_path() -> PathBuf {
+    let pd = std::env::var("PROGRAMDATA").unwrap_or_else(|_| "C:\\ProgramData".into());
+    PathBuf::from(pd).join("Inferra").join("inferra.toml")
 }
 
 fn extract_data_dir(merged: &TomlValue) -> Result<PathBuf> {
@@ -289,8 +340,8 @@ pub fn experience_from_config(config: &TomlValue) -> ExperiencePayload {
 #[cfg(test)]
 mod tests {
     use super::{
-        apply_config_put, load_merged_config, resolve_config_path, server_listen, write_config,
-        TomlValue,
+        apply_config_put, config_path_candidates_from_executable, load_merged_config,
+        resolve_config_path, server_listen, write_config, TomlValue,
     };
     use serde_json::json;
     use std::path::PathBuf;
@@ -342,6 +393,20 @@ mod tests {
             std::env::remove_var("INFERRA_CONFIG_PATH");
         }
         assert_eq!(resolved, env_path);
+    }
+
+    #[test]
+    fn executable_config_candidates_cover_installed_layouts() {
+        let candidates = config_path_candidates_from_executable(&PathBuf::from(
+            r"C:\Program Files\Inferra\bin\inferra.exe",
+        ));
+        assert_eq!(
+            candidates[0],
+            PathBuf::from(r"C:\Program Files\Inferra\bin\inferra.toml")
+        );
+        assert!(candidates.contains(&PathBuf::from(
+            r"C:\Program Files\Inferra\etc\inferra\inferra.toml"
+        )));
     }
 
     #[test]

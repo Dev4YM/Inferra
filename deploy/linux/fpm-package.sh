@@ -29,7 +29,6 @@ chmod 0755 "${STAGE}/usr/bin/inferra"
 mkdir -p "${STAGE}/opt/inferra/runtime-assets"
 cp "${ROOT}/src/target/release/inferra" "${STAGE}/opt/inferra/inferra"
 chmod 0755 "${STAGE}/opt/inferra/inferra"
-cp -R "${ROOT}/src" "${STAGE}/opt/inferra/runtime-assets/src"
 cp -R "${ROOT}/src/web/ui_dist" "${STAGE}/opt/inferra/runtime-assets/ui_dist"
 
 mkdir -p "${STAGE}/lib/systemd/system"

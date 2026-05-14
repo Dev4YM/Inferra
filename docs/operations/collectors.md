@@ -41,6 +41,22 @@ inferra --config inferra.toml collectors status
 
 `inferra collectors status` prefers live runtime status. If no daemon is running, it falls back to configured collector rows from `inferra.toml`. `collectors start` and `collectors stop` call the local Rust API, so `inferra serve` must already be running (see [Troubleshooting](troubleshooting.md)).
 
+## Diagnosing collector errors
+
+The Overview health card only degrades on active collector errors. Recovered collectors can still show cumulative `error_count` history in Control, but they no longer keep system health degraded forever after a successful sample.
+
+Collectors for optional runtimes report `unavailable` instead of `error` when the host dependency is absent. For example, a Windows machine without Docker will show the Docker collector as unavailable, emit one collector diagnostic log event, and avoid degrading overall system health.
+
+Open **Control -> Collectors** to see `last_error`, `last_error_at`, `error_hint`, and the collector-specific `log_query`. Use **Copy collector report** to share a support-ready bundle of collector state plus recent normalized collector logs.
+
+CLI/API equivalents:
+
+```powershell
+inferra collectors status --json
+curl http://127.0.0.1:7433/api/collectors
+curl "http://127.0.0.1:7433/api/logs?search=collector&limit=100"
+```
+
 ## App ingest
 
 Application ingest is part of the collector surface. It can run on the main API mount (`[collectors.app].enable_main_api = true`) and optionally on a standalone listener (`enable_standalone = true`).
@@ -63,6 +79,8 @@ warn_disk_percent = 90.0
 ## Process snapshot
 
 Tracks watched processes and PID lists with CPU/memory thresholds and disk paths.
+Process `min_cpu_percent` is evaluated as a share of total host CPU. Events also include
+`cpu_raw_percent` for the runtime's single-core-equivalent process reading.
 
 ```toml
 [collectors.process]

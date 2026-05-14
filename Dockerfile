@@ -21,7 +21,6 @@ RUN mkdir -p /data && chown inferra:inferra /data
 WORKDIR /app
 COPY --from=rust-builder /build/src/target/release/inferra /app/inferra
 COPY --from=ui /build/src/web/ui_dist /app/runtime-assets/ui_dist
-COPY src /app/runtime-assets/src
 COPY deploy/docker-entrypoint.sh /app/docker-entrypoint.sh
 RUN chmod +x /app/inferra /app/docker-entrypoint.sh && ln -sf /app/inferra /usr/local/bin/inferra
 

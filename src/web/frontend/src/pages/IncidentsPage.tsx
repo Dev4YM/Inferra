@@ -9,6 +9,8 @@ import type {
   AdaptiveLearningSummaryResponse,
   AdaptiveReviewDecision,
   AdaptiveRuntimeAction,
+  AiGeneration,
+  AiGenerationsResponse,
   IncidentDetailResponse,
   IncidentRow,
   InvestigationResponse,
@@ -111,9 +113,25 @@ export function IncidentsPage({ mode }: { mode: Mode }) {
 export function IncidentDetailPage({ mode }: { mode: Mode }) {
   const { incidentId } = useParams();
   const [forceInvestigationRun, setForceInvestigationRun] = useState(0);
+  const generationScope = incidentId ? `incident:${incidentId}` : null;
+  const savedGenerations = useApiQuery<AiGenerationsResponse>(
+    generationScope ? `/api/ai/generations?scope=${encodeURIComponent(generationScope)}&limit=1` : null,
+    { deps: [generationScope], staleTime: 5_000 },
+  );
+  const savedInvestigation = savedGenerations.data?.generations?.[0]
+    ? hydrateIncidentSavedGeneration(savedGenerations.data.generations[0])
+    : null;
+  const savedLookupDone = Boolean(savedGenerations.data || savedGenerations.error);
+  const shouldRunInvestigation = Boolean(
+    incidentId && (forceInvestigationRun > 0 || (savedLookupDone && !savedInvestigation)),
+  );
   const detail = useApiQuery<IncidentDetailResponse>(incidentId ? `/api/incidents/${encodeURIComponent(incidentId)}` : null, { deps: [incidentId] });
   const investigation = useApiQuery<InvestigationResponse>(
-    incidentId ? `/api/investigate/incident/${encodeURIComponent(incidentId)}?mode=${mode}${forceInvestigationRun ? `&force=true&run=${forceInvestigationRun}` : ""}` : null,
+    shouldRunInvestigation && incidentId
+      ? `/api/investigate/incident/${encodeURIComponent(incidentId)}?mode=${mode}${
+          forceInvestigationRun ? `&force=true&run=${forceInvestigationRun}` : ""
+        }`
+      : null,
     { deps: [incidentId, mode, forceInvestigationRun] },
   );
   const adaptive = useApiQuery<AdaptiveLearningSummaryResponse>(
@@ -143,6 +161,7 @@ export function IncidentDetailPage({ mode }: { mode: Mode }) {
   const incident = detail.data.incident;
   const incidentEvents = detail.data.events;
   const investigationMissing = investigation.error?.status === 404;
+  const displayedInvestigation = investigation.data ?? savedInvestigation;
 
   const runArtifactReview = async (artifact: IncidentAdaptiveArtifact, decision: AdaptiveReviewDecision) => {
     if (!artifact.actionKind) return;
@@ -265,8 +284,8 @@ export function IncidentDetailPage({ mode }: { mode: Mode }) {
             </CardContent>
           </Card>
 
-          {investigation.data ? (
-            <InvestigationView result={investigation.data} showRaw={isAdvancedMode(mode)} onRefresh={() => setForceInvestigationRun((value) => value + 1)} />
+          {displayedInvestigation ? (
+            <InvestigationView result={displayedInvestigation} showRaw={isAdvancedMode(mode)} onRefresh={() => setForceInvestigationRun((value) => value + 1)} />
           ) : investigation.errorMessage ? (
             investigationMissing ? (
               <EmptyState
@@ -277,6 +296,10 @@ export function IncidentDetailPage({ mode }: { mode: Mode }) {
             ) : (
               <ErrorState description={`Investigation unavailable: ${investigation.errorMessage}`} onRetry={() => void investigation.reload()} />
             )
+          ) : savedGenerations.errorMessage ? (
+            <ErrorState description={`Saved investigation unavailable: ${savedGenerations.errorMessage}`} onRetry={() => void savedGenerations.reload()} />
+          ) : savedGenerations.isLoading ? (
+            <LoadingState title="Loading saved investigation" />
           ) : (
             <LoadingState title="Running investigation" description="Inferra is collecting evidence and asking the AI investigator for a structured summary." />
           )}
@@ -585,6 +608,23 @@ export function IncidentDetailPage({ mode }: { mode: Mode }) {
       </div>
     </div>
   );
+}
+
+function hydrateIncidentSavedGeneration(generation: AiGeneration): InvestigationResponse {
+  return {
+    ...generation.response,
+    cached: true,
+    ai_generation: {
+      generation_id: generation.generation_id,
+      scope_key: generation.scope_key,
+      focus: generation.focus,
+      mode: generation.mode,
+      question: generation.question,
+      bundle_hash: generation.bundle_hash,
+      used_ai: generation.used_ai,
+      created_at: generation.created_at,
+    },
+  };
 }
 
 type IncidentAdaptiveArtifact = {

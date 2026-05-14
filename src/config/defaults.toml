@@ -1,7 +1,7 @@
 [server]
 host = "127.0.0.1"
 port = 7433
-cors_origins = ["*"]
+cors_origins = ["http://127.0.0.1:7433", "http://localhost:7433"]
 auth_token_env = ""
 require_loopback = true
 expose_prometheus_metrics = false
@@ -319,15 +319,18 @@ max_events_per_incident = 10000
 max_active_incidents = 200
 max_clusters_per_incident = 20
 
-[[topology.edges]]
-source = "api-gateway"
-target = "user-service"
-type = "calls"
-
-[[topology.edges]]
-source = "user-service"
-target = "postgres"
-type = "depends_on"
+# Topology edges define service dependency relationships used by the
+# inference graph and correlation engine. Add edges that match your
+# real deployment. Example:
+#   [[topology.edges]]
+#   source = "api-gateway"
+#   target = "user-service"
+#   type = "calls"
+#
+#   [[topology.edges]]
+#   source = "user-service"
+#   target = "postgres"
+#   type = "depends_on"
 
 [logging]
 level = "INFO"

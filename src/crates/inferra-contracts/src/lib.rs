@@ -131,7 +131,15 @@ pub struct RuntimeContainer {
 pub struct RuntimeProcess {
     pub pid: u32,
     pub name: String,
+    /// Estimated percentage of total host CPU used by this process.
     pub cpu_percent: f64,
+    /// Raw process CPU reading from the runtime, usually single-core-equivalent percent.
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub cpu_raw_percent: Option<f64>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub cpu_percent_scope: Option<String>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub cpu_logical_processors: Option<usize>,
     pub memory_mb: f64,
 }
 
@@ -198,8 +206,16 @@ pub struct WorkspaceAppLocation {
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct WorkspaceAppResources {
+    /// Estimated percentage of total host CPU used by this app/process.
     #[serde(skip_serializing_if = "Option::is_none")]
     pub cpu_percent: Option<f64>,
+    /// Raw process CPU reading from the runtime, usually single-core-equivalent percent.
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub cpu_raw_percent: Option<f64>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub cpu_percent_scope: Option<String>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub cpu_logical_processors: Option<usize>,
     #[serde(skip_serializing_if = "Option::is_none")]
     pub memory_mb: Option<f64>,
     #[serde(skip_serializing_if = "Option::is_none")]
@@ -343,6 +359,12 @@ pub struct CollectorRow {
     pub dropped_events: Option<u64>,
     #[serde(skip_serializing_if = "Option::is_none")]
     pub last_error: Option<String>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub last_error_at: Option<String>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub error_hint: Option<String>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub log_query: Option<String>,
     #[serde(skip_serializing_if = "Option::is_none")]
     pub lag_seconds: Option<f64>,
 }

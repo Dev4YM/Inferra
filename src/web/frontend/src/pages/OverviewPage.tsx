@@ -3,7 +3,7 @@ import { Activity, AlertTriangle, Bot, Boxes, Cpu, FolderGit2, RefreshCcw, Serve
 import { Link } from "react-router-dom";
 
 import type { Mode } from "@/lib/experience";
-import type { OverviewResponse } from "@/api";
+import type { CollectorRow, OverviewResponse } from "@/api";
 import { Button } from "@/components/ui/button";
 import { Card, CardContent, CardHeader, CardTitle } from "@/components/ui/card";
 import { Alert, AlertDescription, AlertTitle } from "@/components/ui/alert";
@@ -18,6 +18,7 @@ import { RuntimeStatusCard, ServiceHealthBadge, riskTone } from "@/components/in
 
 export function OverviewPage({ mode }: { mode: Mode }) {
   const overview = useApiQuery<OverviewResponse>("/api/overview");
+  const collectors = useApiQuery<{ collectors: CollectorRow[]; queue_depth: number }>("/api/collectors", { staleTime: 15_000 });
   const [quickFilter, setQuickFilter] = useState<"all" | "active" | "degraded" | "ai">("all");
 
   if (overview.isLoading && !overview.data) {
@@ -52,6 +53,13 @@ export function OverviewPage({ mode }: { mode: Mode }) {
   const visibleServices = quickFilter === "degraded" ? riskyServices : services;
   const eventRate = normalizeEventRate(dashboard.event_rate);
   const severityCounts = normalizeSeverityCounts(dashboard.severity_counts);
+  const collectorRows = collectors.data?.collectors ?? [];
+  const collectorsWithErrors = collectorRows.filter((collector) => (collector.error_count ?? 0) > 0 || Boolean(collector.last_error));
+  const activeCollectorErrors = collectorsWithErrors.filter((collector) => collector.status === "error");
+  const collectorErrorCount = health.collector_errors ?? 0;
+  const collectorErrorDetail = collectorErrorCount
+    ? `${health.queue_depth ?? 0} queued events, ${collectorErrorCount} active collector errors across ${Math.max(activeCollectorErrors.length, 1)} collector${Math.max(activeCollectorErrors.length, 1) === 1 ? "" : "s"}`
+    : `${health.queue_depth ?? 0} queued events, ${collectorsWithErrors.length} collectors with error history`;
   const aiState = health.ai_enabled
     ? health.ai_available
       ? { label: "AI ready", variant: "success" as const }
@@ -78,7 +86,7 @@ export function OverviewPage({ mode }: { mode: Mode }) {
           label="System health"
           value={health.status ?? quick.risk_level}
           tone={riskTone(health.status ?? quick.risk_level)}
-          detail={`${health.queue_depth ?? 0} queued events, ${health.collector_errors ?? 0} collector errors`}
+          detail={collectorErrorDetail}
         />
         <RuntimeStatusCard
           icon={AlertTriangle}
@@ -102,6 +110,31 @@ export function OverviewPage({ mode }: { mode: Mode }) {
           detail={health.ai_reason ?? "Evidence-backed summaries and suggested checks."}
         />
       </div>
+
+      {collectorErrorCount || activeCollectorErrors.length ? (
+        <Alert variant="warning">
+          <AlertTriangle className="size-4" />
+          <div className="min-w-0 space-y-3">
+            <div>
+              <AlertTitle>Collector errors are degrading health</AlertTitle>
+              <AlertDescription>
+                {activeCollectorErrors.length ? (
+                  activeCollectorErrors.slice(0, 3).map((collector) => (
+                    <span key={collector.collector_id} className="block">
+                      {collector.collector_id}: {collector.last_error ?? collector.error_hint ?? `${collector.error_count ?? 0} errors`}
+                    </span>
+                  ))
+                ) : (
+                  <span className="block">Open collector diagnostics to load the failing collector rows and share the current report.</span>
+                )}
+              </AlertDescription>
+            </div>
+            <Button asChild variant="outline" size="sm">
+              <Link to="/control">Open collector diagnostics</Link>
+            </Button>
+          </div>
+        </Alert>
+      ) : null}
 
       <Card className="overflow-hidden">
         <CardContent className="grid gap-6 p-6 lg:grid-cols-[1.5fr_1fr]">

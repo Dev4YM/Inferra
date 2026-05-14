@@ -419,16 +419,21 @@ pub fn build_overview_with_runtime_signals(
 
     let mut sys = System::new_all();
     sys.refresh_all();
+    let logical_processors = system_logical_processors(&sys);
     let hostname = System::host_name();
     let mut processes: Vec<RuntimeProcess> = sys
         .processes()
         .values()
         .map(|p| {
             let mem = p.memory() as f64 / (1024.0 * 1024.0);
+            let raw_cpu = f64::from(p.cpu_usage());
             RuntimeProcess {
                 pid: p.pid().as_u32(),
                 name: p.name().to_string_lossy().into_owned(),
-                cpu_percent: f64::from(p.cpu_usage()),
+                cpu_percent: normalize_process_cpu_to_host_percent(raw_cpu, logical_processors),
+                cpu_raw_percent: Some(round_f64(raw_cpu, 2)),
+                cpu_percent_scope: Some("host_total".into()),
+                cpu_logical_processors: Some(logical_processors),
                 memory_mb: mem,
             }
         })
@@ -618,6 +623,7 @@ pub fn workspace_app_live_resources(
 ) -> Option<WorkspaceAppResources> {
     let mut sys = System::new_all();
     sys.refresh_all();
+    let logical_processors = system_logical_processors(&sys);
     let name = name.map(|value| value.to_ascii_lowercase());
     let process = sys.processes().values().find(|process| {
         pid.map(|pid| process.pid().as_u32() == pid)
@@ -633,8 +639,15 @@ pub fn workspace_app_live_resources(
                 })
                 .unwrap_or(false)
     })?;
+    let raw_cpu = f64::from(process.cpu_usage());
     Some(WorkspaceAppResources {
-        cpu_percent: Some(round_f64(f64::from(process.cpu_usage()), 2)),
+        cpu_percent: Some(normalize_process_cpu_to_host_percent(
+            raw_cpu,
+            logical_processors,
+        )),
+        cpu_raw_percent: Some(round_f64(raw_cpu, 2)),
+        cpu_percent_scope: Some("host_total".into()),
+        cpu_logical_processors: Some(logical_processors),
         memory_mb: Some(round_f64(process.memory() as f64 / (1024.0 * 1024.0), 2)),
         virtual_memory_mb: Some(round_f64(
             process.virtual_memory() as f64 / (1024.0 * 1024.0),
@@ -9197,7 +9210,7 @@ fn discover_workspace_runtime_apps(projects: &[WorkspaceProject]) -> Vec<Workspa
 }
 
 fn discover_pm2_runtime_apps(projects: &[WorkspaceProject]) -> Vec<WorkspaceRuntimeApp> {
-    let Some(output) = command_output_with_timeout("pm2", &["jlist"], 900) else {
+    let Some(output) = command_output_with_timeout("pm2", &["jlist"], 6_000) else {
         return Vec::new();
     };
     if !output.status.success() {
@@ -9361,7 +9374,7 @@ fn command_output_with_timeout(
     args: &[&str],
     timeout_ms: u64,
 ) -> Option<std::process::Output> {
-    let mut child = Command::new(program).args(args).spawn().ok()?;
+    let mut child = spawn_command(program, args).ok()?;
     let started = std::time::Instant::now();
     loop {
         match child.try_wait() {
@@ -9381,9 +9394,37 @@ fn command_output_with_timeout(
     }
 }
 
+fn spawn_command(program: &str, args: &[&str]) -> std::io::Result<std::process::Child> {
+    let mut last_error = None;
+    for candidate in command_candidates(program) {
+        match Command::new(&candidate)
+            .args(args)
+            .stdout(std::process::Stdio::piped())
+            .stderr(std::process::Stdio::piped())
+            .spawn()
+        {
+            Ok(child) => return Ok(child),
+            Err(error) => last_error = Some(error),
+        }
+    }
+    Err(last_error
+        .unwrap_or_else(|| std::io::Error::new(std::io::ErrorKind::NotFound, "command not found")))
+}
+
+fn command_candidates(program: &str) -> Vec<String> {
+    let mut candidates = vec![program.to_string()];
+    if cfg!(windows) && Path::new(program).extension().is_none() {
+        candidates.push(format!("{program}.cmd"));
+        candidates.push(format!("{program}.exe"));
+        candidates.push(format!("{program}.bat"));
+    }
+    candidates
+}
+
 fn discover_process_runtime_apps(projects: &[WorkspaceProject]) -> Vec<WorkspaceRuntimeApp> {
     let mut sys = System::new_all();
     sys.refresh_all();
+    let logical_processors = system_logical_processors(&sys);
     let mut apps = Vec::new();
     for process in sys.processes().values() {
         let name = process.name().to_string_lossy().into_owned();
@@ -9456,8 +9497,15 @@ fn discover_process_runtime_apps(projects: &[WorkspaceProject]) -> Vec<Workspace
             script.as_deref(),
             None,
         );
+        let raw_cpu = f64::from(process.cpu_usage());
         let resources = Some(WorkspaceAppResources {
-            cpu_percent: Some(round_f64(f64::from(process.cpu_usage()), 2)),
+            cpu_percent: Some(normalize_process_cpu_to_host_percent(
+                raw_cpu,
+                logical_processors,
+            )),
+            cpu_raw_percent: Some(round_f64(raw_cpu, 2)),
+            cpu_percent_scope: Some("host_total".into()),
+            cpu_logical_processors: Some(logical_processors),
             memory_mb: Some(round_f64(process.memory() as f64 / (1024.0 * 1024.0), 2)),
             virtual_memory_mb: Some(round_f64(
                 process.virtual_memory() as f64 / (1024.0 * 1024.0),
@@ -9793,6 +9841,41 @@ fn workspace_log_sources(
             }
         }
     }
+    if matches!(manager, Some("pm2")) {
+        for path in pm2_home_log_candidates(project_path, cwd, script) {
+            let label = if path.to_ascii_lowercase().contains("-error") {
+                "PM2 stderr file"
+            } else {
+                "PM2 stdout file"
+            };
+            push_file_log_source(&mut sources, label, &path, "pm2_home", 0.9);
+        }
+    } else if matches!(runtime, "nodejs" | "bun" | "deno")
+        || matches!(
+            framework,
+            Some("nextjs" | "nestjs" | "express" | "fastify" | "koa" | "hono")
+        )
+    {
+        for path in pm2_home_log_candidates(project_path, cwd, script) {
+            push_file_log_source(
+                &mut sources,
+                "PM2 archived app log",
+                &path,
+                "pm2_home",
+                0.62,
+            );
+        }
+    }
+    if matches!(runtime, "nodejs" | "bun" | "deno")
+        || matches!(
+            framework,
+            Some("nextjs" | "nestjs" | "express" | "fastify" | "koa" | "hono")
+        )
+    {
+        for path in npm_cache_log_candidates() {
+            push_file_log_source(&mut sources, "npm cache log", &path, "npm_cache", 0.48);
+        }
+    }
     for root in [project_path, cwd].into_iter().flatten() {
         for path in discover_project_log_files(root, runtime, framework, libraries, script) {
             push_file_log_source(&mut sources, "Project log file", &path, "project", 0.78);
@@ -9811,7 +9894,7 @@ fn workspace_log_sources(
             && left.command == right.command
             && left.stream == right.stream
     });
-    sources.truncate(16);
+    sources.truncate(32);
     sources
 }
 
@@ -9866,10 +9949,15 @@ fn discover_project_log_files(
     for rel in framework_log_candidates(runtime, framework, libraries, script) {
         collect_log_files(root.join(rel), &mut candidates);
     }
+    collect_project_wide_log_files(root, &mut candidates);
     candidates.sort();
     candidates.dedup();
-    candidates.truncate(12);
+    candidates.truncate(24);
     candidates
+}
+
+fn collect_project_wide_log_files(root: &Path, out: &mut Vec<String>) {
+    collect_log_files_inner(root.to_path_buf(), out, 0);
 }
 
 fn collect_log_files(path: PathBuf, out: &mut Vec<String>) {
@@ -9881,7 +9969,7 @@ fn collect_log_files(path: PathBuf, out: &mut Vec<String>) {
 }
 
 fn collect_log_files_inner(path: PathBuf, out: &mut Vec<String>, depth: usize) {
-    if depth > 2 || out.len() >= 40 {
+    if depth > 4 || out.len() >= 40 {
         return;
     }
     let Ok(entries) = std::fs::read_dir(path) else {
@@ -9913,10 +10001,16 @@ fn is_log_file(path: &Path) -> bool {
     }
     lower.ends_with(".log")
         || lower.ends_with(".log.json")
+        || lower.ends_with(".log.jsonl")
+        || lower.ends_with("-debug-0.log")
+        || lower.ends_with("-eresolve-report.txt")
         || lower.ends_with(".out")
         || lower.ends_with(".err")
         || lower.ends_with(".stderr")
         || lower.ends_with(".stdout")
+        || lower.contains(".log.")
+        || (lower.ends_with(".jsonl") && lower.contains("log"))
+        || (lower.ends_with(".txt") && lower.contains("log"))
         || matches!(
             lower.as_str(),
             "npm-debug.log"
@@ -9933,6 +10027,7 @@ fn is_log_file(path: &Path) -> bool {
                 | "app.log"
                 | "error.log"
                 | "access.log"
+                | "trace"
         )
 }
 
@@ -9960,6 +10055,8 @@ fn framework_log_candidates(
         }
         Some("nextjs" | "vite" | "nuxt" | "nestjs" | "express" | "fastify" | "koa" | "hono") => out
             .extend([
+                ".next/trace",
+                ".next/diagnostics/build-diagnostics.json",
                 "npm-debug.log",
                 "yarn-error.log",
                 "pnpm-debug.log",
@@ -10008,6 +10105,99 @@ fn framework_log_candidates(
         out.push("logs/celery.log");
     }
     out
+}
+
+fn pm2_home_log_candidates(
+    project_path: Option<&str>,
+    cwd: Option<&str>,
+    script: Option<&str>,
+) -> Vec<String> {
+    let Some(home) = user_home_dir() else {
+        return Vec::new();
+    };
+    let logs_dir = home.join(".pm2").join("logs");
+    let mut names = Vec::new();
+    for value in [project_path, cwd, script].into_iter().flatten() {
+        if let Some(stem) = Path::new(value)
+            .file_stem()
+            .or_else(|| Path::new(value).file_name())
+            .and_then(|name| name.to_str())
+            .map(sanitize_pm2_log_name)
+            .filter(|name| !name.is_empty())
+        {
+            names.push(stem);
+        }
+    }
+    names.sort();
+    names.dedup();
+    let mut out = Vec::new();
+    for name in names {
+        for suffix in ["out", "error", "err"] {
+            let path = logs_dir.join(format!("{name}-{suffix}.log"));
+            if path.is_file() {
+                out.push(display_path(&path));
+            }
+        }
+    }
+    out
+}
+
+fn sanitize_pm2_log_name(value: &str) -> String {
+    value
+        .chars()
+        .map(|ch| {
+            if ch.is_ascii_alphanumeric() || ch == '-' || ch == '_' {
+                ch.to_ascii_lowercase()
+            } else {
+                '-'
+            }
+        })
+        .collect::<String>()
+        .trim_matches('-')
+        .to_string()
+}
+
+fn user_home_dir() -> Option<PathBuf> {
+    std::env::var_os("USERPROFILE")
+        .or_else(|| std::env::var_os("HOME"))
+        .map(PathBuf::from)
+}
+
+fn npm_cache_log_candidates() -> Vec<String> {
+    let mut roots = Vec::new();
+    if let Some(value) = std::env::var_os("NPM_CONFIG_CACHE") {
+        roots.push(PathBuf::from(value));
+    }
+    if let Some(value) = std::env::var_os("LOCALAPPDATA") {
+        roots.push(PathBuf::from(value).join("npm-cache"));
+    }
+    if let Some(value) = std::env::var_os("APPDATA") {
+        roots.push(PathBuf::from(value).join("npm-cache"));
+    }
+    if let Some(home) = user_home_dir() {
+        roots.push(home.join(".npm"));
+    }
+    roots.sort();
+    roots.dedup();
+    let mut files = Vec::new();
+    for root in roots {
+        let log_dir = root.join("_logs");
+        let Ok(entries) = std::fs::read_dir(log_dir) else {
+            continue;
+        };
+        for entry in entries.flatten() {
+            let path = entry.path();
+            if path.is_file() && is_log_file(&path) {
+                let modified = entry
+                    .metadata()
+                    .and_then(|meta| meta.modified())
+                    .unwrap_or(std::time::SystemTime::UNIX_EPOCH);
+                files.push((modified, display_path(&path)));
+            }
+        }
+    }
+    files.sort_by(|left, right| right.0.cmp(&left.0).then_with(|| left.1.cmp(&right.1)));
+    files.into_iter().map(|(_, path)| path).take(8).collect()
 }
 
 fn workspace_app_endpoints(
@@ -10828,10 +11018,13 @@ fn extend_unique(target: &mut Vec<String>, items: Vec<String>) {
 
 fn pm2_resources(env: &serde_json::Value) -> Option<WorkspaceAppResources> {
     let monit = env.get("monit").unwrap_or(&serde_json::Value::Null);
-    let cpu_percent = monit
+    let logical_processors = host_logical_processors();
+    let raw_cpu_percent = monit
         .get("cpu")
         .and_then(serde_json::Value::as_f64)
         .map(|v| round_f64(v, 2));
+    let cpu_percent =
+        raw_cpu_percent.map(|v| normalize_process_cpu_to_host_percent(v, logical_processors));
     let memory_mb = monit
         .get("memory")
         .and_then(serde_json::Value::as_f64)
@@ -10841,6 +11034,9 @@ fn pm2_resources(env: &serde_json::Value) -> Option<WorkspaceAppResources> {
     }
     Some(WorkspaceAppResources {
         cpu_percent,
+        cpu_raw_percent: raw_cpu_percent,
+        cpu_percent_scope: cpu_percent.map(|_| "host_total".into()),
+        cpu_logical_processors: cpu_percent.map(|_| logical_processors),
         memory_mb,
         virtual_memory_mb: None,
         uptime_seconds: None,
@@ -10923,7 +11119,7 @@ fn workspace_app_capabilities(
                 value
                     .memory_mb
                     .map(|mb| format!("memory {mb:.1} MB"))
-                    .or_else(|| value.cpu_percent.map(|cpu| format!("cpu {cpu:.1}%")))
+                    .or_else(|| value.cpu_percent.map(|cpu| format!("host cpu {cpu:.1}%")))
             }),
         },
         WorkspaceAppCapability {
@@ -10938,6 +11134,22 @@ fn workspace_app_capabilities(
 fn round_f64(value: f64, decimals: u32) -> f64 {
     let factor = 10_f64.powi(decimals as i32);
     (value * factor).round() / factor
+}
+
+fn host_logical_processors() -> usize {
+    std::thread::available_parallelism()
+        .map(|count| count.get())
+        .unwrap_or(1)
+        .max(1)
+}
+
+fn system_logical_processors(sys: &System) -> usize {
+    sys.cpus().len().max(host_logical_processors()).max(1)
+}
+
+fn normalize_process_cpu_to_host_percent(raw_percent: f64, logical_processors: usize) -> f64 {
+    let processors = logical_processors.max(1) as f64;
+    round_f64((raw_percent / processors).clamp(0.0, 100.0), 2)
 }
 
 fn classify_runtime(name: &str, command: &str, script: Option<&str>) -> String {

@@ -4,6 +4,8 @@ import { Link, useParams } from "react-router-dom";
 
 import type {
   AnomalyStatus,
+  AiGeneration,
+  AiGenerationsResponse,
   InvestigationResponse,
   ServiceDetailResponse,
   ServiceRow,
@@ -147,9 +149,25 @@ export function SystemsPage({ mode }: { mode: Mode }) {
 export function ServiceDetailPage({ mode }: { mode: Mode }) {
   const { serviceId } = useParams();
   const [forceInvestigationRun, setForceInvestigationRun] = useState(0);
+  const generationScope = serviceId ? `service:${serviceId}` : null;
+  const savedGenerations = useApiQuery<AiGenerationsResponse>(
+    generationScope ? `/api/ai/generations?scope=${encodeURIComponent(generationScope)}&limit=1` : null,
+    { deps: [generationScope], staleTime: 5_000 },
+  );
+  const savedInvestigation = savedGenerations.data?.generations?.[0]
+    ? hydrateServiceSavedGeneration(savedGenerations.data.generations[0])
+    : null;
+  const savedLookupDone = Boolean(savedGenerations.data || savedGenerations.error);
+  const shouldRunInvestigation = Boolean(
+    serviceId && (forceInvestigationRun > 0 || (savedLookupDone && !savedInvestigation)),
+  );
   const detail = useApiQuery<ServiceDetailResponse>(serviceId ? `/api/services/${encodeURIComponent(serviceId)}` : null, { deps: [serviceId] });
   const investigation = useApiQuery<InvestigationResponse>(
-    serviceId ? `/api/investigate/service/${encodeURIComponent(serviceId)}?mode=${mode}${forceInvestigationRun ? `&force=true&run=${forceInvestigationRun}` : ""}` : null,
+    shouldRunInvestigation && serviceId
+      ? `/api/investigate/service/${encodeURIComponent(serviceId)}?mode=${mode}${
+          forceInvestigationRun ? `&force=true&run=${forceInvestigationRun}` : ""
+        }`
+      : null,
     { deps: [serviceId, mode, forceInvestigationRun] },
   );
   const anomaly = useApiQuery<AnomalyStatus>(serviceId ? `/api/anomaly/${encodeURIComponent(serviceId)}/status` : null, { deps: [serviceId] });
@@ -162,6 +180,7 @@ export function ServiceDetailPage({ mode }: { mode: Mode }) {
   if (!detail.data) return <EmptyState title="No service data" description="Inferra could not load the service detail." />;
   const serviceStatus = detail.data.service.status;
   const investigationMissing = investigation.error?.status === 404;
+  const displayedInvestigation = investigation.data ?? savedInvestigation;
   const topologyEdges = (topology.data?.edges ?? []).filter((edge) => edge.source === serviceId || edge.target === serviceId);
   const workspaceMappings = (workspace.data?.service_mappings ?? []).filter((mapping) => mapping.service_id === serviceId);
 
@@ -197,8 +216,8 @@ export function ServiceDetailPage({ mode }: { mode: Mode }) {
 
       <div className="content-grid">
         <div className="space-y-4">
-          {investigation.data ? (
-            <InvestigationView result={investigation.data} showRaw={isAdvancedMode(mode)} onRefresh={() => setForceInvestigationRun((value) => value + 1)} />
+          {displayedInvestigation ? (
+            <InvestigationView result={displayedInvestigation} showRaw={isAdvancedMode(mode)} onRefresh={() => setForceInvestigationRun((value) => value + 1)} />
           ) : investigation.errorMessage ? (
             investigationMissing ? (
               <EmptyState
@@ -209,6 +228,10 @@ export function ServiceDetailPage({ mode }: { mode: Mode }) {
             ) : (
               <ErrorState description={`Investigation unavailable: ${investigation.errorMessage}`} onRetry={() => void investigation.reload()} />
             )
+          ) : savedGenerations.errorMessage ? (
+            <ErrorState description={`Saved investigation unavailable: ${savedGenerations.errorMessage}`} onRetry={() => void savedGenerations.reload()} />
+          ) : savedGenerations.isLoading ? (
+            <LoadingState title="Loading saved investigation" />
           ) : (
             <LoadingState title="Running investigation" />
           )}
@@ -320,4 +343,21 @@ export function ServiceDetailPage({ mode }: { mode: Mode }) {
       </div>
     </div>
   );
+}
+
+function hydrateServiceSavedGeneration(generation: AiGeneration): InvestigationResponse {
+  return {
+    ...generation.response,
+    cached: true,
+    ai_generation: {
+      generation_id: generation.generation_id,
+      scope_key: generation.scope_key,
+      focus: generation.focus,
+      mode: generation.mode,
+      question: generation.question,
+      bundle_hash: generation.bundle_hash,
+      used_ai: generation.used_ai,
+      created_at: generation.created_at,
+    },
+  };
 }

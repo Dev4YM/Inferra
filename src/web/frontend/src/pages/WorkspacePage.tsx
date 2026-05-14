@@ -10,6 +10,7 @@ import type {
   InvestigationResponse,
   ScannerStatusResponse,
   WorkspaceAppLogsResponse,
+  WorkspaceAppResources,
   WorkspaceAppResourcesResponse,
   WorkspaceMapResponse,
   WorkspaceRuntimeApp,
@@ -150,7 +151,7 @@ export function WorkspacePage({ mode }: { mode: Mode }) {
                 <Th>Manager</Th>
                 <Th>State</Th>
                 <Th>URL</Th>
-                <Th>Resources</Th>
+                <Th>Host CPU / Memory</Th>
                 <Th>Project</Th>
                 <Th>Confidence</Th>
                 <Th>Details</Th>
@@ -181,7 +182,7 @@ export function WorkspacePage({ mode }: { mode: Mode }) {
                   </Td>
                   <Td className="text-xs text-muted-foreground">
                     {app.resources?.cpu_percent != null || app.resources?.memory_mb != null
-                      ? `${app.resources?.cpu_percent ?? "-"}% / ${app.resources?.memory_mb ?? "-"} MB`
+                      ? `${formatHostCpuPercent(app.resources)} / ${app.resources?.memory_mb ?? "-"} MB`
                       : "-"}
                   </Td>
                   <Td className="font-mono text-xs text-muted-foreground">{app.project_path ?? app.cwd ?? "-"}</Td>
@@ -510,7 +511,9 @@ function WorkspaceAppDetails({
                 <div key={`${entry.source?.path ?? "raw"}-${entry.line_number_from_tail ?? index}`} className="rounded-lg border border-border/60 bg-background/30 p-3">
                   <div className="mb-2 flex flex-wrap items-center gap-2 text-xs text-muted-foreground">
                     <Badge variant="outline">{formatDisplayValue(entry.source?.label ?? "File")}</Badge>
-                    {entry.source?.path ? <span className="break-all font-mono">{entry.source.path}</span> : null}
+                    {entry.source?.path || entry.source?.command || entry.source?.stream ? (
+                      <span className="break-all font-mono">{entry.source.path ?? entry.source.command ?? entry.source.stream}</span>
+                    ) : null}
                   </div>
                   <p className="whitespace-pre-wrap break-words font-mono text-xs leading-relaxed">{entry.line || "-"}</p>
                 </div>
@@ -567,7 +570,9 @@ function WorkspaceAppDetails({
               </Badge>
               {liveResources.data?.sampled_at ? <span className="text-xs text-muted-foreground">{liveResources.data.sampled_at}</span> : null}
             </div>
-            <InfoLine label="CPU" value={resources?.cpu_percent != null ? `${resources.cpu_percent}%` : "-"} />
+            <InfoLine label="Host CPU share" value={formatHostCpuPercent(resources)} />
+            <InfoLine label="Raw process CPU" value={formatRawCpuPercent(resources)} />
+            <InfoLine label="CPU scope" value={resources?.cpu_percent_scope ? formatDisplayValue(resources.cpu_percent_scope) : "-"} />
             <InfoLine label="Memory" value={resources?.memory_mb != null ? `${resources.memory_mb} MB` : "-"} />
             <InfoLine label="Virtual memory" value={resources?.virtual_memory_mb != null ? `${resources.virtual_memory_mb} MB` : "-"} />
             <InfoLine label="Uptime" value={resources?.uptime_seconds != null ? `${resources.uptime_seconds}s` : "-"} />
@@ -708,6 +713,21 @@ function hydrateWorkspaceSavedGeneration(generation: AiGeneration): Investigatio
       created_at: generation.created_at,
     },
   };
+}
+
+function formatHostCpuPercent(resources: WorkspaceAppResources | null | undefined): string {
+  if (resources?.cpu_percent == null) return "-";
+  return `${formatPercentValue(resources.cpu_percent)}%`;
+}
+
+function formatRawCpuPercent(resources: WorkspaceAppResources | null | undefined): string {
+  if (resources?.cpu_raw_percent == null) return "-";
+  const cpuCount = resources.cpu_logical_processors ? ` across ${resources.cpu_logical_processors} logical CPU(s)` : "";
+  return `${formatPercentValue(resources.cpu_raw_percent)}% single-core equivalent${cpuCount}`;
+}
+
+function formatPercentValue(value: number): string {
+  return Number.isInteger(value) ? String(value) : value.toFixed(2).replace(/\.?0+$/, "");
 }
 
 function InfoLine({ label, value }: { label: string; value: string }) {

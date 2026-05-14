@@ -78,7 +78,7 @@ jobs:
         with:
           tool: cargo-llvm-cov
       - name: Generate LCOV and enforce minimum line coverage
-        run: cargo llvm-cov test --manifest-path src/Cargo.toml --workspace --lcov --output-path lcov.info --fail-under-lines 22
+        run: cargo llvm-cov test --manifest-path src/Cargo.toml --workspace --lcov --output-path lcov.info --fail-under-lines 35
       - name: Print coverage summary
         run: cargo llvm-cov report --manifest-path src/Cargo.toml --summary-only
       - uses: actions/upload-artifact@v4

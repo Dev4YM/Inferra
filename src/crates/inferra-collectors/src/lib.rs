@@ -46,6 +46,7 @@ pub struct CollectorRuntimeRow {
     pub error_count: u64,
     pub dropped_events: u64,
     pub last_error: Option<String>,
+    pub last_error_at: Option<String>,
     pub lag_seconds: Option<f64>,
 }
 
@@ -620,6 +621,17 @@ impl CollectorRuntime {
             .sum()
     }
 
+    pub async fn active_error_count(&self) -> i64 {
+        self.inner
+            .statuses
+            .read()
+            .await
+            .values()
+            .filter(|row| row.status == "error")
+            .map(|row| row.error_count as i64)
+            .sum()
+    }
+
     pub async fn ingest_app_event(
         &self,
         events_db: &Path,
@@ -778,6 +790,22 @@ impl CollectorRuntime {
         row.status = "error".into();
         row.error_count += 1;
         row.last_error = Some(error.to_string());
+        row.last_error_at = Some(now_iso());
+    }
+
+    async fn record_unavailable(&self, collector_id: &str, source_type: &str, reason: &str) {
+        let mut statuses = self.inner.statuses.write().await;
+        let row = statuses
+            .entry(collector_id.to_string())
+            .or_insert_with(|| CollectorRuntimeRow {
+                collector_id: collector_id.to_string(),
+                source_type: source_type.to_string(),
+                ..Default::default()
+            });
+        row.is_running = false;
+        row.status = "unavailable".into();
+        row.last_error = Some(reason.to_string());
+        row.last_error_at = Some(now_iso());
     }
 }
 
@@ -1235,47 +1263,38 @@ async fn run_host_metrics(
         let sample = collect_host_sample();
         match sample {
             Ok(sample) => {
-                if let Some(event) = state.update_and_build_event(
-                    &sample,
-                    warn_cpu_percent,
-                    warn_memory_percent,
-                    warn_disk_percent,
-                ) {
-                    match persist_events_and_reconcile(&events_db, &incidents_db, &config, &[event])
-                    {
-                        Ok(result) => {
-                            runtime
-                                .bump_success(
-                                    collector_id,
-                                    source_type,
-                                    result.inserted as u64,
-                                    (result.suppressed_duplicates + result.suppressed_noise) as u64,
-                                    Some(observed_at),
-                                )
-                                .await;
-                        }
-                        Err(error) => {
-                            runtime
-                                .record_error(collector_id, source_type, &error.to_string())
-                                .await;
-                        }
-                    }
-                } else {
-                    runtime
-                        .upsert_status(CollectorRuntimeRow {
-                            collector_id: collector_id.into(),
-                            status: "running".into(),
-                            source_type: source_type.into(),
-                            is_running: true,
-                            ..Default::default()
-                        })
-                        .await;
-                }
+                let events = state
+                    .update_and_build_event(
+                        &sample,
+                        warn_cpu_percent,
+                        warn_memory_percent,
+                        warn_disk_percent,
+                    )
+                    .into_iter()
+                    .collect::<Vec<_>>();
+                handle_collected_events(
+                    &runtime,
+                    &events_db,
+                    &incidents_db,
+                    &config,
+                    collector_id,
+                    source_type,
+                    observed_at,
+                    events,
+                )
+                .await;
             }
             Err(error) => {
-                runtime
-                    .record_error(collector_id, source_type, &error.to_string())
-                    .await
+                record_collector_error(
+                    &runtime,
+                    &events_db,
+                    &incidents_db,
+                    &config,
+                    collector_id,
+                    source_type,
+                    &format!("{error:#}"),
+                )
+                .await
             }
         }
         tokio::select! {
@@ -1325,32 +1344,29 @@ async fn run_process_snapshot(
             &mut seen_hot,
         ) {
             Ok(events) => {
-                if !events.is_empty() {
-                    match persist_events_and_reconcile(&events_db, &incidents_db, &config, &events)
-                    {
-                        Ok(result) => {
-                            runtime
-                                .bump_success(
-                                    collector_id,
-                                    source_type,
-                                    result.inserted as u64,
-                                    (result.suppressed_duplicates + result.suppressed_noise) as u64,
-                                    Some(observed_at),
-                                )
-                                .await;
-                        }
-                        Err(error) => {
-                            runtime
-                                .record_error(collector_id, source_type, &error.to_string())
-                                .await;
-                        }
-                    }
-                }
+                handle_collected_events(
+                    &runtime,
+                    &events_db,
+                    &incidents_db,
+                    &config,
+                    collector_id,
+                    source_type,
+                    observed_at,
+                    events,
+                )
+                .await;
             }
             Err(error) => {
-                runtime
-                    .record_error(collector_id, source_type, &error.to_string())
-                    .await
+                record_collector_error(
+                    &runtime,
+                    &events_db,
+                    &incidents_db,
+                    &config,
+                    collector_id,
+                    source_type,
+                    &format!("{error:#}"),
+                )
+                .await
             }
         }
         tokio::select! {
@@ -1391,32 +1407,29 @@ async fn run_linux_syslog(
         match collect_syslog_events(&events_db, &paths, start_at_end && !started) {
             Ok(events) => {
                 started = true;
-                if !events.is_empty() {
-                    match persist_events_and_reconcile(&events_db, &incidents_db, &config, &events)
-                    {
-                        Ok(result) => {
-                            runtime
-                                .bump_success(
-                                    collector_id,
-                                    source_type,
-                                    result.inserted as u64,
-                                    (result.suppressed_duplicates + result.suppressed_noise) as u64,
-                                    Some(observed_at),
-                                )
-                                .await;
-                        }
-                        Err(error) => {
-                            runtime
-                                .record_error(collector_id, source_type, &error.to_string())
-                                .await;
-                        }
-                    }
-                }
+                handle_collected_events(
+                    &runtime,
+                    &events_db,
+                    &incidents_db,
+                    &config,
+                    collector_id,
+                    source_type,
+                    observed_at,
+                    events,
+                )
+                .await;
             }
             Err(error) => {
-                runtime
-                    .record_error(collector_id, source_type, &error.to_string())
-                    .await
+                record_collector_error(
+                    &runtime,
+                    &events_db,
+                    &incidents_db,
+                    &config,
+                    collector_id,
+                    source_type,
+                    &format!("{error:#}"),
+                )
+                .await
             }
         }
         tokio::select! {
@@ -1448,32 +1461,29 @@ async fn run_file_tail(
         match collect_file_events(&events_db, &targets, start_at_end && !started) {
             Ok(events) => {
                 started = true;
-                if !events.is_empty() {
-                    match persist_events_and_reconcile(&events_db, &incidents_db, &config, &events)
-                    {
-                        Ok(result) => {
-                            runtime
-                                .bump_success(
-                                    collector_id,
-                                    source_type,
-                                    result.inserted as u64,
-                                    (result.suppressed_duplicates + result.suppressed_noise) as u64,
-                                    Some(observed_at),
-                                )
-                                .await;
-                        }
-                        Err(error) => {
-                            runtime
-                                .record_error(collector_id, source_type, &error.to_string())
-                                .await;
-                        }
-                    }
-                }
+                handle_collected_events(
+                    &runtime,
+                    &events_db,
+                    &incidents_db,
+                    &config,
+                    collector_id,
+                    source_type,
+                    observed_at,
+                    events,
+                )
+                .await;
             }
             Err(error) => {
-                runtime
-                    .record_error(collector_id, source_type, &error.to_string())
-                    .await
+                record_collector_error(
+                    &runtime,
+                    &events_db,
+                    &incidents_db,
+                    &config,
+                    collector_id,
+                    source_type,
+                    &format!("{error:#}"),
+                )
+                .await
             }
         }
         tokio::select! {
@@ -1513,32 +1523,43 @@ async fn run_journald(
             limit,
         ) {
             Ok(events) => {
-                if !events.is_empty() {
-                    match persist_events_and_reconcile(&events_db, &incidents_db, &config, &events)
-                    {
-                        Ok(result) => {
-                            runtime
-                                .bump_success(
-                                    collector_id,
-                                    source_type,
-                                    result.inserted as u64,
-                                    (result.suppressed_duplicates + result.suppressed_noise) as u64,
-                                    Some(observed_at),
-                                )
-                                .await;
-                        }
-                        Err(error) => {
-                            runtime
-                                .record_error(collector_id, source_type, &error.to_string())
-                                .await;
-                        }
-                    }
-                }
+                handle_collected_events(
+                    &runtime,
+                    &events_db,
+                    &incidents_db,
+                    &config,
+                    collector_id,
+                    source_type,
+                    observed_at,
+                    events,
+                )
+                .await;
             }
             Err(error) => {
-                runtime
-                    .record_error(collector_id, source_type, &error.to_string())
-                    .await
+                let message = format!("{error:#}");
+                if let Some(reason) = collector_unavailable_reason(collector_id, &message) {
+                    record_collector_unavailable(
+                        &runtime,
+                        &events_db,
+                        &incidents_db,
+                        &config,
+                        collector_id,
+                        source_type,
+                        &reason,
+                    )
+                    .await;
+                } else {
+                    record_collector_error(
+                        &runtime,
+                        &events_db,
+                        &incidents_db,
+                        &config,
+                        collector_id,
+                        source_type,
+                        &message,
+                    )
+                    .await;
+                }
             }
         }
         tokio::select! {
@@ -1566,32 +1587,29 @@ async fn run_windows_eventlog(
         let observed_at = now_iso();
         match collect_windows_eventlog_events(&events_db, &channels) {
             Ok(events) => {
-                if !events.is_empty() {
-                    match persist_events_and_reconcile(&events_db, &incidents_db, &config, &events)
-                    {
-                        Ok(result) => {
-                            runtime
-                                .bump_success(
-                                    collector_id,
-                                    source_type,
-                                    result.inserted as u64,
-                                    (result.suppressed_duplicates + result.suppressed_noise) as u64,
-                                    Some(observed_at),
-                                )
-                                .await;
-                        }
-                        Err(error) => {
-                            runtime
-                                .record_error(collector_id, source_type, &error.to_string())
-                                .await;
-                        }
-                    }
-                }
+                handle_collected_events(
+                    &runtime,
+                    &events_db,
+                    &incidents_db,
+                    &config,
+                    collector_id,
+                    source_type,
+                    observed_at,
+                    events,
+                )
+                .await;
             }
             Err(error) => {
-                runtime
-                    .record_error(collector_id, source_type, &error.to_string())
-                    .await
+                record_collector_error(
+                    &runtime,
+                    &events_db,
+                    &incidents_db,
+                    &config,
+                    collector_id,
+                    source_type,
+                    &format!("{error:#}"),
+                )
+                .await
             }
         }
         tokio::select! {
@@ -1621,32 +1639,29 @@ async fn run_windows_service(
         let observed_at = now_iso();
         match collect_windows_service_events(&events_db, include_stopped, &names) {
             Ok(events) => {
-                if !events.is_empty() {
-                    match persist_events_and_reconcile(&events_db, &incidents_db, &config, &events)
-                    {
-                        Ok(result) => {
-                            runtime
-                                .bump_success(
-                                    collector_id,
-                                    source_type,
-                                    result.inserted as u64,
-                                    (result.suppressed_duplicates + result.suppressed_noise) as u64,
-                                    Some(observed_at),
-                                )
-                                .await;
-                        }
-                        Err(error) => {
-                            runtime
-                                .record_error(collector_id, source_type, &error.to_string())
-                                .await;
-                        }
-                    }
-                }
+                handle_collected_events(
+                    &runtime,
+                    &events_db,
+                    &incidents_db,
+                    &config,
+                    collector_id,
+                    source_type,
+                    observed_at,
+                    events,
+                )
+                .await;
             }
             Err(error) => {
-                runtime
-                    .record_error(collector_id, source_type, &error.to_string())
-                    .await
+                record_collector_error(
+                    &runtime,
+                    &events_db,
+                    &incidents_db,
+                    &config,
+                    collector_id,
+                    source_type,
+                    &format!("{error:#}"),
+                )
+                .await
             }
         }
         tokio::select! {
@@ -1686,32 +1701,43 @@ async fn run_docker(
             include_all,
         ) {
             Ok(events) => {
-                if !events.is_empty() {
-                    match persist_events_and_reconcile(&events_db, &incidents_db, &config, &events)
-                    {
-                        Ok(result) => {
-                            runtime
-                                .bump_success(
-                                    collector_id,
-                                    source_type,
-                                    result.inserted as u64,
-                                    (result.suppressed_duplicates + result.suppressed_noise) as u64,
-                                    Some(observed_at),
-                                )
-                                .await;
-                        }
-                        Err(error) => {
-                            runtime
-                                .record_error(collector_id, source_type, &error.to_string())
-                                .await;
-                        }
-                    }
-                }
+                handle_collected_events(
+                    &runtime,
+                    &events_db,
+                    &incidents_db,
+                    &config,
+                    collector_id,
+                    source_type,
+                    observed_at,
+                    events,
+                )
+                .await;
             }
             Err(error) => {
-                runtime
-                    .record_error(collector_id, source_type, &error.to_string())
-                    .await
+                let message = format!("{error:#}");
+                if let Some(reason) = collector_unavailable_reason(collector_id, &message) {
+                    record_collector_unavailable(
+                        &runtime,
+                        &events_db,
+                        &incidents_db,
+                        &config,
+                        collector_id,
+                        source_type,
+                        &reason,
+                    )
+                    .await;
+                } else {
+                    record_collector_error(
+                        &runtime,
+                        &events_db,
+                        &incidents_db,
+                        &config,
+                        collector_id,
+                        source_type,
+                        &message,
+                    )
+                    .await;
+                }
             }
         }
         tokio::select! {
@@ -1753,32 +1779,43 @@ async fn run_kubernetes(
             include_events,
         ) {
             Ok(events) => {
-                if !events.is_empty() {
-                    match persist_events_and_reconcile(&events_db, &incidents_db, &config, &events)
-                    {
-                        Ok(result) => {
-                            runtime
-                                .bump_success(
-                                    collector_id,
-                                    source_type,
-                                    result.inserted as u64,
-                                    (result.suppressed_duplicates + result.suppressed_noise) as u64,
-                                    Some(observed_at),
-                                )
-                                .await;
-                        }
-                        Err(error) => {
-                            runtime
-                                .record_error(collector_id, source_type, &error.to_string())
-                                .await;
-                        }
-                    }
-                }
+                handle_collected_events(
+                    &runtime,
+                    &events_db,
+                    &incidents_db,
+                    &config,
+                    collector_id,
+                    source_type,
+                    observed_at,
+                    events,
+                )
+                .await;
             }
             Err(error) => {
-                runtime
-                    .record_error(collector_id, source_type, &error.to_string())
-                    .await
+                let message = format!("{error:#}");
+                if let Some(reason) = collector_unavailable_reason(collector_id, &message) {
+                    record_collector_unavailable(
+                        &runtime,
+                        &events_db,
+                        &incidents_db,
+                        &config,
+                        collector_id,
+                        source_type,
+                        &reason,
+                    )
+                    .await;
+                } else {
+                    record_collector_error(
+                        &runtime,
+                        &events_db,
+                        &incidents_db,
+                        &config,
+                        collector_id,
+                        source_type,
+                        &message,
+                    )
+                    .await;
+                }
             }
         }
         tokio::select! {
@@ -1880,6 +1917,180 @@ async fn handle_app_standalone_ingest(
         "suppressed_duplicates": result.suppressed_duplicates,
         "suppressed_noise": result.suppressed_noise,
     })))
+}
+
+async fn handle_collected_events(
+    runtime: &CollectorRuntime,
+    events_db: &Path,
+    incidents_db: &Path,
+    config: &TomlValue,
+    collector_id: &str,
+    source_type: &str,
+    observed_at: String,
+    events: Vec<NewEventRecord>,
+) {
+    if events.is_empty() {
+        runtime
+            .bump_success(collector_id, source_type, 0, 0, Some(observed_at))
+            .await;
+        return;
+    }
+    match persist_events_and_reconcile(events_db, incidents_db, config, &events) {
+        Ok(result) => {
+            runtime
+                .bump_success(
+                    collector_id,
+                    source_type,
+                    result.inserted as u64,
+                    (result.suppressed_duplicates + result.suppressed_noise) as u64,
+                    Some(observed_at),
+                )
+                .await;
+        }
+        Err(error) => {
+            record_collector_error(
+                runtime,
+                events_db,
+                incidents_db,
+                config,
+                collector_id,
+                source_type,
+                &format!("{error:#}"),
+            )
+            .await;
+        }
+    }
+}
+
+async fn record_collector_error(
+    runtime: &CollectorRuntime,
+    events_db: &Path,
+    incidents_db: &Path,
+    config: &TomlValue,
+    collector_id: &str,
+    source_type: &str,
+    error: &str,
+) {
+    runtime.record_error(collector_id, source_type, error).await;
+    let _ = persist_collector_diagnostic_event(
+        events_db,
+        incidents_db,
+        config,
+        collector_id,
+        source_type,
+        "collector_error",
+        3,
+        error,
+    );
+}
+
+async fn record_collector_unavailable(
+    runtime: &CollectorRuntime,
+    events_db: &Path,
+    incidents_db: &Path,
+    config: &TomlValue,
+    collector_id: &str,
+    source_type: &str,
+    reason: &str,
+) {
+    runtime
+        .record_unavailable(collector_id, source_type, reason)
+        .await;
+    let _ = persist_collector_diagnostic_event(
+        events_db,
+        incidents_db,
+        config,
+        collector_id,
+        source_type,
+        "collector_unavailable",
+        1,
+        reason,
+    );
+}
+
+fn persist_collector_diagnostic_event(
+    events_db: &Path,
+    incidents_db: &Path,
+    config: &TomlValue,
+    collector_id: &str,
+    source_type: &str,
+    kind: &str,
+    severity: i64,
+    reason: &str,
+) -> Result<()> {
+    let message = format!("collector {collector_id} {kind}: {reason}");
+    let event = NewEventRecord {
+        event_id: next_event_id("collector"),
+        timestamp: now_iso(),
+        service_id: collector_id.to_string(),
+        severity,
+        message: message.clone(),
+        source_type: "collector_runtime".into(),
+        source_id: format!("collector://{collector_id}"),
+        tags: vec![
+            "collector".into(),
+            collector_id.to_string(),
+            kind.to_string(),
+        ],
+        fingerprint: semantic_fingerprint("collector", collector_id, source_type, &message),
+        host_id: System::host_name().unwrap_or_else(|| "local".into()),
+        event_type: 1,
+        timestamp_source: "collector".into(),
+        collected_at: now_iso(),
+        quality: Some("diagnostic".into()),
+        structured_data: Some(serde_json::json!({
+            "collector_id": collector_id,
+            "collector_source_type": source_type,
+            "kind": kind,
+            "reason": reason,
+        })),
+        raw_offset: None,
+    };
+    persist_events_and_reconcile(events_db, incidents_db, config, &[event]).map(|_| ())
+}
+
+fn collector_unavailable_reason(collector_id: &str, message: &str) -> Option<String> {
+    let lower = message.to_ascii_lowercase();
+    match collector_id {
+        "docker"
+            if lower.contains("program not found")
+                || lower.contains("os error 2")
+                || lower.contains("not recognized")
+                || lower.contains("cannot connect to the docker daemon")
+                || lower.contains("docker daemon") =>
+        {
+            Some(
+                "Docker is enabled in Inferra, but Docker is not installed or the Docker daemon is not reachable on this host. Marking the collector unavailable instead of degrading system health."
+                    .into(),
+            )
+        }
+        "kubernetes"
+            if lower.contains("program not found")
+                || lower.contains("os error 2")
+                || lower.contains("not recognized")
+                || lower.contains("connection refused")
+                || lower.contains("unable to connect")
+                || lower.contains("forbidden")
+                || lower.contains("unauthorized") =>
+        {
+            Some(
+                "Kubernetes is enabled in Inferra, but kubectl, kubeconfig, cluster connectivity, or RBAC is unavailable on this host."
+                    .into(),
+            )
+        }
+        "journald"
+            if lower.contains("program not found")
+                || lower.contains("os error 2")
+                || lower.contains("not recognized")
+                || lower.contains("no journal files") =>
+        {
+            Some(
+                "journald is enabled in Inferra, but journalctl or readable systemd journal data is unavailable on this host."
+                    .into(),
+            )
+        }
+        _ => None,
+    }
 }
 
 #[derive(Default)]
@@ -2007,6 +2218,7 @@ fn collect_process_events(
     let mut system = System::new_all();
     system.refresh_cpu_usage();
     system.refresh_processes(ProcessesToUpdate::All, true);
+    let logical_processors = system.cpus().len().max(host_logical_processors()).max(1);
     let mut entries = system.processes().values().collect::<Vec<_>>();
     entries.sort_by(|a, b| {
         b.cpu_usage()
@@ -2026,8 +2238,9 @@ fn collect_process_events(
         }
         let memory_mb = process.memory() as f64 / (1024.0 * 1024.0);
         let cpu = process.cpu_usage();
+        let host_cpu = normalize_process_cpu_to_host_percent(cpu, logical_processors);
         let key = format!("{name}:{pid}");
-        let hot = cpu >= min_cpu_percent || memory_mb >= min_memory_mb;
+        let hot = host_cpu >= min_cpu_percent || memory_mb >= min_memory_mb;
         if hot {
             active_hot.insert(key.clone());
             if !seen_hot.contains(&key) {
@@ -2037,7 +2250,7 @@ fn collect_process_events(
                     service_id: name.clone(),
                     severity: 2,
                     message: format!(
-                        "process {name} pid={pid} high cpu={cpu:.1}% memory={memory_mb:.1}MB"
+                        "process {name} pid={pid} high host_cpu={host_cpu:.1}% raw_process_cpu={cpu:.1}% memory={memory_mb:.1}MB"
                     ),
                     source_type: "process_snapshot".into(),
                     source_id: format!("process://{pid}"),
@@ -2050,7 +2263,11 @@ fn collect_process_events(
                     quality: Some("normalized".into()),
                     structured_data: Some(serde_json::json!({
                         "pid": pid,
-                        "cpu_percent": cpu,
+                        "cpu_percent": host_cpu,
+                        "cpu_raw_percent": cpu,
+                        "cpu_percent_scope": "host_total",
+                        "cpu_raw_percent_scope": "single_core_equivalent",
+                        "cpu_logical_processors": logical_processors,
                         "memory_mb": memory_mb,
                         "status": format!("{:?}", process.status()),
                     })),
@@ -2064,7 +2281,7 @@ fn collect_process_events(
                 service_id: name.clone(),
                 severity: 1,
                 message: format!(
-                    "process {name} pid={pid} recovered cpu={cpu:.1}% memory={memory_mb:.1}MB"
+                    "process {name} pid={pid} recovered host_cpu={host_cpu:.1}% raw_process_cpu={cpu:.1}% memory={memory_mb:.1}MB"
                 ),
                 source_type: "process_snapshot".into(),
                 source_id: format!("process://{pid}"),
@@ -2077,7 +2294,11 @@ fn collect_process_events(
                 quality: Some("normalized".into()),
                 structured_data: Some(serde_json::json!({
                     "pid": pid,
-                    "cpu_percent": cpu,
+                    "cpu_percent": host_cpu,
+                    "cpu_raw_percent": cpu,
+                    "cpu_percent_scope": "host_total",
+                    "cpu_raw_percent_scope": "single_core_equivalent",
+                    "cpu_logical_processors": logical_processors,
                     "memory_mb": memory_mb,
                     "status": format!("{:?}", process.status()),
                 })),
@@ -2087,6 +2308,17 @@ fn collect_process_events(
     }
     *seen_hot = active_hot;
     Ok(events)
+}
+
+fn host_logical_processors() -> usize {
+    std::thread::available_parallelism()
+        .map(|count| count.get())
+        .unwrap_or(1)
+        .max(1)
+}
+
+fn normalize_process_cpu_to_host_percent(raw_percent: f32, logical_processors: usize) -> f32 {
+    (raw_percent / logical_processors.max(1) as f32).clamp(0.0, 100.0)
 }
 
 fn collect_syslog_events(
@@ -2418,14 +2650,21 @@ fn collect_windows_eventlog_events(
             .unwrap_or(0);
         if last_record == 0 {
             let output = Command::new("wevtutil")
-                .args(["qe", channel, "/rd:true", "/c:1", "/f:text"])
+                .args(["qe", channel, "/rd:true", "/c:1", "/f:xml"])
                 .output()
                 .with_context(|| format!("query latest windows eventlog record for {channel}"))?;
-            let latest = parse_wevtutil_events(&String::from_utf8_lossy(&output.stdout), channel)
-                .into_iter()
-                .map(|item| item.record_id)
-                .max()
-                .unwrap_or(0);
+            if !output.status.success() {
+                anyhow::bail!(
+                    "wevtutil failed for {channel}: {}",
+                    sc_output_text_like(&output)
+                );
+            }
+            let latest =
+                parse_wevtutil_xml_events(&String::from_utf8_lossy(&output.stdout), channel)
+                    .into_iter()
+                    .map(|item| item.record_id)
+                    .max()
+                    .unwrap_or(0);
             if latest > 0 {
                 store.set_collector_state(
                     "windows_eventlog",
@@ -2438,8 +2677,8 @@ fn collect_windows_eventlog_events(
         }
         let query = format!("*[System[(EventRecordID>{last_record})]]");
         let output = Command::new("wevtutil")
-            .args(["qe", channel, "/rd:false", "/f:text", "/c:64", "/q"])
-            .arg(&query)
+            .args(["qe", channel, "/rd:false", "/f:xml", "/c:64"])
+            .arg(format!("/q:{query}"))
             .output()
             .with_context(|| format!("query windows eventlog channel {channel}"))?;
         if !output.status.success() {
@@ -2448,7 +2687,7 @@ fn collect_windows_eventlog_events(
                 sc_output_text_like(&output)
             );
         }
-        let parsed = parse_wevtutil_events(&String::from_utf8_lossy(&output.stdout), channel);
+        let parsed = parse_wevtutil_xml_events(&String::from_utf8_lossy(&output.stdout), channel);
         let mut newest = last_record;
         for item in parsed {
             newest = newest.max(item.record_id);
@@ -3022,55 +3261,104 @@ struct WindowsEventRecord {
     message: String,
 }
 
-fn parse_wevtutil_events(text: &str, channel: &str) -> Vec<WindowsEventRecord> {
-    let blocks = text
-        .split("\r\n\r\n")
-        .flat_map(|chunk| chunk.split("\n\n"))
-        .filter(|chunk| chunk.contains("Event ID:"));
+fn parse_wevtutil_xml_events(text: &str, channel: &str) -> Vec<WindowsEventRecord> {
+    text.split("<Event ")
+        .filter(|chunk| chunk.contains("<System>") || chunk.contains("<System "))
+        .filter_map(|chunk| parse_wevtutil_xml_event(chunk, channel))
+        .collect()
+}
+
+fn parse_wevtutil_xml_event(chunk: &str, channel: &str) -> Option<WindowsEventRecord> {
+    let record_id = xml_tag_text(chunk, "EventRecordID")?.parse::<u64>().ok()?;
+    let provider = xml_attr_value(chunk, "Provider", "Name").unwrap_or_else(|| channel.to_string());
+    let timestamp = xml_attr_value(chunk, "TimeCreated", "SystemTime").unwrap_or_else(now_iso);
+    let level = xml_tag_text(chunk, "Level").unwrap_or_else(|| "4".to_string());
+    let event_id = xml_tag_text(chunk, "EventID").unwrap_or_default();
+    let data = xml_all_tag_text(chunk, "Data");
+    let message = if data.is_empty() {
+        format!("{provider} event {event_id} in {channel}")
+    } else {
+        format!(
+            "{provider} event {event_id}: {}",
+            data.into_iter()
+                .filter(|item| !item.trim().is_empty())
+                .collect::<Vec<_>>()
+                .join(" ")
+        )
+    };
+    Some(WindowsEventRecord {
+        record_id,
+        timestamp,
+        provider,
+        level: windows_event_level_name(&level).to_string(),
+        message,
+    })
+}
+
+fn xml_tag_text(text: &str, tag: &str) -> Option<String> {
+    let start = text.find(&format!("<{tag}"))?;
+    let rest = &text[start..];
+    let value_start = rest.find('>')? + 1;
+    let after_start = &rest[value_start..];
+    let value_end = after_start.find(&format!("</{tag}>"))?;
+    Some(xml_unescape(after_start[..value_end].trim()))
+}
+
+fn xml_all_tag_text(text: &str, tag: &str) -> Vec<String> {
     let mut out = Vec::new();
-    for block in blocks {
-        let mut record_id = None::<u64>;
-        let mut provider = channel.to_string();
-        let mut level = "info".to_string();
-        let mut timestamp = now_iso();
-        let mut message_lines = Vec::new();
-        let mut in_description = false;
-        for raw in block.lines() {
-            let line = raw.trim();
-            if let Some(value) = line.strip_prefix("Event ID:") {
-                record_id = value.trim().parse::<u64>().ok();
-            } else if let Some(value) = line.strip_prefix("Provider Name:") {
-                provider = value.trim().to_string();
-            } else if let Some(value) = line.strip_prefix("Source:") {
-                provider = value.trim().to_string();
-            } else if let Some(value) = line.strip_prefix("Level:") {
-                level = value.trim().to_string();
-            } else if let Some(value) = line.strip_prefix("Date:") {
-                timestamp = value.trim().to_string();
-            } else if let Some(value) = line.strip_prefix("Description:") {
-                in_description = true;
-                if !value.trim().is_empty() {
-                    message_lines.push(value.trim().to_string());
-                }
-            } else if in_description && !line.is_empty() {
-                message_lines.push(line.to_string());
-            }
-        }
-        if let Some(record_id) = record_id {
-            out.push(WindowsEventRecord {
-                record_id,
-                timestamp,
-                provider: provider.clone(),
-                level,
-                message: if message_lines.is_empty() {
-                    format!("{provider} event in {channel}")
-                } else {
-                    message_lines.join(" ")
-                },
-            });
-        }
+    let mut rest = text;
+    while let Some(start) = rest.find(&format!("<{tag}")) {
+        rest = &rest[start..];
+        let Some(value_start) = rest.find('>').map(|idx| idx + 1) else {
+            break;
+        };
+        let after_start = &rest[value_start..];
+        let Some(value_end) = after_start.find(&format!("</{tag}>")) else {
+            break;
+        };
+        out.push(xml_unescape(after_start[..value_end].trim()));
+        rest = &after_start[value_end + tag.len() + 3..];
     }
     out
+}
+
+fn xml_attr_value(text: &str, tag: &str, attr: &str) -> Option<String> {
+    let start = text.find(&format!("<{tag}"))?;
+    let rest = &text[start..];
+    let tag_end = rest.find('>')?;
+    let tag_text = &rest[..tag_end];
+    for quote in ['\'', '"'] {
+        let needle = format!("{attr}={quote}");
+        if let Some(attr_start) = tag_text.find(&needle) {
+            let value = &tag_text[attr_start + needle.len()..];
+            let attr_end = value.find(quote)?;
+            return Some(xml_unescape(&value[..attr_end]));
+        }
+    }
+    None
+}
+
+fn xml_unescape(value: &str) -> String {
+    value
+        .replace("&lt;", "<")
+        .replace("&gt;", ">")
+        .replace("&amp;", "&")
+        .replace("&quot;", "\"")
+        .replace("&apos;", "'")
+        .trim_matches(char::from(0))
+        .trim()
+        .to_string()
+}
+
+fn windows_event_level_name(value: &str) -> &'static str {
+    match value.trim() {
+        "1" => "critical",
+        "2" => "error",
+        "3" => "warn",
+        "4" | "0" => "info",
+        "5" => "debug",
+        _ => "info",
+    }
 }
 
 fn kubectl_json(

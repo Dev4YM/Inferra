@@ -149,7 +149,7 @@ Sync-InferraRuntimeAssets -SourceRoot $sourceRuntimeAssets -DestinationRoot $ins
 
 if (-not (Test-Path $ConfigPath)) {
     try {
-        Push-Location $projectRoot
+        Push-Location $installBinDir
         Invoke-InferraCommand $installedExe @("--config", $ConfigPath, "setup", "--yes", "--skip-connection-test", "--data-dir", $DataDir)
     } finally {
         Pop-Location
@@ -157,7 +157,7 @@ if (-not (Test-Path $ConfigPath)) {
 }
 
 try {
-    Push-Location $projectRoot
+    Push-Location $installBinDir
     Invoke-InferraCommand $installedExe @("--config", $ConfigPath, "init-db")
 }
 finally {

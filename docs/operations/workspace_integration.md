@@ -43,7 +43,7 @@ confidence = 0.95
 
 `[heartbeat]` or `[health]` can define `url` or `path`. A `path` is resolved against the app URL when available.
 
-`[[logs]]` can define `label`, `path`, `kind`, `command`, or `stream`. Relative file paths are resolved from the project root. File logs are tailed with a bounded read and sent to the Workspace app details view. PM2 apps also use PM2 metadata and a bounded `pm2 logs <app> --nostream --lines N` read when available.
+`[[logs]]` can define `label`, `path`, `kind`, `command`, or `stream`. Relative file paths are resolved from the project root. File logs are tailed with a bounded read and sent to the Workspace app details view. PM2 apps use PM2 metadata and PM2 log files first, then fall back to a bounded `pm2 logs <app> --nostream --lines N` read. Node apps also auto-discover npm cache debug logs, common project log files, and Next.js trace output when present.
 
 `[[endpoints]]` can define a full `url`, or `host` plus `port`. These become app endpoints in the UI and AI context.
 

@@ -75,6 +75,7 @@ You receive a redacted runtime evidence bundle. You must:\n\
 - include explicit uncertainty when evidence is thin\n\
 - make the answer specific to context_summary, focus, selected workspace app/service/incident, and the supplied evidence\n\
 - respect host_resources and runtime_monitor samples as authoritative for machine state during this investigation window\n\
+- interpret process/app resources carefully: resources.cpu_percent is an estimated share of total host CPU, resources.cpu_raw_percent is the raw single-core-equivalent process reading, and cpu_raw_percent must never be described as whole-machine CPU saturation\n\
 - if hypotheses[] is non-empty, list likely_causes in the SAME best-first order as hypotheses (by rank ascending, then total_score descending). If you disagree, keep that order and explain the disagreement under uncertainty[]\n\
 - never invent IDs: every citation and evidence[].id must exist in the bundle\n\n\
 Return a single JSON object. No markdown fences. No prose outside JSON.\n\
@@ -484,7 +485,7 @@ async fn api_overview(
         ai_available: Some(probe.available),
         ai_reason: probe.reason.clone(),
         queue_depth: Some(state.collectors.queue_depth()),
-        collector_errors: Some(state.collectors.total_errors().await),
+        collector_errors: Some(state.collectors.active_error_count().await),
     };
     let overview = build_overview_with_runtime_signals(&cfg, state.paths.as_ref(), Some(&signals))
         .map_err(|e| (StatusCode::INTERNAL_SERVER_ERROR, e.to_string()))?;
@@ -1883,6 +1884,15 @@ async fn api_ai_investigate_stream(
                     reason,
                 )),
             );
+            let resp = finalize_ai_generation_response_lossy(
+                paths.as_ref(),
+                &bundle,
+                resp,
+                &focus,
+                &mode,
+                &question,
+                false,
+            );
             yield Ok(Event::default().event("done").data(resp.to_string()));
             return;
         }
@@ -1989,7 +1999,7 @@ async fn api_ai_investigate_stream(
                     "sanitized_user_prompt": user_prompt,
                     "allowed_fields": ["mode", "incident", "hypotheses", "events", "services", "runtime", "workspace", "user_question", "constraints", "runtime_monitor", "host_resources", "evidence_digest", "similar_incidents", "operator_memory"],
                     "blocked_fields": ["raw_event_messages", "env_values", "ip_addresses", "secrets"],
-                    "raw_logs_sent": false,
+                    "raw_logs_sent": raw_workspace_logs_sent_to_ai(&bundle, &cfg),
                     "schema_version": 1,
                 });
                 let grounding = apply_output_grounding(&mut output, &redacted);
@@ -2029,15 +2039,14 @@ async fn api_ai_investigate_stream(
                 None,
             )
         };
-        let _ = persist_investigation_artifacts(paths.as_ref(), &bundle, &response);
-        let _ = persist_ai_generation(
+        let response = finalize_ai_generation_response_lossy(
             paths.as_ref(),
-            &ai_generation_scope_key(&focus, &mode, &question, false),
+            &bundle,
+            response,
             &focus,
             &mode,
             &question,
-            &bundle,
-            &response,
+            false,
         );
         yield Ok(Event::default().event("done").data(response.to_string()));
     };
@@ -2054,35 +2063,32 @@ async fn api_collectors(State(state): State<AppState>) -> Json<CollectorsRespons
     let response = CollectorsResponse {
         collectors: configured_collectors(&cfg)
             .into_iter()
-            .map(|c| CollectorRow {
-                collector_id: c.collector_id.clone(),
-                status: runtime_by_id
-                    .get(&c.collector_id)
-                    .map(|row| row.status.clone())
-                    .or(Some(c.status)),
-                source_type: Some(c.source_type),
-                is_running: runtime_by_id.get(&c.collector_id).map(|row| row.is_running),
-                events_emitted: runtime_by_id
-                    .get(&c.collector_id)
-                    .map(|row| row.events_emitted),
-                events_per_second: runtime_by_id
-                    .get(&c.collector_id)
-                    .map(|row| row.events_per_second),
-                last_event_at: runtime_by_id
-                    .get(&c.collector_id)
-                    .and_then(|row| row.last_event_at.clone()),
-                error_count: runtime_by_id
-                    .get(&c.collector_id)
-                    .map(|row| row.error_count),
-                dropped_events: runtime_by_id
-                    .get(&c.collector_id)
-                    .map(|row| row.dropped_events),
-                last_error: runtime_by_id
-                    .get(&c.collector_id)
-                    .and_then(|row| row.last_error.clone()),
-                lag_seconds: runtime_by_id
-                    .get(&c.collector_id)
-                    .and_then(|row| row.lag_seconds),
+            .map(|c| {
+                let runtime = runtime_by_id.get(&c.collector_id);
+                let source_type = runtime
+                    .map(|row| row.source_type.clone())
+                    .unwrap_or_else(|| c.source_type.clone());
+                let last_error = runtime.and_then(|row| row.last_error.clone());
+                CollectorRow {
+                    collector_id: c.collector_id.clone(),
+                    status: runtime.map(|row| row.status.clone()).or(Some(c.status)),
+                    source_type: Some(source_type.clone()),
+                    is_running: runtime.map(|row| row.is_running),
+                    events_emitted: runtime.map(|row| row.events_emitted),
+                    events_per_second: runtime.map(|row| row.events_per_second),
+                    last_event_at: runtime.and_then(|row| row.last_event_at.clone()),
+                    error_count: runtime.map(|row| row.error_count),
+                    dropped_events: runtime.map(|row| row.dropped_events),
+                    last_error: last_error.clone(),
+                    last_error_at: runtime.and_then(|row| row.last_error_at.clone()),
+                    error_hint: collector_error_hint(
+                        &c.collector_id,
+                        Some(source_type.as_str()),
+                        last_error.as_deref(),
+                    ),
+                    log_query: Some(format!("/api/logs?search={}&limit=100", c.collector_id)),
+                    lag_seconds: runtime.and_then(|row| row.lag_seconds),
+                }
             })
             .collect(),
         queue_depth: state.collectors.queue_depth(),
@@ -2095,6 +2101,84 @@ async fn api_collectors(State(state): State<AppState>) -> Json<CollectorsRespons
         None,
     );
     Json(response)
+}
+
+fn collector_error_hint(
+    collector_id: &str,
+    source_type: Option<&str>,
+    last_error: Option<&str>,
+) -> Option<String> {
+    let has_error = last_error
+        .map(str::trim)
+        .filter(|value| !value.is_empty())?;
+    let lower = has_error.to_ascii_lowercase();
+    if lower.contains("access is denied")
+        || lower.contains("permission denied")
+        || lower.contains("unauthorized")
+        || lower.contains("forbidden")
+    {
+        return Some(
+            "The collector is being blocked by permissions. Run Inferra with the needed OS/runtime permissions or narrow this collector's configured scope."
+                .into(),
+        );
+    }
+    if lower.contains("no such file")
+        || lower.contains("cannot find")
+        || lower.contains("not found")
+        || lower.contains("does not exist")
+    {
+        return Some(match collector_id {
+            "file" | "linux_syslog" => {
+                "A configured log path is missing or unreachable. Check the collector paths in inferra.toml and remove stale targets.".into()
+            }
+            "journald" => {
+                "The journald collector cannot find journalctl or journal data on this host. Disable it on non-systemd hosts or install journalctl.".into()
+            }
+            "kubernetes" => {
+                "The Kubernetes collector cannot find kubectl or cluster data. Check kubectl installation, kubeconfig, and cluster access.".into()
+            }
+            _ => "A required collector resource was not found. Check this collector's configuration and host dependencies.".into(),
+        });
+    }
+    match collector_id {
+        "docker" => Some(
+            "Docker collection depends on a reachable Docker daemon or socket. Start Docker Desktop/daemon if this host uses Docker, or disable the Docker collector for this host."
+                .into(),
+        ),
+        "kubernetes" => Some(
+            "Kubernetes collection depends on kubectl, kubeconfig, and RBAC permissions for pods/events in the configured namespaces."
+                .into(),
+        ),
+        "windows_eventlog" => Some(
+            "Windows Event Log collection can fail when channels are missing or restricted. Verify configured channels and run with sufficient permissions."
+                .into(),
+        ),
+        "windows_service" => Some(
+            "Windows service collection can fail when service queries are restricted. Verify service names and local service-control permissions."
+                .into(),
+        ),
+        "journald" => Some(
+            "Journald collection requires journalctl and readable systemd journal data. Disable it on Windows/non-systemd hosts."
+                .into(),
+        ),
+        "linux_syslog" => Some(
+            "Linux syslog collection requires readable syslog files. Disable it on Windows or update paths for this host."
+                .into(),
+        ),
+        "file" => Some(
+            "File collection tails configured paths. Confirm each path exists, is readable, and is not locked by another process."
+                .into(),
+        ),
+        "app" if lower.contains("address already in use") || lower.contains("bind") => Some(
+            "The app ingest listener could not bind its configured address. Change the app collector port or stop the process using it."
+                .into(),
+        ),
+        _ => source_type.map(|source| {
+            format!(
+                "The {source} collector reported an error. Copy the collector report and inspect the log query linked for this collector."
+            )
+        }),
+    }
 }
 
 async fn api_collectors_start(
@@ -2418,13 +2502,6 @@ async fn api_workspace_app_logs(
 fn workspace_app_raw_logs(app: &WorkspaceRuntimeApp, limit: usize) -> Vec<JsonValue> {
     let mut logs = Vec::new();
     let mut read_pm2 = false;
-    if matches!(app.manager.as_deref(), Some("pm2")) {
-        logs.extend(pm2_app_raw_logs(app, limit));
-        read_pm2 = true;
-        if logs.len() >= limit {
-            return logs;
-        }
-    }
     for source in &app.log_sources {
         match source.kind.as_str() {
             "file" => append_file_raw_logs(&mut logs, source, limit),
@@ -2437,6 +2514,9 @@ fn workspace_app_raw_logs(app: &WorkspaceRuntimeApp, limit: usize) -> Vec<JsonVa
         if logs.len() >= limit {
             return logs;
         }
+    }
+    if matches!(app.manager.as_deref(), Some("pm2")) && !read_pm2 {
+        logs.extend(pm2_app_raw_logs(app, limit.saturating_sub(logs.len())));
     }
     logs
 }
@@ -2491,7 +2571,7 @@ fn pm2_app_raw_logs(app: &WorkspaceRuntimeApp, limit: usize) -> Vec<JsonValue> {
         "--lines",
         &lines_arg,
     ];
-    let Some(output) = command_output_with_timeout("pm2", &args, 1_500) else {
+    let Some(output) = command_output_with_timeout("pm2", &args, 5_000) else {
         return Vec::new();
     };
     let mut out = Vec::new();
@@ -2537,7 +2617,7 @@ fn command_output_with_timeout(
     args: &[&str],
     timeout_ms: u64,
 ) -> Option<std::process::Output> {
-    let mut child = Command::new(program).args(args).spawn().ok()?;
+    let mut child = spawn_command(program, args).ok()?;
     let started = std::time::Instant::now();
     loop {
         match child.try_wait() {
@@ -2555,6 +2635,33 @@ fn command_output_with_timeout(
             }
         }
     }
+}
+
+fn spawn_command(program: &str, args: &[&str]) -> std::io::Result<std::process::Child> {
+    let mut last_error = None;
+    for candidate in command_candidates(program) {
+        match Command::new(&candidate)
+            .args(args)
+            .stdout(std::process::Stdio::piped())
+            .stderr(std::process::Stdio::piped())
+            .spawn()
+        {
+            Ok(child) => return Ok(child),
+            Err(error) => last_error = Some(error),
+        }
+    }
+    Err(last_error
+        .unwrap_or_else(|| std::io::Error::new(std::io::ErrorKind::NotFound, "command not found")))
+}
+
+fn command_candidates(program: &str) -> Vec<String> {
+    let mut candidates = vec![program.to_string()];
+    if cfg!(windows) && Path::new(program).extension().is_none() {
+        candidates.push(format!("{program}.cmd"));
+        candidates.push(format!("{program}.exe"));
+        candidates.push(format!("{program}.bat"));
+    }
+    candidates
 }
 
 fn tail_text_lines(path: &Path, limit: usize, max_bytes: u64) -> std::io::Result<Vec<String>> {
@@ -2810,7 +2917,7 @@ async fn run_investigation_response(
         "sanitized_user_prompt": user_prompt,
         "allowed_fields": ["mode", "incident", "hypotheses", "events", "services", "runtime", "workspace", "user_question", "constraints", "runtime_monitor", "host_resources", "evidence_digest", "similar_incidents", "operator_memory"],
         "blocked_fields": ["raw_event_messages", "env_values", "ip_addresses", "secrets"],
-        "raw_logs_sent": false,
+        "raw_logs_sent": raw_workspace_logs_sent_to_ai(bundle, config),
         "schema_version": 1,
     });
     let mut warnings = Vec::new();
@@ -3243,6 +3350,46 @@ fn persist_ai_generation(
     Ok(generation)
 }
 
+fn finalize_ai_generation_response_lossy(
+    paths: &Paths,
+    bundle: &JsonValue,
+    mut response: JsonValue,
+    focus: &str,
+    mode: &str,
+    question: &str,
+    report: bool,
+) -> JsonValue {
+    if let Ok(Some(audit)) = persist_investigation_artifacts(paths, bundle, &response) {
+        response["audit"] = audit;
+    }
+    response["focus"] = JsonValue::String(focus.to_string());
+    response["mode"] = JsonValue::String(mode.to_string());
+    if !question.trim().is_empty() {
+        response["question"] = JsonValue::String(question.to_string());
+    }
+    if report {
+        response["report"] = JsonValue::Bool(true);
+    }
+    let scope_key = ai_generation_scope_key(focus, mode, question, report);
+    if let Ok(generation) =
+        persist_ai_generation(paths, &scope_key, focus, mode, question, bundle, &response)
+    {
+        response["ai_generation"] = ai_generation_metadata_json(&generation);
+    }
+    let _ = persist_ui_snapshot(
+        paths,
+        SNAPSHOT_AI_INVESTIGATION,
+        &json!({
+            "focus": focus,
+            "mode": mode,
+            "response": response.clone(),
+        }),
+        UI_SNAPSHOT_SOURCE_CORE,
+        None,
+    );
+    response
+}
+
 fn ai_generation_metadata_json(generation: &StoredAiGeneration) -> JsonValue {
     json!({
         "generation_id": generation.generation_id,
@@ -3471,6 +3618,7 @@ fn build_investigation_bundle(
             } else {
                 vec![]
             };
+            let raw_logs = workspace_app_raw_logs(&app, 80);
             let services = overview.dashboard.services.unwrap_or_default();
             Ok(json!({
                 "mode": mode,
@@ -3493,9 +3641,11 @@ fn build_investigation_bundle(
                     "detected_signal_count": app.signals.len(),
                     "app_state": app.app_state.clone(),
                     "resources": app.resources.clone(),
+                    "resource_semantics": workspace_resource_semantics(),
                     "location": app.app_location.clone(),
                     "context_capabilities": app.context_capabilities.clone(),
                     "matching_event_count": events.len(),
+                    "raw_log_sample_count": raw_logs.len(),
                     "operator_question": question,
                 },
                 "incident": JsonValue::Null,
@@ -3517,9 +3667,11 @@ fn build_investigation_bundle(
                         "health_endpoint": app.health_endpoint.clone(),
                         "state": app.app_state.clone(),
                         "resources": app.resources.clone(),
+                        "resource_semantics": workspace_resource_semantics(),
                         "location": app.app_location.clone(),
                         "capabilities": app.context_capabilities.clone(),
                         "app_structure": app.app_structure.clone(),
+                        "raw_logs": raw_logs,
                     },
                 },
                 "user_question": question,
@@ -3552,6 +3704,15 @@ fn resolve_monitor_seconds(
         "investigation_monitor_seconds",
         5,
     )
+}
+
+fn workspace_resource_semantics() -> JsonValue {
+    json!({
+        "resources.cpu_percent": "estimated percentage of total host CPU used by this app/process",
+        "resources.cpu_raw_percent": "raw process CPU reading from the runtime, usually single-core-equivalent percent",
+        "resources.cpu_percent_scope": "host_total means the displayed cpu_percent is normalized against logical processors",
+        "host_resources.global_cpu_percent": "authoritative total-machine CPU usage for the investigation window",
+    })
 }
 
 fn operator_memory_scope_keys(focus: &str) -> Vec<String> {
@@ -4041,19 +4202,39 @@ fn is_local_base_url(base_url: &str) -> bool {
 
 fn redact_bundle_for_ai(bundle: &JsonValue, config: &TomlValue) -> JsonValue {
     let mut redacted = bundle.clone();
-    let redact_raw_logs = config
-        .get("ai")
-        .and_then(|value| value.get("redact_raw_logs"))
-        .and_then(|value| value.as_bool())
-        .unwrap_or(true);
-    if redact_raw_logs {
+    if ai_redact_raw_logs(config) {
         if let Some(events) = redacted.get_mut("events").and_then(JsonValue::as_array_mut) {
             for event in events.iter_mut() {
                 *event = summarize_event_for_ai(event);
             }
         }
+        if let Some(raw_logs) = redacted
+            .pointer_mut("/workspace/selected_app_context/raw_logs")
+            .and_then(JsonValue::as_array_mut)
+        {
+            for log in raw_logs.iter_mut() {
+                *log = summarize_raw_log_for_ai(log);
+            }
+        }
     }
     redacted
+}
+
+fn ai_redact_raw_logs(config: &TomlValue) -> bool {
+    config
+        .get("ai")
+        .and_then(|value| value.get("redact_raw_logs"))
+        .and_then(|value| value.as_bool())
+        .unwrap_or(true)
+}
+
+fn raw_workspace_logs_sent_to_ai(bundle: &JsonValue, config: &TomlValue) -> bool {
+    !ai_redact_raw_logs(config)
+        && bundle
+            .pointer("/workspace/selected_app_context/raw_logs")
+            .and_then(JsonValue::as_array)
+            .map(|items| !items.is_empty())
+            .unwrap_or(false)
 }
 
 fn summarize_event_for_ai(event: &JsonValue) -> JsonValue {
@@ -4080,6 +4261,82 @@ fn summarize_event_for_ai(event: &JsonValue) -> JsonValue {
             .cloned()
             .unwrap_or(JsonValue::Null),
     })
+}
+
+fn summarize_raw_log_for_ai(log: &JsonValue) -> JsonValue {
+    let line = log
+        .get("line")
+        .and_then(JsonValue::as_str)
+        .unwrap_or_default();
+    let summary = mask_sensitive_log_text(if line.len() > 320 {
+        format!("{}...", &line[..317])
+    } else {
+        line.to_string()
+    });
+    let source = log
+        .get("source")
+        .and_then(JsonValue::as_object)
+        .map(|source| {
+            json!({
+                "kind": source.get("kind").cloned().unwrap_or(JsonValue::Null),
+                "label": source.get("label").cloned().unwrap_or(JsonValue::Null),
+                "source": source.get("source").cloned().unwrap_or(JsonValue::Null),
+                "path": source.get("path").cloned().unwrap_or(JsonValue::Null),
+                "stream": source.get("stream").cloned().unwrap_or(JsonValue::Null),
+            })
+        })
+        .unwrap_or(JsonValue::Null);
+    json!({
+        "source": source,
+        "summary": summary,
+        "line_number_from_tail": log.get("line_number_from_tail").cloned().unwrap_or(JsonValue::Null),
+        "sampled_at": log.get("sampled_at").cloned().unwrap_or(JsonValue::Null),
+    })
+}
+
+fn mask_sensitive_log_text(text: String) -> String {
+    let mut redact_next = false;
+    text.split_whitespace()
+        .map(|token| {
+            if redact_next {
+                redact_next = false;
+                return "[REDACTED]".to_string();
+            }
+            let lower = token.to_ascii_lowercase();
+            if contains_sensitive_key(&lower) {
+                if let Some(pos) = token.find('=') {
+                    return format!("{}=[REDACTED]", &token[..pos]);
+                }
+                if let Some(pos) = token.find(':') {
+                    return format!("{}:[REDACTED]", &token[..pos]);
+                }
+                return "[REDACTED]".to_string();
+            }
+            if lower == "bearer" {
+                redact_next = true;
+                return "Bearer".to_string();
+            }
+            token.to_string()
+        })
+        .collect::<Vec<_>>()
+        .join(" ")
+}
+
+fn contains_sensitive_key(value: &str) -> bool {
+    [
+        "password",
+        "passwd",
+        "secret",
+        "token",
+        "api_key",
+        "apikey",
+        "access_key",
+        "authorization",
+        "cookie",
+        "session",
+    ]
+    .iter()
+    .any(|needle| value.contains(needle))
 }
 
 fn extract_json_object(raw: &str) -> Option<JsonValue> {
@@ -5372,6 +5629,43 @@ enabled = false
         let _ = std::fs::remove_dir_all(root);
     }
 
+    #[test]
+    fn redacted_ai_bundle_keeps_workspace_raw_log_context_without_secrets() {
+        let config: TomlValue = r#"
+[ai]
+redact_raw_logs = true
+"#
+        .parse()
+        .expect("parse config");
+        let bundle = json!({
+            "workspace": {
+                "selected_app_context": {
+                    "raw_logs": [{
+                        "source": {"kind": "file", "label": "App log", "path": "logs/app.log", "source": "project"},
+                        "line": "failed login password=hunter2 bearer abc123 token:secret",
+                        "line_number_from_tail": 1,
+                        "sampled_at": "2026-05-14T00:00:00Z"
+                    }]
+                }
+            }
+        });
+        let redacted = redact_bundle_for_ai(&bundle, &config);
+        let raw_logs = redacted
+            .pointer("/workspace/selected_app_context/raw_logs")
+            .and_then(JsonValue::as_array)
+            .expect("raw logs");
+        let summary = raw_logs[0]
+            .get("summary")
+            .and_then(JsonValue::as_str)
+            .expect("summary");
+        assert!(summary.contains("password=[REDACTED]"));
+        assert!(summary.contains("Bearer [REDACTED]"));
+        assert!(summary.contains("token:[REDACTED]"));
+        assert!(!summary.contains("hunter2"));
+        assert!(!summary.contains("abc123"));
+        assert!(raw_logs[0].get("line").is_none());
+    }
+
     async fn get_json(app: Router, path: &str) -> JsonValue {
         let response = app
             .oneshot(
@@ -5900,6 +6194,61 @@ enabled = false
         let cached_payload: JsonValue =
             serde_json::from_slice(&cached_body).expect("parse cached json");
         assert_eq!(cached_payload.get("cached"), Some(&JsonValue::Bool(true)));
+    }
+
+    #[tokio::test]
+    async fn ai_investigate_stream_persists_disabled_fallback_generation() {
+        let app = app_router(seeded_test_state("ai-stream-fallback-save", false));
+        let response = app
+            .clone()
+            .oneshot(
+                Request::builder()
+                    .method("POST")
+                    .uri("/api/ai/investigate-stream")
+                    .header(header::CONTENT_TYPE, "application/json")
+                    .body(Body::from(
+                        serde_json::to_vec(&json!({
+                            "question": "what should I inspect first?",
+                            "scope": "latest",
+                            "mode": "operator",
+                            "monitor_seconds": 0,
+                        }))
+                        .expect("serialize request"),
+                    ))
+                    .expect("build request"),
+            )
+            .await
+            .expect("stream response");
+        assert_eq!(response.status(), StatusCode::OK);
+        let body = axum::body::to_bytes(response.into_body(), usize::MAX)
+            .await
+            .expect("read stream body");
+        let text = String::from_utf8(body.to_vec()).expect("stream body utf8");
+        let done_block = text
+            .split("\n\n")
+            .find(|block| block.contains("event: done"))
+            .expect("done event");
+        let done_data = done_block
+            .lines()
+            .find_map(|line| line.strip_prefix("data: "))
+            .expect("done data");
+        let payload: JsonValue = serde_json::from_str(done_data).expect("parse done data");
+        assert_eq!(payload.get("used_ai"), Some(&JsonValue::Bool(false)));
+        assert_eq!(
+            payload.get("focus"),
+            Some(&JsonValue::String("incident:inc-1".into()))
+        );
+        assert!(payload
+            .get("ai_generation")
+            .and_then(JsonValue::as_object)
+            .is_some());
+
+        let saved_generations =
+            get_json(app, "/api/ai/generations?scope=incident:inc-1&limit=5").await;
+        assert!(saved_generations
+            .get("generations")
+            .and_then(JsonValue::as_array)
+            .is_some_and(|items| !items.is_empty()));
     }
 
     #[tokio::test]

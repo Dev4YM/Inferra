@@ -5,7 +5,7 @@ services:
       dockerfile: Dockerfile
     image: inferra:local
     ports:
-      - "7433:7433"
+      - "127.0.0.1:7433:7433"
     volumes:
       - inferra-data:/data
       - ./deploy/examples/inferra.container.toml:/etc/inferra/inferra.toml:ro
