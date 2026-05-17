@@ -1,4 +1,4 @@
-import { Activity, AlertTriangle, CheckCircle2, CircleOff, Eye, RefreshCcw, Sparkles, ThumbsDown, Undo2 } from "lucide-react";
+import { Activity, AlertTriangle, CheckCircle2, CircleOff, Eye, RefreshCcw, Sparkles, ThumbsDown, Undo2, Waypoints } from "lucide-react";
 import { useMemo, useState } from "react";
 import { Link, useParams } from "react-router-dom";
 import { toast } from "sonner";
@@ -28,9 +28,11 @@ import { InvestigationView } from "@/components/investigation/investigation-view
 import { AlternativeHypotheses, HypothesisPanel, SuggestedChecks } from "@/components/inferra/incident";
 import { IncidentStateTimeline } from "@/components/inferra/timeline";
 import { RuntimeStatusCard } from "@/components/inferra/health";
+import { TraceSummaryInline } from "@/components/inferra/trace-summary";
 import type { Mode } from "@/lib/experience";
 import { isAdvancedMode } from "@/lib/experience";
 import { formatDisplayValue, formatRiskTone, formatSeverity, formatSeverityLabel, formatRelativeDate, summarizeEvent } from "@/lib/format";
+import { buildTracePath } from "@/lib/observability";
 import { useApiMutation, useApiQuery } from "@/lib/query";
 
 export function IncidentsPage({ mode }: { mode: Mode }) {
@@ -82,6 +84,7 @@ export function IncidentsPage({ mode }: { mode: Mode }) {
                 <Th>Severity</Th>
                 <Th>Primary service</Th>
                 <Th>Events</Th>
+                <Th>Latest trace</Th>
                 <Th>Updated</Th>
               </tr>
             </thead>
@@ -99,6 +102,13 @@ export function IncidentsPage({ mode }: { mode: Mode }) {
                   </Td>
                   <Td>{incident.primary_service || "—"}</Td>
                   <Td>{incident.event_count ?? 0}</Td>
+                  <Td>
+                    <TraceSummaryInline
+                      summary={incident.latest_trace_summary}
+                      context={{ from: "incident", incidentId: incident.incident_id }}
+                      emptyLabel="—"
+                    />
+                  </Td>
                   <Td className="text-muted-foreground">{formatRelativeDate(incident.updated_at)}</Td>
                 </tr>
               ))}
@@ -558,10 +568,28 @@ export function IncidentDetailPage({ mode }: { mode: Mode }) {
                 detail.data.events.slice(0, 12).map((event) => (
                   <div key={event.event_id} className="rounded-2xl border border-border/60 bg-background/30 p-4">
                     <div className="flex flex-wrap items-center justify-between gap-2">
-                      <Badge variant={formatRiskTone(formatSeverity(event.severity))}>{formatSeverityLabel(event.severity)}</Badge>
+                      <div className="flex flex-wrap items-center gap-2">
+                        <Badge variant={formatRiskTone(formatSeverity(event.severity))}>{formatSeverityLabel(event.severity)}</Badge>
+                        {event.service_id ? <Badge variant="outline">{event.service_id}</Badge> : null}
+                        {event.trace_id ? (
+                          <Badge variant="outline" className="font-mono text-[10px]">
+                            {shortTraceId(event.trace_id)}
+                          </Badge>
+                        ) : null}
+                      </div>
                       <span className="text-xs text-muted-foreground">{formatRelativeDate(event.timestamp)}</span>
                     </div>
                     <p className="mt-2 text-sm">{summarizeEvent(event)}</p>
+                    {event.trace_id ? (
+                      <div className="mt-3">
+                        <Button variant="outline" size="sm" asChild>
+                          <Link to={buildTracePath(event.trace_id, { from: "incident", incidentId })}>
+                            <Waypoints className="size-4" />
+                            Open trace
+                          </Link>
+                        </Button>
+                      </div>
+                    ) : null}
                   </div>
                 ))
               ) : (
@@ -802,4 +830,9 @@ function asRecord(value: unknown): Record<string, unknown> | null {
 
 function arrayOfStrings(value: unknown): string[] {
   return Array.isArray(value) ? value.filter((item): item is string => typeof item === "string") : [];
+}
+
+function shortTraceId(traceId: string): string {
+  if (traceId.length <= 16) return traceId;
+  return `${traceId.slice(0, 8)}...${traceId.slice(-8)}`;
 }

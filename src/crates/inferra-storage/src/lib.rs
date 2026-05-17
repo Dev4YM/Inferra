@@ -1,10 +1,12 @@
 //! SQLite access compatible with the historical Python `events.db` and `incidents.db`.
 
 use anyhow::{Context, Result};
-use inferra_contracts::{EventRow, EventSourceRef, HypothesisRow, IncidentRow, SeverityValue};
+use inferra_contracts::{
+    EventRow, EventSourceRef, HypothesisRow, IncidentRow, SeverityValue, TraceSummary,
+};
 use rusqlite::{Connection, OptionalExtension, Row, Transaction};
 use serde_json::Value;
-use std::collections::HashMap;
+use std::collections::{HashMap, HashSet};
 use std::fs;
 use std::path::Path;
 use time::{Duration, OffsetDateTime};
@@ -16,6 +18,159 @@ pub struct ServiceStats {
     pub error_count: i64,
     pub last_event_at: Option<String>,
 }
+
+/// Filters for `/api/logs`, `/api/v2/logs`, and CLI event listing.
+#[derive(Debug, Clone)]
+pub struct LogsQuery {
+    pub limit: usize,
+    pub retention_hours: i64,
+    pub service_id: Option<String>,
+    pub min_severity: Option<i64>,
+    pub search: Option<String>,
+    pub source_type: Option<String>,
+    pub trace_id: Option<String>,
+    /// Filter on allowlisted indexed attributes (`event_attributes`), e.g. `http.status_code`.
+    pub attr_key: Option<String>,
+    pub attr_value: Option<String>,
+    pub timestamp_after: Option<String>,
+    pub timestamp_before: Option<String>,
+    pub cursor_timestamp: Option<String>,
+    pub cursor_event_id: Option<String>,
+    /// Full-text query (`q=` on v2). When [`Self::log_fts_enabled`] is true, uses FTS5 `MATCH`;
+    /// otherwise falls back to `LIKE` on `message` (same as [`Self::search`]).
+    pub fts_query: Option<String>,
+    pub log_fts_enabled: bool,
+}
+
+impl Default for LogsQuery {
+    fn default() -> Self {
+        Self {
+            limit: 100,
+            retention_hours: 72,
+            service_id: None,
+            min_severity: None,
+            search: None,
+            source_type: None,
+            trace_id: None,
+            attr_key: None,
+            attr_value: None,
+            timestamp_after: None,
+            timestamp_before: None,
+            cursor_timestamp: None,
+            cursor_event_id: None,
+            fts_query: None,
+            log_fts_enabled: false,
+        }
+    }
+}
+
+const MAX_INDEXED_ATTR_TEXT_LEN: usize = 1024;
+const MAX_FTS_RAW_QUERY_LEN: usize = 512;
+const MAX_FTS_TOKEN_LEN: usize = 64;
+const MAX_FTS_TOKEN_COUNT: usize = 8;
+
+/// Sanitize user `q=` input into a conservative FTS5 `MATCH` expression (AND of word tokens).
+fn sanitize_fts_match_input(raw: &str) -> Option<String> {
+    let raw = raw.trim();
+    if raw.is_empty() || raw.len() > MAX_FTS_RAW_QUERY_LEN {
+        return None;
+    }
+    let mut parts = Vec::new();
+    for word in raw.split_whitespace() {
+        let token: String = word
+            .chars()
+            .filter(|c| c.is_alphanumeric() || *c == '_')
+            .take(MAX_FTS_TOKEN_LEN)
+            .collect();
+        if !token.is_empty() {
+            parts.push(token);
+        }
+        if parts.len() >= MAX_FTS_TOKEN_COUNT {
+            break;
+        }
+    }
+    if parts.is_empty() {
+        None
+    } else {
+        Some(parts.join(" AND "))
+    }
+}
+
+fn attribute_map_from_structured(data: Option<&Value>) -> Option<&serde_json::Map<String, Value>> {
+    let root = data?.as_object()?;
+    root.get("attributes")?.as_object()
+}
+
+fn truncate_indexed_attr_text(s: &str) -> String {
+    s.chars().take(MAX_INDEXED_ATTR_TEXT_LEN).collect()
+}
+
+fn json_scalar_to_event_attr_columns(value: &Value) -> (Option<String>, Option<f64>, Option<i64>) {
+    match value {
+        Value::String(s) => (Some(truncate_indexed_attr_text(s)), None, None),
+        Value::Bool(b) => (None, None, Some(if *b { 1 } else { 0 })),
+        Value::Number(n) => {
+            if let Some(i) = n.as_i64() {
+                (None, None, Some(i))
+            } else if let Some(u) = n.as_u64() {
+                (None, None, Some(u as i64))
+            } else if let Some(f) = n.as_f64() {
+                if f.is_finite() && f.fract() == 0.0 && f.abs() < (i64::MAX as f64) {
+                    (None, None, Some(f as i64))
+                } else {
+                    (None, Some(f), None)
+                }
+            } else {
+                (None, None, None)
+            }
+        }
+        Value::Null => (None, None, None),
+        other => {
+            let rendered = other.to_string();
+            (Some(truncate_indexed_attr_text(&rendered)), None, None)
+        }
+    }
+}
+
+fn insert_event_indexed_attributes(
+    tx: &Transaction<'_>,
+    event_id: &str,
+    structured_data: Option<&Value>,
+    keys: &[String],
+) -> Result<()> {
+    if keys.is_empty() {
+        return Ok(());
+    }
+    let Some(attrs) = attribute_map_from_structured(structured_data) else {
+        return Ok(());
+    };
+    let mut stmt = tx
+        .prepare(
+            "INSERT OR REPLACE INTO event_attributes (event_id, attr_key, attr_value_text, attr_value_num, attr_value_int)
+             VALUES (?1, ?2, ?3, ?4, ?5)",
+        )
+        .context("prepare event_attributes insert")?;
+    for raw_key in keys {
+        let key = raw_key.trim();
+        if key.is_empty() {
+            continue;
+        }
+        let Some(value) = attrs.get(key) else {
+            continue;
+        };
+        let (text, num, intv) = json_scalar_to_event_attr_columns(value);
+        if text.is_none() && num.is_none() && intv.is_none() {
+            continue;
+        }
+        stmt
+            .execute(rusqlite::params![event_id, key, text, num, intv])
+            .context("insert event_attributes row")?;
+    }
+    Ok(())
+}
+
+const EVENT_ROW_SELECT: &str = "event_id, timestamp, severity, service_id, message, source_type, tags, \
+     trace_id, span_id, signal_kind, deployment_environment, severity_text";
 
 #[derive(Debug, Clone)]
 pub struct NewEventRecord {
@@ -35,6 +190,11 @@ pub struct NewEventRecord {
     pub quality: Option<String>,
     pub structured_data: Option<Value>,
     pub raw_offset: Option<i64>,
+    pub trace_id: Option<String>,
+    pub span_id: Option<String>,
+    pub signal_kind: String,
+    pub deployment_environment: Option<String>,
+    pub severity_text: Option<String>,
 }
 
 impl NewEventRecord {
@@ -66,6 +226,11 @@ impl NewEventRecord {
             quality: None,
             structured_data: None,
             raw_offset: None,
+            trace_id: None,
+            span_id: None,
+            signal_kind: "log".into(),
+            deployment_environment: None,
+            severity_text: None,
         }
     }
 }
@@ -386,6 +551,8 @@ pub struct IngestGovernance {
     pub always_keep_severity: i64,
     pub blocklist: Vec<GovernanceRule>,
     pub allowlist: Vec<GovernanceRule>,
+    /// Keys under `attributes` in `structured_data` copied into `event_attributes` on insert.
+    pub indexed_attribute_keys: Vec<String>,
 }
 
 impl Default for IngestGovernance {
@@ -403,6 +570,7 @@ impl Default for IngestGovernance {
             always_keep_severity: 3,
             blocklist: Vec::new(),
             allowlist: Vec::new(),
+            indexed_attribute_keys: Vec::new(),
         }
     }
 }
@@ -490,10 +658,10 @@ impl EventsStore {
     pub fn latest_events(&self, limit: usize) -> Result<Vec<EventRow>> {
         let mut stmt = self
             .conn
-            .prepare(
-                "SELECT event_id, timestamp, severity, service_id, message, source_type, tags \
-                 FROM events ORDER BY timestamp DESC LIMIT ?1",
-            )
+            .prepare(&format!(
+                "SELECT {EVENT_ROW_SELECT} \
+                 FROM events ORDER BY timestamp DESC LIMIT ?1"
+            ))
             .context("prepare latest events")?;
         let rows = stmt
             .query_map(rusqlite::params![limit as i64], event_row_from_row)
@@ -506,13 +674,58 @@ impl EventsStore {
         Ok(out)
     }
 
-    pub fn get_event(&self, event_id: &str) -> Result<Option<EventRow>> {
+    /// Latest `(timestamp, event_id)` lexicographic key (for export cursor seeding).
+    pub fn max_event_cursor(&self) -> Result<Option<(String, String)>> {
         let mut stmt = self
             .conn
             .prepare(
-                "SELECT event_id, timestamp, severity, service_id, message, source_type, tags \
-                 FROM events WHERE event_id = ?1",
+                "SELECT timestamp, event_id FROM events ORDER BY timestamp DESC, event_id DESC LIMIT 1",
             )
+            .context("prepare max event cursor")?;
+        let mut rows = stmt.query([])?;
+        let Some(row) = rows.next()? else {
+            return Ok(None);
+        };
+        let ts: String = row.get(0)?;
+        let id: String = row.get(1)?;
+        Ok(Some((ts, id)))
+    }
+
+    /// Events strictly after `(after_timestamp, after_event_id)` in time order (export forwarder).
+    pub fn events_after_cursor(
+        &self,
+        after_timestamp: &str,
+        after_event_id: &str,
+        limit: usize,
+    ) -> Result<Vec<EventRow>> {
+        let lim = limit.clamp(1, 2000) as i64;
+        let mut stmt = self
+            .conn
+            .prepare(&format!(
+                "SELECT {EVENT_ROW_SELECT} FROM events \
+                 WHERE (timestamp > ?1) OR (timestamp = ?1 AND (?2 = '' OR event_id > ?2)) \
+                 ORDER BY timestamp ASC, event_id ASC LIMIT ?3"
+            ))
+            .context("prepare events after cursor")?;
+        let rows = stmt
+            .query_map(
+                rusqlite::params![after_timestamp, after_event_id, lim],
+                event_row_from_row,
+            )
+            .context("query events after cursor")?;
+        let mut out = Vec::new();
+        for row in rows {
+            out.push(row?);
+        }
+        Ok(out)
+    }
+
+    pub fn get_event(&self, event_id: &str) -> Result<Option<EventRow>> {
+        let mut stmt = self
+            .conn
+            .prepare(&format!(
+                "SELECT {EVENT_ROW_SELECT} FROM events WHERE event_id = ?1"
+            ))
             .context("prepare event detail")?;
         let mut rows = stmt.query(rusqlite::params![event_id])?;
         let Some(row) = rows.next()? else {
@@ -530,7 +743,7 @@ impl EventsStore {
             .collect::<Vec<_>>()
             .join(", ");
         let sql = format!(
-            "SELECT event_id, timestamp, severity, service_id, message, source_type, tags \
+            "SELECT {EVENT_ROW_SELECT} \
              FROM events WHERE event_id IN ({placeholders})"
         );
         let mut stmt = self
@@ -562,10 +775,10 @@ impl EventsStore {
     pub fn events_for_service(&self, service_id: &str, limit: usize) -> Result<Vec<EventRow>> {
         let mut stmt = self
             .conn
-            .prepare(
-                "SELECT event_id, timestamp, severity, service_id, message, source_type, tags \
-                 FROM events WHERE service_id = ?1 ORDER BY timestamp DESC LIMIT ?2",
-            )
+            .prepare(&format!(
+                "SELECT {EVENT_ROW_SELECT} \
+                 FROM events WHERE service_id = ?1 ORDER BY timestamp DESC LIMIT ?2"
+            ))
             .context("prepare service events")?;
         let rows = stmt
             .query_map(
@@ -581,45 +794,255 @@ impl EventsStore {
         Ok(out)
     }
 
-    pub fn query_logs(
-        &self,
-        limit: usize,
-        service: Option<&str>,
-        min_severity: Option<i64>,
-        search: Option<&str>,
-        source_type: Option<&str>,
-    ) -> Result<Vec<EventRow>> {
-        let mut sql = String::from(
-            "SELECT event_id, timestamp, severity, service_id, message, source_type, tags \
-             FROM events WHERE 1=1 AND timestamp >= datetime('now', '-24 hours')",
-        );
-        let mut params: Vec<rusqlite::types::Value> = Vec::new();
+    pub fn latest_trace_summary_for_service(&self, service_id: &str) -> Result<Option<TraceSummary>> {
+        let latest = self
+            .conn
+            .query_row(
+                "SELECT trace_id, timestamp, service_id, source_type, severity, message, signal_kind, deployment_environment
+                 FROM events
+                 WHERE service_id = ?1
+                   AND trace_id IS NOT NULL
+                   AND trim(trace_id) != ''
+                 ORDER BY timestamp DESC, event_id DESC
+                 LIMIT 1",
+                rusqlite::params![service_id],
+                trace_summary_seed_from_row,
+            )
+            .optional()
+            .context("query latest trace summary for service")?;
+        let Some(mut summary) = latest else {
+            return Ok(None);
+        };
+        summary.event_count = self
+            .conn
+            .query_row(
+                "SELECT COUNT(*) FROM events
+                 WHERE service_id = ?1
+                   AND trace_id IS NOT NULL
+                   AND lower(trace_id) = lower(?2)",
+                rusqlite::params![service_id, summary.trace_id],
+                |row| row.get(0),
+            )
+            .context("count latest trace summary service events")?;
+        Ok(Some(summary))
+    }
 
-        if let Some(service) = service.filter(|value| !value.trim().is_empty()) {
+    pub fn latest_trace_summary_for_event_ids(
+        &self,
+        event_ids: &[String],
+    ) -> Result<Option<TraceSummary>> {
+        if event_ids.is_empty() {
+            return Ok(None);
+        }
+        let mut seen = HashSet::new();
+        let unique = event_ids
+            .iter()
+            .filter_map(|event_id| {
+                if seen.insert(event_id.clone()) {
+                    Some(event_id.clone())
+                } else {
+                    None
+                }
+            })
+            .collect::<Vec<_>>();
+        let placeholders = (0..unique.len())
+            .map(|idx| format!("?{}", idx + 1))
+            .collect::<Vec<_>>()
+            .join(", ");
+        let latest_sql = format!(
+            "SELECT trace_id, timestamp, service_id, source_type, severity, message, signal_kind, deployment_environment
+             FROM events
+             WHERE event_id IN ({placeholders})
+               AND trace_id IS NOT NULL
+               AND trim(trace_id) != ''
+             ORDER BY timestamp DESC, event_id DESC
+             LIMIT 1"
+        );
+        let latest = self
+            .conn
+            .query_row(
+                &latest_sql,
+                rusqlite::params_from_iter(unique.iter()),
+                trace_summary_seed_from_row,
+            )
+            .optional()
+            .context("query latest trace summary for incident events")?;
+        let Some(mut summary) = latest else {
+            return Ok(None);
+        };
+        let count_sql = format!(
+            "SELECT COUNT(*) FROM events
+             WHERE event_id IN ({placeholders})
+               AND trace_id IS NOT NULL
+               AND lower(trace_id) = lower(?{})",
+            unique.len() + 1
+        );
+        let mut params: Vec<rusqlite::types::Value> =
+            unique.iter().cloned().map(Into::into).collect();
+        params.push(summary.trace_id.clone().into());
+        summary.event_count = self
+            .conn
+            .query_row(&count_sql, rusqlite::params_from_iter(params), |row| row.get(0))
+            .context("count latest trace summary incident events")?;
+        Ok(Some(summary))
+    }
+
+    fn push_log_query_filters(
+        sql: &mut String,
+        params: &mut Vec<rusqlite::types::Value>,
+        query: &LogsQuery,
+        retention_if_no_explicit_start: Option<i64>,
+    ) {
+        if let Some(start) = query
+            .timestamp_after
+            .as_deref()
+            .map(str::trim)
+            .filter(|value| !value.is_empty())
+        {
+            sql.push_str(" AND timestamp >= ?");
+            sql.push_str(&(params.len() + 1).to_string());
+            params.push(start.to_string().into());
+        } else if let Some(retention) = retention_if_no_explicit_start {
+            let retention = retention.max(1);
+            sql.push_str(&format!(
+                " AND timestamp >= datetime('now', '-{retention} hours')"
+            ));
+        }
+
+        if let Some(end) = query
+            .timestamp_before
+            .as_deref()
+            .map(str::trim)
+            .filter(|value| !value.is_empty())
+        {
+            sql.push_str(" AND timestamp < ?");
+            sql.push_str(&(params.len() + 1).to_string());
+            params.push(end.to_string().into());
+        }
+
+        if let (Some(cts), Some(cid)) = (&query.cursor_timestamp, &query.cursor_event_id) {
+            let cts = cts.trim();
+            let cid = cid.trim();
+            if !cts.is_empty() && !cid.is_empty() {
+                sql.push_str(" AND (timestamp < ?");
+                sql.push_str(&(params.len() + 1).to_string());
+                params.push(cts.to_string().into());
+                sql.push_str(" OR (timestamp = ?");
+                sql.push_str(&(params.len() + 1).to_string());
+                params.push(cts.to_string().into());
+                sql.push_str(" AND event_id < ?");
+                sql.push_str(&(params.len() + 1).to_string());
+                params.push(cid.to_string().into());
+                sql.push_str("))");
+            }
+        }
+
+        if let Some(tid) = query.trace_id.as_deref().map(str::trim).filter(|t| !t.is_empty()) {
+            sql.push_str(" AND trace_id IS NOT NULL AND lower(trace_id) = lower(?");
+            sql.push_str(&(params.len() + 1).to_string());
+            sql.push_str(")");
+            params.push(tid.to_string().into());
+        }
+
+        if let Some(service) = query
+            .service_id
+            .as_deref()
+            .map(str::trim)
+            .filter(|value| !value.is_empty())
+        {
             sql.push_str(" AND service_id = ?");
             sql.push_str(&(params.len() + 1).to_string());
             params.push(service.to_string().into());
         }
-        if let Some(min_severity) = min_severity {
+        if let Some(min_severity) = query.min_severity {
             sql.push_str(" AND severity >= ?");
             sql.push_str(&(params.len() + 1).to_string());
             params.push(min_severity.into());
         }
-        if let Some(search) = search.filter(|value| !value.trim().is_empty()) {
+        if let Some(search) = query
+            .search
+            .as_deref()
+            .map(str::trim)
+            .filter(|value| !value.is_empty())
+        {
             sql.push_str(" AND message LIKE '%' || ?");
             sql.push_str(&(params.len() + 1).to_string());
             sql.push_str(" || '%'");
-            params.push(search.trim().to_string().into());
+            params.push(search.to_string().into());
         }
-        if let Some(source_type) = source_type.filter(|value| !value.trim().is_empty()) {
+        if let Some(raw) = query
+            .fts_query
+            .as_deref()
+            .map(str::trim)
+            .filter(|value| !value.is_empty())
+        {
+            if query.log_fts_enabled {
+                if let Some(m) = sanitize_fts_match_input(raw) {
+                    sql.push_str(
+                        " AND event_id IN (SELECT event_id FROM events_fts WHERE events_fts MATCH ?",
+                    );
+                    sql.push_str(&(params.len() + 1).to_string());
+                    sql.push_str(")");
+                    params.push(m.into());
+                } else {
+                    sql.push_str(" AND message LIKE '%' || ?");
+                    sql.push_str(&(params.len() + 1).to_string());
+                    sql.push_str(" || '%'");
+                    params.push(raw.chars().take(256).collect::<String>().into());
+                }
+            } else {
+                sql.push_str(" AND message LIKE '%' || ?");
+                sql.push_str(&(params.len() + 1).to_string());
+                sql.push_str(" || '%'");
+                params.push(raw.to_string().into());
+            }
+        }
+        if let Some(source_type) = query
+            .source_type
+            .as_deref()
+            .map(str::trim)
+            .filter(|value| !value.is_empty())
+        {
             sql.push_str(" AND source_type = ?");
             sql.push_str(&(params.len() + 1).to_string());
             params.push(source_type.to_string().into());
         }
 
-        sql.push_str(" ORDER BY timestamp DESC LIMIT ?");
+        if let (Some(attr_key), Some(attr_val)) = (&query.attr_key, &query.attr_value) {
+            let key = attr_key.trim();
+            let val = attr_val.trim();
+            if !key.is_empty() && !val.is_empty() {
+                sql.push_str(
+                    " AND EXISTS (SELECT 1 FROM event_attributes ea WHERE ea.event_id = events.event_id AND ea.attr_key = ?",
+                );
+                sql.push_str(&(params.len() + 1).to_string());
+                params.push(key.to_string().into());
+                if let Ok(iv) = val.parse::<i64>() {
+                    sql.push_str(" AND (ea.attr_value_int = ?");
+                    sql.push_str(&(params.len() + 1).to_string());
+                    params.push(iv.into());
+                    sql.push_str(" OR ea.attr_value_text = ?");
+                    sql.push_str(&(params.len() + 1).to_string());
+                    params.push(val.to_string().into());
+                    sql.push_str("))");
+                } else {
+                    sql.push_str(" AND ea.attr_value_text = ?");
+                    sql.push_str(&(params.len() + 1).to_string());
+                    params.push(val.to_string().into());
+                    sql.push_str(")");
+                }
+            }
+        }
+    }
+
+    pub fn query_logs(&self, query: &LogsQuery) -> Result<Vec<EventRow>> {
+        let retention = query.retention_hours.max(1);
+        let mut sql = format!("SELECT {EVENT_ROW_SELECT} FROM events WHERE 1=1 ");
+        let mut params: Vec<rusqlite::types::Value> = Vec::new();
+        Self::push_log_query_filters(&mut sql, &mut params, query, Some(retention));
+        sql.push_str(" ORDER BY timestamp DESC, event_id DESC LIMIT ?");
         sql.push_str(&(params.len() + 1).to_string());
-        params.push((limit as i64).into());
+        params.push((query.limit as i64).into());
 
         let mut stmt = self.conn.prepare(&sql).context("prepare logs query")?;
         let rows = stmt
@@ -628,6 +1051,122 @@ impl EventsStore {
                 event_row_from_row,
             )
             .context("query logs")?;
+        let mut out = Vec::new();
+        for row in rows {
+            out.push(row?);
+        }
+        Ok(out)
+    }
+
+    /// Log-shaped events restricted to `event_id` values (e.g. from `incident_events`).
+    /// Omits the default retention lower bound unless `query.timestamp_after` is set or you pass
+    /// `retention_if_no_explicit_start` via a `LogsQuery` that sets `timestamp_after`.
+    pub fn query_logs_for_event_ids(
+        &self,
+        event_ids: &[String],
+        query: &LogsQuery,
+    ) -> Result<Vec<EventRow>> {
+        const MAX_IDS: usize = 400;
+        let mut seen = HashSet::<String>::new();
+        let mut unique: Vec<String> = Vec::new();
+        for id in event_ids {
+            let t = id.trim();
+            if t.is_empty() {
+                continue;
+            }
+            if seen.insert(t.to_string()) {
+                unique.push(t.to_string());
+                if unique.len() >= MAX_IDS {
+                    break;
+                }
+            }
+        }
+        if unique.is_empty() {
+            return Ok(vec![]);
+        }
+        let placeholders = (0..unique.len())
+            .map(|i| format!("?{}", i + 1))
+            .collect::<Vec<_>>()
+            .join(", ");
+        let mut sql = format!(
+            "SELECT {EVENT_ROW_SELECT} FROM events WHERE event_id IN ({placeholders}) ",
+            placeholders = placeholders
+        );
+        let mut params: Vec<rusqlite::types::Value> = unique.into_iter().map(|s| s.into()).collect();
+        Self::push_log_query_filters(&mut sql, &mut params, query, None);
+        sql.push_str(" ORDER BY timestamp DESC, event_id DESC LIMIT ?");
+        sql.push_str(&(params.len() + 1).to_string());
+        params.push((query.limit as i64).into());
+
+        let mut stmt = self
+            .conn
+            .prepare(&sql)
+            .context("prepare incident logs query")?;
+        let rows = stmt
+            .query_map(
+                rusqlite::params_from_iter(params.iter()),
+                event_row_from_row,
+            )
+            .context("query incident logs")?;
+        let mut out = Vec::new();
+        for row in rows {
+            out.push(row?);
+        }
+        Ok(out)
+    }
+
+    /// Events for a single W3C `trace_id`, oldest first (trace waterfall / timeline MVP).
+    pub fn query_trace_timeline(
+        &self,
+        trace_id: &str,
+        limit: usize,
+        retention_hours: i64,
+        timestamp_after: Option<String>,
+        timestamp_before: Option<String>,
+    ) -> Result<Vec<EventRow>> {
+        let tid = trace_id.trim();
+        if tid.is_empty() {
+            return Ok(vec![]);
+        }
+        let retention = retention_hours.max(1);
+        let lim = limit.clamp(1, 2000) as i64;
+        let mut sql = format!(
+            "SELECT {EVENT_ROW_SELECT} FROM events WHERE trace_id IS NOT NULL AND lower(trace_id) = lower(?1) "
+        );
+        let mut params: Vec<rusqlite::types::Value> = vec![tid.to_string().into()];
+        if let Some(start) = timestamp_after
+            .as_deref()
+            .map(str::trim)
+            .filter(|value| !value.is_empty())
+        {
+            sql.push_str(" AND timestamp >= ?");
+            sql.push_str(&(params.len() + 1).to_string());
+            params.push(start.to_string().into());
+        } else {
+            sql.push_str(&format!(
+                " AND timestamp >= datetime('now', '-{retention} hours')"
+            ));
+        }
+        if let Some(end) = timestamp_before
+            .as_deref()
+            .map(str::trim)
+            .filter(|value| !value.is_empty())
+        {
+            sql.push_str(" AND timestamp < ?");
+            sql.push_str(&(params.len() + 1).to_string());
+            params.push(end.to_string().into());
+        }
+        sql.push_str(" ORDER BY timestamp ASC, event_id ASC LIMIT ?");
+        sql.push_str(&(params.len() + 1).to_string());
+        params.push(lim.into());
+
+        let mut stmt = self
+            .conn
+            .prepare(&sql)
+            .context("prepare trace timeline query")?;
+        let rows = stmt
+            .query_map(rusqlite::params_from_iter(params.iter()), event_row_from_row)
+            .context("query trace timeline")?;
         let mut out = Vec::new();
         for row in rows {
             out.push(row?);
@@ -668,12 +1207,14 @@ impl EventsStore {
                         event_id, timestamp, timestamp_source, service_id, host_id,
                         severity, event_type, message, structured_data, tags,
                         fingerprint, quality, source_type, source_id, raw_offset,
+                        trace_id, span_id, signal_kind, deployment_environment, severity_text,
                         collected_at, schema_version
                     ) VALUES (
                         ?1, ?2, ?3, ?4, ?5,
                         ?6, ?7, ?8, ?9, ?10,
                         ?11, ?12, ?13, ?14, ?15,
-                        ?16, 1
+                        ?16, ?17, ?18, ?19, ?20,
+                        ?21, 1
                     )",
                 )
                 .context("prepare event insert")?;
@@ -797,6 +1338,11 @@ impl EventsStore {
                         event.source_type,
                         event.source_id,
                         event.raw_offset,
+                        event.trace_id,
+                        event.span_id,
+                        event.signal_kind,
+                        event.deployment_environment,
+                        event.severity_text,
                         event.collected_at,
                     ])
                     .context("insert event row")?;
@@ -826,6 +1372,12 @@ impl EventsStore {
                         ],
                     )
                     .context("upsert dedup window")?;
+                    insert_event_indexed_attributes(
+                        &tx,
+                        &event.event_id,
+                        event.structured_data.as_ref(),
+                        &governance.indexed_attribute_keys,
+                    )?;
                 }
             }
         }
@@ -939,11 +1491,20 @@ impl EventsStore {
     }
 
     pub fn prune_expired(&self, retention_hours: i64) -> Result<usize> {
+        let cutoff = format!("-{} hours", retention_hours.max(1));
+        self.conn
+            .execute(
+                "DELETE FROM event_attributes WHERE event_id IN (
+                SELECT event_id FROM events WHERE inserted_at < datetime('now', ?1)
+            )",
+                rusqlite::params![cutoff],
+            )
+            .context("prune event_attributes")?;
         let deleted = self
             .conn
             .execute(
                 "DELETE FROM events WHERE inserted_at < datetime('now', ?1)",
-                rusqlite::params![format!("-{} hours", retention_hours.max(1))],
+                rusqlite::params![cutoff],
             )
             .context("prune expired events")?;
         Ok(deleted)
@@ -952,11 +1513,19 @@ impl EventsStore {
 
 fn governed_fingerprint(event: &NewEventRecord, governance: &IngestGovernance) -> String {
     let base = if event.fingerprint.trim().is_empty() {
+        let trace = event
+            .trace_id
+            .as_deref()
+            .map(str::trim)
+            .filter(|t| !t.is_empty())
+            .map(|t| format!("::tr:{t}"))
+            .unwrap_or_default();
         format!(
-            "{}:{}:{}",
+            "{}:{}:{}{}",
             event.service_id.trim().to_ascii_lowercase(),
             event.source_type.trim().to_ascii_lowercase(),
-            normalized_message(&event.message)
+            normalized_message(&event.message),
+            trace
         )
     } else {
         event.fingerprint.trim().to_ascii_lowercase()
@@ -1306,6 +1875,7 @@ impl IncidentsStore {
                     created_at: r.get(5)?,
                     updated_at: r.get(6)?,
                     event_count: r.get(7)?,
+                    latest_trace_summary: None,
                 })
             })
             .context("incidents query")?;
@@ -1383,6 +1953,7 @@ impl IncidentsStore {
                     created_at: r.get(5)?,
                     updated_at: r.get(6)?,
                     event_count: r.get(7)?,
+                    latest_trace_summary: None,
                 })
             })
             .context("recent incidents query")?;
@@ -3321,6 +3892,16 @@ fn initialize_events_db(path: &Path) -> Result<()> {
         "INTEGER NOT NULL DEFAULT 1",
     )?;
     ensure_column(&conn, "events", "inserted_at", "TEXT NOT NULL DEFAULT ''")?;
+    ensure_column(&conn, "events", "trace_id", "TEXT")?;
+    ensure_column(&conn, "events", "span_id", "TEXT")?;
+    ensure_column(
+        &conn,
+        "events",
+        "signal_kind",
+        "TEXT NOT NULL DEFAULT 'log'",
+    )?;
+    ensure_column(&conn, "events", "deployment_environment", "TEXT")?;
+    ensure_column(&conn, "events", "severity_text", "TEXT")?;
     conn.execute_batch(
         "CREATE INDEX IF NOT EXISTS idx_events_timestamp ON events(timestamp);
          CREATE INDEX IF NOT EXISTS idx_events_service_ts ON events(service_id, timestamp);
@@ -3330,20 +3911,63 @@ fn initialize_events_db(path: &Path) -> Result<()> {
          CREATE INDEX IF NOT EXISTS idx_events_service_severity_ts ON events(service_id, severity, timestamp);
          CREATE INDEX IF NOT EXISTS idx_events_type_ts ON events(event_type, timestamp);
          CREATE INDEX IF NOT EXISTS idx_events_host_ts ON events(host_id, timestamp);
+         CREATE INDEX IF NOT EXISTS idx_events_trace_ts ON events(trace_id, timestamp);
          CREATE INDEX IF NOT EXISTS idx_collector_state_updated ON collector_state(updated_at);
          CREATE INDEX IF NOT EXISTS idx_raw_events_event_id ON raw_events(event_id);
          CREATE INDEX IF NOT EXISTS idx_raw_events_inserted ON raw_events(inserted_at);
-         CREATE INDEX IF NOT EXISTS idx_dedup_window_end ON dedup_window(window_end);",
+         CREATE INDEX IF NOT EXISTS idx_dedup_window_end ON dedup_window(window_end);
+         CREATE TABLE IF NOT EXISTS event_attributes (
+             event_id TEXT NOT NULL,
+             attr_key TEXT NOT NULL,
+             attr_value_text TEXT,
+             attr_value_num REAL,
+             attr_value_int INTEGER,
+             PRIMARY KEY (event_id, attr_key)
+         );
+         CREATE INDEX IF NOT EXISTS idx_event_attr_key_text ON event_attributes(attr_key, attr_value_text);
+         CREATE INDEX IF NOT EXISTS idx_event_attr_key_num ON event_attributes(attr_key, attr_value_num);
+         CREATE INDEX IF NOT EXISTS idx_event_attr_event ON event_attributes(event_id);
+         DROP TRIGGER IF EXISTS events_fts_ai;
+         DROP TRIGGER IF EXISTS events_fts_au;
+         DROP TRIGGER IF EXISTS events_fts_ad;
+         CREATE VIRTUAL TABLE IF NOT EXISTS events_fts USING fts5(
+             event_id UNINDEXED,
+             message,
+             tokenize = 'unicode61'
+         );
+         CREATE TRIGGER events_fts_ai AFTER INSERT ON events BEGIN
+             INSERT INTO events_fts(event_id, message)
+             VALUES (new.event_id, substr(new.message, 1, 8192));
+         END;
+         CREATE TRIGGER events_fts_au AFTER UPDATE ON events BEGIN
+             INSERT INTO events_fts(events_fts, event_id, message)
+             VALUES ('delete', old.event_id, old.message);
+             INSERT INTO events_fts(event_id, message)
+             VALUES (new.event_id, substr(new.message, 1, 8192));
+         END;
+         CREATE TRIGGER events_fts_ad AFTER DELETE ON events BEGIN
+             INSERT INTO events_fts(events_fts, event_id, message)
+             VALUES ('delete', old.event_id, old.message);
+         END;",
     )
     .context("initialize events db indexes")?;
+    let fts_rows: i64 = conn
+        .query_row("SELECT COUNT(*) FROM events_fts", [], |row| row.get(0))
+        .unwrap_or(0);
+    if fts_rows == 0 {
+        let _ = conn.execute(
+            "INSERT INTO events_fts(event_id, message) SELECT event_id, substr(message, 1, 8192) FROM events",
+            [],
+        );
+    }
     conn.execute(
-        "INSERT INTO _schema_version(schema_name, version) VALUES ('events', 5)
+        "INSERT INTO _schema_version(schema_name, version) VALUES ('events', 8)
          ON CONFLICT(schema_name) DO UPDATE SET version = excluded.version, applied_at = strftime('%Y-%m-%dT%H:%M:%fZ', 'now')",
         [],
     )
     .context("update events _schema_version")?;
     conn.execute(
-        "INSERT INTO schema_version(name, version) VALUES ('events', 5)
+        "INSERT INTO schema_version(name, version) VALUES ('events', 8)
          ON CONFLICT(name) DO UPDATE SET version = excluded.version",
         [],
     )
@@ -3863,6 +4487,7 @@ fn incident_row_from_row(row: &Row<'_>) -> rusqlite::Result<IncidentRow> {
         created_at: row.get(5)?,
         updated_at: row.get(6)?,
         event_count: row.get(7)?,
+        latest_trace_summary: None,
     })
 }
 
@@ -3880,6 +4505,26 @@ fn event_row_from_row(row: &Row<'_>) -> rusqlite::Result<EventRow> {
             source_type: row.get(5)?,
         }),
         tags: tags_raw.and_then(parse_tags),
+        trace_id: row.get::<_, Option<String>>(7)?,
+        span_id: row.get::<_, Option<String>>(8)?,
+        signal_kind: row.get::<_, Option<String>>(9)?,
+        deployment_environment: row.get::<_, Option<String>>(10)?,
+        severity_text: row.get::<_, Option<String>>(11)?,
+    })
+}
+
+fn trace_summary_seed_from_row(row: &Row<'_>) -> rusqlite::Result<TraceSummary> {
+    let severity = row.get::<_, Option<i64>>(4)?;
+    Ok(TraceSummary {
+        trace_id: row.get(0)?,
+        event_count: 0,
+        last_seen_at: row.get(1)?,
+        service_id: row.get(2)?,
+        source_type: row.get(3)?,
+        severity: severity.map(SeverityValue::Level),
+        sample_message: row.get(5)?,
+        signal_kind: row.get(6)?,
+        deployment_environment: row.get(7)?,
     })
 }
 
@@ -4052,6 +4697,11 @@ mod tests {
                 quality: Some("normalized".into()),
                 structured_data: Some(serde_json::json!({"collector":"host_metrics"})),
                 raw_offset: None,
+                trace_id: None,
+                span_id: None,
+                signal_kind: "log".into(),
+                deployment_environment: None,
+                severity_text: None,
             }])
             .expect("insert batch");
         assert_eq!(inserted, 1);
@@ -4066,6 +4716,296 @@ mod tests {
             .get_collector_state("host_metrics", "cursor")
             .expect("get collector state");
         assert_eq!(cursor.as_deref(), Some("42"));
+    }
+
+    #[test]
+    fn governed_insert_populates_indexed_event_attributes() {
+        let (_root, events_db, incidents_db) = temp_db_paths("events-attr-eav");
+        initialize_databases(&events_db, &incidents_db).expect("initialize dbs");
+        let mut store = EventsStore::open(&events_db)
+            .expect("open events result")
+            .expect("events store present");
+        let governance = IngestGovernance {
+            dedup_enabled: false,
+            noise_enabled: false,
+            indexed_attribute_keys: vec!["http.status_code".into(), "http.route".into()],
+            ..Default::default()
+        };
+        let structured = serde_json::json!({
+            "message": "upstream",
+            "attributes": {"http.status_code": 502, "http.route": "/v1/cart"}
+        });
+        let inserted = store
+            .insert_batch_governed(
+                &[NewEventRecord {
+                    event_id: "e-attr-1".into(),
+                    timestamp: "2026-05-14T11:00:00Z".into(),
+                    service_id: "api".into(),
+                    severity: 3,
+                    message: "upstream error".into(),
+                    source_type: "app_http".into(),
+                    source_id: "ingest".into(),
+                    tags: Vec::new(),
+                    fingerprint: "fp-attr-1".into(),
+                    host_id: "host.local".into(),
+                    event_type: 0,
+                    timestamp_source: "collector".into(),
+                    collected_at: "2026-05-14T11:00:01Z".into(),
+                    quality: Some("normalized".into()),
+                    structured_data: Some(structured),
+                    raw_offset: None,
+                    trace_id: None,
+                    span_id: None,
+                    signal_kind: "log".into(),
+                    deployment_environment: None,
+                    severity_text: None,
+                }],
+                &governance,
+            )
+            .expect("insert batch governed");
+        assert_eq!(inserted.inserted, 1);
+
+        let conn = rusqlite::Connection::open(&events_db).expect("open raw conn");
+        let code: i64 = conn
+            .query_row(
+                "SELECT attr_value_int FROM event_attributes WHERE event_id = ?1 AND attr_key = ?2",
+                rusqlite::params!["e-attr-1", "http.status_code"],
+                |row| row.get(0),
+            )
+            .expect("attr int");
+        assert_eq!(code, 502);
+        let route: String = conn
+            .query_row(
+                "SELECT attr_value_text FROM event_attributes WHERE event_id = ?1 AND attr_key = ?2",
+                rusqlite::params!["e-attr-1", "http.route"],
+                |row| row.get(0),
+            )
+            .expect("attr text");
+        assert_eq!(route, "/v1/cart");
+
+        let logs = store
+            .query_logs(&LogsQuery {
+                limit: 10,
+                retention_hours: 72,
+                service_id: Some("api".into()),
+                attr_key: Some("http.status_code".into()),
+                attr_value: Some("502".into()),
+                ..Default::default()
+            })
+            .expect("query with attr");
+        assert_eq!(logs.len(), 1);
+        assert_eq!(logs[0].event_id.as_deref(), Some("e-attr-1"));
+    }
+
+    #[test]
+    fn fts_triggers_keep_events_fts_in_sync() {
+        let (_root, events_db, incidents_db) = temp_db_paths("events-fts-sync");
+        initialize_databases(&events_db, &incidents_db).expect("initialize dbs");
+        let mut store = EventsStore::open(&events_db)
+            .expect("open events result")
+            .expect("events store present");
+        let gov = IngestGovernance {
+            dedup_enabled: false,
+            noise_enabled: false,
+            ..Default::default()
+        };
+        store
+            .insert_batch_governed(
+                &[NewEventRecord {
+                    event_id: "e-fts-1".into(),
+                    timestamp: "2026-05-14T12:00:00Z".into(),
+                    service_id: "api".into(),
+                    severity: 2,
+                    message: "alpha bravo uniqueftsmarker".into(),
+                    source_type: "app_http".into(),
+                    source_id: "ingest".into(),
+                    tags: Vec::new(),
+                    fingerprint: "fp-fts-1".into(),
+                    host_id: "host.local".into(),
+                    event_type: 0,
+                    timestamp_source: "collector".into(),
+                    collected_at: "2026-05-14T12:00:01Z".into(),
+                    quality: Some("normalized".into()),
+                    structured_data: None,
+                    raw_offset: None,
+                    trace_id: None,
+                    span_id: None,
+                    signal_kind: "log".into(),
+                    deployment_environment: None,
+                    severity_text: None,
+                }],
+                &gov,
+            )
+            .expect("insert");
+
+        let logs = store
+            .query_logs(&LogsQuery {
+                limit: 10,
+                retention_hours: 72,
+                fts_query: Some("uniqueftsmarker".into()),
+                log_fts_enabled: true,
+                ..Default::default()
+            })
+            .expect("fts query");
+        assert_eq!(logs.len(), 1);
+        assert_eq!(logs[0].event_id.as_deref(), Some("e-fts-1"));
+    }
+
+    #[test]
+    fn query_trace_timeline_orders_oldest_first() {
+        let (_root, events_db, incidents_db) = temp_db_paths("trace-timeline-store");
+        initialize_databases(&events_db, &incidents_db).expect("initialize dbs");
+        let mut store = EventsStore::open(&events_db)
+            .expect("open events result")
+            .expect("events store present");
+        let tid = "aabbccdd0011223344556677889900aa";
+        let mut later = NewEventRecord::minimal(
+            "e-tr-2",
+            "2026-05-14T12:00:01Z",
+            "api",
+            3,
+            "second",
+            "app",
+            "2026-05-14T12:00:01Z",
+        );
+        later.trace_id = Some(tid.into());
+        let mut earlier = NewEventRecord::minimal(
+            "e-tr-1",
+            "2026-05-14T12:00:00Z",
+            "api",
+            2,
+            "first",
+            "app",
+            "2026-05-14T12:00:00Z",
+        );
+        earlier.trace_id = Some(tid.into());
+        store
+            .insert_batch(&[later, earlier])
+            .expect("insert batch (out of order)");
+
+        let rows = store
+            .query_trace_timeline(tid, 50, 72, None, None)
+            .expect("trace timeline");
+        assert_eq!(rows.len(), 2);
+        assert_eq!(rows[0].event_id.as_deref(), Some("e-tr-1"));
+        assert_eq!(rows[1].event_id.as_deref(), Some("e-tr-2"));
+    }
+
+    #[test]
+    fn latest_trace_summary_for_service_counts_only_service_scope_rows() {
+        let (_root, events_db, incidents_db) = temp_db_paths("trace-summary-service");
+        initialize_databases(&events_db, &incidents_db).expect("initialize dbs");
+        let mut store = EventsStore::open(&events_db)
+            .expect("open events result")
+            .expect("events store present");
+        let mut old = NewEventRecord::minimal(
+            "evt-old",
+            "2026-05-14T12:00:00Z",
+            "api",
+            2,
+            "old trace",
+            "app",
+            "2026-05-14T12:00:00Z",
+        );
+        old.trace_id = Some("aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa".into());
+        let mut latest_first = NewEventRecord::minimal(
+            "evt-new-1",
+            "2026-05-14T12:05:00Z",
+            "api",
+            3,
+            "latest trace first",
+            "otlp_json",
+            "2026-05-14T12:05:00Z",
+        );
+        latest_first.trace_id = Some("bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb".into());
+        latest_first.deployment_environment = Some("prod".into());
+        let mut latest_second = NewEventRecord::minimal(
+            "evt-new-2",
+            "2026-05-14T12:06:00Z",
+            "api",
+            4,
+            "latest trace second",
+            "otlp_json",
+            "2026-05-14T12:06:00Z",
+        );
+        latest_second.trace_id = Some("bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb".into());
+        latest_second.signal_kind = "log".into();
+        let mut other_service = NewEventRecord::minimal(
+            "evt-other",
+            "2026-05-14T12:07:00Z",
+            "worker",
+            4,
+            "same trace other service",
+            "otlp_json",
+            "2026-05-14T12:07:00Z",
+        );
+        other_service.trace_id = Some("bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb".into());
+        store
+            .insert_batch(&[old, latest_first, latest_second, other_service])
+            .expect("insert service trace events");
+
+        let summary = store
+            .latest_trace_summary_for_service("api")
+            .expect("service trace summary")
+            .expect("trace summary present");
+        assert_eq!(summary.trace_id, "bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb");
+        assert_eq!(summary.event_count, 2);
+        assert_eq!(summary.last_seen_at.as_deref(), Some("2026-05-14T12:06:00Z"));
+        assert_eq!(summary.service_id.as_deref(), Some("api"));
+        assert_eq!(summary.source_type.as_deref(), Some("otlp_json"));
+        assert_eq!(summary.deployment_environment.as_deref(), None);
+        assert_eq!(summary.sample_message.as_deref(), Some("latest trace second"));
+    }
+
+    #[test]
+    fn latest_trace_summary_for_event_ids_counts_only_scoped_rows() {
+        let (_root, events_db, incidents_db) = temp_db_paths("trace-summary-incident");
+        initialize_databases(&events_db, &incidents_db).expect("initialize dbs");
+        let mut store = EventsStore::open(&events_db)
+            .expect("open events result")
+            .expect("events store present");
+        let mut scoped_older = NewEventRecord::minimal(
+            "evt-scope-1",
+            "2026-05-14T13:00:00Z",
+            "api",
+            2,
+            "older scoped trace",
+            "app",
+            "2026-05-14T13:00:00Z",
+        );
+        scoped_older.trace_id = Some("11111111111111111111111111111111".into());
+        let mut scoped_latest = NewEventRecord::minimal(
+            "evt-scope-2",
+            "2026-05-14T13:05:00Z",
+            "api",
+            3,
+            "latest scoped trace",
+            "app",
+            "2026-05-14T13:05:00Z",
+        );
+        scoped_latest.trace_id = Some("22222222222222222222222222222222".into());
+        let mut out_of_scope = NewEventRecord::minimal(
+            "evt-out",
+            "2026-05-14T13:06:00Z",
+            "api",
+            4,
+            "same trace but not scoped",
+            "app",
+            "2026-05-14T13:06:00Z",
+        );
+        out_of_scope.trace_id = Some("22222222222222222222222222222222".into());
+        store
+            .insert_batch(&[scoped_older, scoped_latest, out_of_scope])
+            .expect("insert incident trace events");
+
+        let summary = store
+            .latest_trace_summary_for_event_ids(&["evt-scope-1".into(), "evt-scope-2".into()])
+            .expect("incident trace summary")
+            .expect("trace summary present");
+        assert_eq!(summary.trace_id, "22222222222222222222222222222222");
+        assert_eq!(summary.event_count, 1);
+        assert_eq!(summary.last_seen_at.as_deref(), Some("2026-05-14T13:05:00Z"));
+        assert_eq!(summary.sample_message.as_deref(), Some("latest scoped trace"));
     }
 
     #[test]
@@ -4136,6 +5076,68 @@ mod tests {
     }
 
     #[test]
+    fn events_after_cursor_returns_forward_slice() {
+        let (_root, events_db, incidents_db) = temp_db_paths("events-after-cursor");
+        initialize_databases(&events_db, &incidents_db).expect("initialize dbs");
+        let mut store = EventsStore::open(&events_db)
+            .expect("open events result")
+            .expect("events store present");
+        store
+            .insert_batch(&[
+                NewEventRecord::minimal(
+                    "evt-a",
+                    "2026-05-07T10:00:00Z",
+                    "api",
+                    2,
+                    "first",
+                    "app_http",
+                    "2026-05-07T10:00:00Z",
+                ),
+                NewEventRecord::minimal(
+                    "evt-b",
+                    "2026-05-07T10:00:00Z",
+                    "api",
+                    3,
+                    "second",
+                    "app_http",
+                    "2026-05-07T10:00:00Z",
+                ),
+                NewEventRecord::minimal(
+                    "evt-c",
+                    "2026-05-07T10:00:01Z",
+                    "api",
+                    3,
+                    "third",
+                    "app_http",
+                    "2026-05-07T10:00:01Z",
+                ),
+            ])
+            .expect("insert events");
+
+        let max = store.max_event_cursor().expect("max cursor").expect("has rows");
+        assert_eq!(max.0, "2026-05-07T10:00:01Z");
+        assert_eq!(max.1, "evt-c");
+
+        let after_a = store
+            .events_after_cursor("2026-05-07T10:00:00Z", "evt-a", 10)
+            .expect("after evt-a");
+        let ids: Vec<_> = after_a
+            .iter()
+            .filter_map(|e| e.event_id.clone())
+            .collect();
+        assert_eq!(ids, vec!["evt-b".to_string(), "evt-c".to_string()]);
+
+        let after_b = store
+            .events_after_cursor("2026-05-07T10:00:00Z", "evt-b", 10)
+            .expect("after evt-b");
+        let ids2: Vec<_> = after_b
+            .iter()
+            .filter_map(|e| e.event_id.clone())
+            .collect();
+        assert_eq!(ids2, vec!["evt-c".to_string()]);
+    }
+
+    #[test]
     fn governed_insert_suppresses_duplicates_inside_window() {
         let (_root, events_db, incidents_db) = temp_db_paths("events-governed-dedup");
         initialize_databases(&events_db, &incidents_db).expect("initialize dbs");
@@ -4167,6 +5169,11 @@ mod tests {
                     quality: Some("normalized".into()),
                     structured_data: None,
                     raw_offset: None,
+                    trace_id: None,
+                    span_id: None,
+                    signal_kind: "log".into(),
+                    deployment_environment: None,
+                    severity_text: None,
                 }],
                 &governance,
             )
@@ -4192,6 +5199,11 @@ mod tests {
                     quality: Some("normalized".into()),
                     structured_data: None,
                     raw_offset: None,
+                    trace_id: None,
+                    span_id: None,
+                    signal_kind: "log".into(),
+                    deployment_environment: None,
+                    severity_text: None,
                 }],
                 &governance,
             )
@@ -4253,6 +5265,11 @@ mod tests {
                     quality: Some("normalized".into()),
                     structured_data: None,
                     raw_offset: None,
+                    trace_id: None,
+                    span_id: None,
+                    signal_kind: "log".into(),
+                    deployment_environment: None,
+                    severity_text: None,
                 }],
                 &governance,
             )
@@ -4279,6 +5296,11 @@ mod tests {
                     quality: Some("normalized".into()),
                     structured_data: None,
                     raw_offset: None,
+                    trace_id: None,
+                    span_id: None,
+                    signal_kind: "log".into(),
+                    deployment_environment: None,
+                    severity_text: None,
                 }],
                 &governance,
             )
@@ -4332,6 +5354,11 @@ mod tests {
                 quality: None,
                 structured_data: None,
                 raw_offset: None,
+                trace_id: None,
+                span_id: None,
+                signal_kind: "log".into(),
+                deployment_environment: None,
+                severity_text: None,
             }])
             .expect("seed events");
 

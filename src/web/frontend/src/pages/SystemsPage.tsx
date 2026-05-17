@@ -1,4 +1,4 @@
-import { Activity, AlertTriangle, Gauge, RefreshCcw, ServerCog } from "lucide-react";
+import { Activity, AlertTriangle, Gauge, RefreshCcw, ServerCog, Waypoints } from "lucide-react";
 import { useState } from "react";
 import { Link, useParams } from "react-router-dom";
 
@@ -13,7 +13,7 @@ import type {
   WorkspaceMapResponse,
 } from "@/api";
 import { Button } from "@/components/ui/button";
-import { Card, CardContent, CardHeader, CardTitle } from "@/components/ui/card";
+import { Card, CardContent, CardDescription, CardHeader, CardTitle } from "@/components/ui/card";
 import { Badge } from "@/components/ui/badge";
 import { Td, Th, Table, TableWrap } from "@/components/ui/table";
 import { PageHeader } from "@/components/layout/page-header";
@@ -22,9 +22,11 @@ import { InvestigationView } from "@/components/investigation/investigation-view
 import type { Mode } from "@/lib/experience";
 import { isAdvancedMode } from "@/lib/experience";
 import { formatDisplayValue, formatRiskTone, formatRelativeDate, formatSeverityLabel, summarizeEvent } from "@/lib/format";
+import { buildTracePath, hasValidTraceId, shortTraceId } from "@/lib/observability";
 import { useApiQuery } from "@/lib/query";
 import { RuntimeIdentity, RuntimeStatusCard, ServiceHealthBadge, riskTone } from "@/components/inferra/health";
 import { Sparkline } from "@/components/inferra/charts";
+import { TraceSummaryInline } from "@/components/inferra/trace-summary";
 
 export function SystemsPage({ mode }: { mode: Mode }) {
   const services = useApiQuery<{ services: ServiceRow[] }>("/api/services");
@@ -49,6 +51,7 @@ export function SystemsPage({ mode }: { mode: Mode }) {
 
   const rows = services.data?.services ?? [];
   const degraded = rows.filter((service) => ["critical", "degraded", "elevated"].includes(service.status));
+  const traceLinkedServices = rows.filter((service) => Boolean(service.latest_trace_summary));
   const totalEvents = rows.reduce((sum, service) => sum + (service.event_count ?? 0), 0);
   const totalErrors = rows.reduce((sum, service) => sum + (service.error_count ?? 0), 0);
 
@@ -67,7 +70,13 @@ export function SystemsPage({ mode }: { mode: Mode }) {
       />
 
       <div className="dashboard-grid">
-        <RuntimeStatusCard icon={ServerCog} label="Services" value={String(rows.length)} tone="info" detail="Observed services with normalized runtime events." />
+        <RuntimeStatusCard
+          icon={ServerCog}
+          label="Services"
+          value={String(rows.length)}
+          tone="info"
+          detail={`${traceLinkedServices.length} have a latest trace ready to inspect.`}
+        />
         <RuntimeStatusCard icon={AlertTriangle} label="Needs attention" value={String(degraded.length)} tone={degraded.length ? "warning" : "success"} detail="Critical, degraded, or elevated services." />
         <RuntimeStatusCard icon={Activity} label="Events" value={String(totalEvents)} tone="info" detail="Total events attached to service rows." />
         <RuntimeStatusCard icon={Gauge} label="Errors" value={String(totalErrors)} tone={totalErrors ? "warning" : "success"} detail="Current known error count across services." />
@@ -104,6 +113,15 @@ export function SystemsPage({ mode }: { mode: Mode }) {
                     tone={riskTone(service.status) === "destructive" ? "critical" : riskTone(service.status) === "warning" ? "warning" : "success"}
                   />
                 </div>
+                {service.latest_trace_summary ? (
+                  <div className="mt-4 flex flex-wrap items-center gap-2 text-xs text-muted-foreground">
+                    <Badge variant="info" className="font-mono">
+                      {shortTraceId(service.latest_trace_summary.trace_id)}
+                    </Badge>
+                    <span>{service.latest_trace_summary.event_count} traced rows</span>
+                    <span>last {formatRelativeDate(service.latest_trace_summary.last_seen_at)}</span>
+                  </div>
+                ) : null}
               </Link>
             ))}
           </div>
@@ -117,6 +135,7 @@ export function SystemsPage({ mode }: { mode: Mode }) {
                   <Th>Events</Th>
                   <Th>Errors</Th>
                   <Th>Error rate</Th>
+                  <Th>Latest trace</Th>
                   <Th>Last event</Th>
                 </tr>
               </thead>
@@ -134,6 +153,13 @@ export function SystemsPage({ mode }: { mode: Mode }) {
                     <Td>{service.event_count ?? 0}</Td>
                     <Td>{service.error_count ?? 0}</Td>
                     <Td>{typeof service.error_ratio === "number" ? `${Math.round(service.error_ratio * 100)}%` : "-"}</Td>
+                    <Td>
+                      <TraceSummaryInline
+                        summary={service.latest_trace_summary}
+                        context={{ from: "service", serviceId: service.service_id }}
+                        emptyLabel="—"
+                      />
+                    </Td>
                     <Td className="text-muted-foreground">{formatRelativeDate(service.last_event_at)}</Td>
                   </tr>
                 ))}
@@ -183,6 +209,7 @@ export function ServiceDetailPage({ mode }: { mode: Mode }) {
   const displayedInvestigation = investigation.data ?? savedInvestigation;
   const topologyEdges = (topology.data?.edges ?? []).filter((edge) => edge.source === serviceId || edge.target === serviceId);
   const workspaceMappings = (workspace.data?.service_mappings ?? []).filter((mapping) => mapping.service_id === serviceId);
+  const traceLinkedEventCount = detail.data.events.filter((event) => hasValidTraceId(event.trace_id)).length;
 
   return (
     <div className="space-y-6">
@@ -309,6 +336,14 @@ export function ServiceDetailPage({ mode }: { mode: Mode }) {
                       </Link>
                       <Badge variant={formatRiskTone(String(incident.severity))}>Sev {formatSeverityLabel(incident.severity)}</Badge>
                     </div>
+                    {incident.latest_trace_summary ? (
+                      <TraceSummaryInline
+                        summary={incident.latest_trace_summary}
+                        context={{ from: "incident", incidentId: incident.incident_id }}
+                        className="mt-3"
+                        emptyLabel="—"
+                      />
+                    ) : null}
                   </div>
                 ))
               ) : (
@@ -320,18 +355,41 @@ export function ServiceDetailPage({ mode }: { mode: Mode }) {
           <Card>
             <CardHeader>
               <CardTitle>Recent events</CardTitle>
+              <CardDescription>
+                {traceLinkedEventCount
+                  ? `${traceLinkedEventCount} recent events carry a trace id and can jump directly into the correlated timeline.`
+                  : "Recent service events and their normalized summaries."}
+              </CardDescription>
             </CardHeader>
             <CardContent className="space-y-3">
               {detail.data.events.length ? (
                 detail.data.events.slice(0, isAdvancedMode(mode) ? 24 : 10).map((event) => (
                   <div key={event.event_id} className="rounded-2xl border border-border/60 bg-background/30 p-4">
                     <div className="flex flex-wrap items-center justify-between gap-2">
-                      <Badge variant={formatRiskTone(event.severity ? String(event.severity) : serviceStatus)}>
-                        {event.severity == null ? "Event" : formatSeverityLabel(event.severity)}
-                      </Badge>
+                      <div className="flex flex-wrap items-center gap-2">
+                        <Badge variant={formatRiskTone(event.severity ? String(event.severity) : serviceStatus)}>
+                          {event.severity == null ? "Event" : formatSeverityLabel(event.severity)}
+                        </Badge>
+                        {event.source_ref?.source_type ? <Badge variant="outline">{formatDisplayValue(event.source_ref.source_type)}</Badge> : null}
+                        {hasValidTraceId(event.trace_id) ? (
+                          <Badge variant="info" className="font-mono">
+                            {shortTraceId(event.trace_id)}
+                          </Badge>
+                        ) : null}
+                      </div>
                       <span className="text-xs text-muted-foreground">{formatRelativeDate(event.timestamp)}</span>
                     </div>
                     <p className="mt-2 text-sm">{summarizeEvent(event)}</p>
+                    {hasValidTraceId(event.trace_id) ? (
+                      <div className="mt-3">
+                        <Button variant="outline" size="sm" asChild>
+                          <Link to={buildTracePath(event.trace_id ?? "", { from: "service", serviceId })}>
+                            <Waypoints className="size-4" />
+                            Open trace
+                          </Link>
+                        </Button>
+                      </div>
+                    ) : null}
                   </div>
                 ))
               ) : (

@@ -61,8 +61,28 @@ function Add-InferraBinToMachinePath {
 }
 
 function Read-InferraConfigPort {
-    param([string]$Path)
+    param(
+        [string]$Path,
+        [string]$InferraExe = ""
+    )
     $port = 7433
+    if ($InferraExe -and (Test-Path $InferraExe) -and (Test-Path $Path)) {
+        try {
+            $jsonText = (
+                & $InferraExe @("--config", $Path, "--json", "config", "get", "server.port") 2>$null |
+                Out-String
+            ).Trim()
+            if ($LASTEXITCODE -eq 0 -and $jsonText) {
+                $obj = $jsonText | ConvertFrom-Json
+                if ($null -ne $obj.value) {
+                    return [int]$obj.value
+                }
+            }
+        }
+        catch {
+            # fall through to TOML scan
+        }
+    }
     if (Test-Path $Path) {
         $match = Select-String -Path $Path -Pattern '^\s*port\s*=\s*(\d+)' | Select-Object -First 1
         if ($match) {
@@ -70,6 +90,136 @@ function Read-InferraConfigPort {
         }
     }
     return $port
+}
+
+function Read-InferraConfigHost {
+    param(
+        [string]$Path,
+        [string]$InferraExe = ""
+    )
+    $hostValue = "127.0.0.1"
+    if ($InferraExe -and (Test-Path $InferraExe) -and (Test-Path $Path)) {
+        try {
+            $jsonText = (
+                & $InferraExe @("--config", $Path, "--json", "config", "get", "server.host") 2>$null |
+                Out-String
+            ).Trim()
+            if ($LASTEXITCODE -eq 0 -and $jsonText) {
+                $obj = $jsonText | ConvertFrom-Json
+                if ($null -ne $obj.value -and "$($obj.value)".Trim()) {
+                    return "$($obj.value)".Trim()
+                }
+            }
+        }
+        catch {
+            # fall through to TOML scan
+        }
+    }
+    if (Test-Path $Path) {
+        $match = Select-String -Path $Path -Pattern '^\s*host\s*=\s*"([^"]+)"' | Select-Object -First 1
+        if ($match) {
+            $hostValue = $match.Matches[0].Groups[1].Value.Trim()
+        }
+    }
+    return $hostValue
+}
+
+function Get-InferraClientHost {
+    param([string]$BindHost)
+    $normalized = "$BindHost".Trim()
+    switch ($normalized) {
+        "" { return "127.0.0.1" }
+        "0.0.0.0" { return "127.0.0.1" }
+        "::" { return "[::1]" }
+        "[::]" { return "[::1]" }
+        default {
+            if ($normalized.Contains(":") -and -not $normalized.StartsWith("[")) {
+                return "[$normalized]"
+            }
+            return $normalized
+        }
+    }
+}
+
+function Resolve-InferraBindIPAddress {
+    param([string]$BindHost)
+    $normalized = "$BindHost".Trim()
+    switch ($normalized) {
+        "" { return [System.Net.IPAddress]::Loopback }
+        "0.0.0.0" { return [System.Net.IPAddress]::Any }
+        "::" { return [System.Net.IPAddress]::IPv6Any }
+        "[::]" { return [System.Net.IPAddress]::IPv6Any }
+        default {
+            $ipAddress = $null
+            if ([System.Net.IPAddress]::TryParse($normalized.Trim('[', ']'), [ref]$ipAddress)) {
+                return $ipAddress
+            }
+            $resolved = [System.Net.Dns]::GetHostAddresses($normalized) | Select-Object -First 1
+            if ($null -eq $resolved) {
+                throw "Could not resolve bind host '$BindHost' to an IP address."
+            }
+            return $resolved
+        }
+    }
+}
+
+function Test-InferraPortBindable {
+    param(
+        [string]$BindHost,
+        [int]$Port
+    )
+    $listener = $null
+    try {
+        $address = Resolve-InferraBindIPAddress -BindHost $BindHost
+        $listener = [System.Net.Sockets.TcpListener]::new($address, $Port)
+        $listener.Start()
+        return $true
+    }
+    catch {
+        return $false
+    }
+    finally {
+        if ($listener) {
+            $listener.Stop()
+        }
+    }
+}
+
+function Get-InferraFreeTcpPort {
+    param([string]$BindHost)
+    $listener = $null
+    try {
+        $address = Resolve-InferraBindIPAddress -BindHost $BindHost
+        $listener = [System.Net.Sockets.TcpListener]::new($address, 0)
+        $listener.Start()
+        return ([System.Net.IPEndPoint]$listener.LocalEndpoint).Port
+    }
+    finally {
+        if ($listener) {
+            $listener.Stop()
+        }
+    }
+}
+
+function Test-InferraHealthEndpoint {
+    param(
+        [Parameter(Mandatory = $true)][string]$Url,
+        [int]$TimeoutSec = 5
+    )
+    try {
+        if ($PSVersionTable.PSVersion.Major -ge 7) {
+            $resp = Invoke-WebRequest -Uri $Url -UseBasicParsing -TimeoutSec $TimeoutSec -NoProxy
+        }
+        else {
+            $ws = New-Object Microsoft.PowerShell.Commands.WebRequestSession
+            $ws.Proxy = $null
+            $resp = Invoke-WebRequest -Uri $Url -WebSession $ws -UseBasicParsing -TimeoutSec $TimeoutSec
+        }
+        return ($resp.StatusCode -eq 200)
+    }
+    catch {
+        return $false
+    }
 }
 
 function Invoke-InferraCommand {
@@ -164,6 +314,27 @@ finally {
     Pop-Location
 }
 
+$bindHost = Read-InferraConfigHost -Path $ConfigPath -InferraExe $installedExe
+$dashPort = Read-InferraConfigPort -Path $ConfigPath -InferraExe $installedExe
+$clientHost = Get-InferraClientHost -BindHost $bindHost
+$healthUrl = "http://${clientHost}:${dashPort}/api/health"
+if (-not (Test-InferraPortBindable -BindHost $bindHost -Port $dashPort)) {
+    $existingInferra = Test-InferraHealthEndpoint -Url $healthUrl -TimeoutSec 3
+    $replacementPort = Get-InferraFreeTcpPort -BindHost $bindHost
+    if ($replacementPort -ne $dashPort) {
+        $reason = if ($existingInferra) {
+            "an existing Inferra runtime is already responding there"
+        }
+        else {
+            "another listener is occupying the port without answering Inferra health checks"
+        }
+        Write-Warning "Configured port $dashPort on $bindHost is unavailable because $reason. Switching Inferra to free port $replacementPort."
+        Invoke-InferraCommand $installedExe @("--config", $ConfigPath, "config", "set", "server.port", "$replacementPort")
+        $dashPort = $replacementPort
+        $healthUrl = "http://${clientHost}:${dashPort}/api/health"
+    }
+}
+
 $installArgs = @(
     "--config", $ConfigPath,
     "--ui-dist", $installedUiDist,
@@ -177,37 +348,32 @@ Invoke-InferraCommand $installedExe $installArgs
 $registered = Get-Service -Name "Inferra" -ErrorAction Stop
 Start-Service -Name $registered.Name -ErrorAction Stop
 
-$dashPort = Read-InferraConfigPort -Path $ConfigPath
 Start-Sleep -Seconds 2
 $reachable = $false
-for ($attempt = 0; $attempt -lt 12; $attempt++) {
-    try {
-        $resp = Invoke-WebRequest -Uri "http://127.0.0.1:${dashPort}/api/health" -UseBasicParsing -TimeoutSec 25
-        if ($resp.StatusCode -eq 200) {
-            $reachable = $true
-            break
-        }
+# Short per-attempt timeout: hung probes are often corporate proxy interference with localhost.
+for ($attempt = 0; $attempt -lt 20; $attempt++) {
+    if (Test-InferraHealthEndpoint -Url $healthUrl -TimeoutSec 5) {
+        $reachable = $true
+        break
     }
-    catch {
-        if ($attempt -lt 11) {
-            Start-Sleep -Seconds 3
-        }
+    if ($attempt -lt 19) {
+        Start-Sleep -Seconds 2
     }
 }
 $serveLog = Join-Path $ProgramDataRoot "logs\serve.log"
 if ($reachable) {
-    Write-Host "Runtime health: http://127.0.0.1:${dashPort}/api/health"
-    Write-Host "Dashboard: http://127.0.0.1:${dashPort}/"
+    Write-Host "Runtime health: $healthUrl"
+    Write-Host "Dashboard: http://${clientHost}:${dashPort}/"
 }
 else {
-    Write-Warning "Runtime health not reachable at http://127.0.0.1:${dashPort}/api/health (service may still be starting)."
-    Write-Host "Serve log (stderr/stdout from inferra serve): $serveLog"
+    Write-Warning "Runtime health not reachable at $healthUrl (service may still be starting). If this step was very slow, check Windows proxy settings for localhost; see $serveLog for service host errors."
+    Write-Host "Serve log (Windows service lifecycle + HTTP errors): $serveLog"
     Write-Host "Try: Restart-Service Inferra"
 }
 Write-Host "Serve log: $serveLog"
 
 if ($AllowFirewall) {
-    $port = Read-InferraConfigPort -Path $ConfigPath
+    $port = Read-InferraConfigPort -Path $ConfigPath -InferraExe $installedExe
     $ruleName = "Inferra-HTTP-$port"
     $existingRule = Get-NetFirewallRule -DisplayName $ruleName -ErrorAction SilentlyContinue
     if (-not $existingRule) {

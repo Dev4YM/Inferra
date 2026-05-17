@@ -11,7 +11,7 @@ from core.logging import get_logger
 
 _log = get_logger(__name__)
 
-CURRENT_SCHEMA_VERSION = 5
+CURRENT_SCHEMA_VERSION = 8
 
 
 @dataclass(frozen=True)
@@ -154,6 +154,71 @@ SELECT 1;
 
 _EVENTS_V5_DOWN = ""
 
+_EVENTS_V6_UP = """
+ALTER TABLE events ADD COLUMN trace_id TEXT;
+ALTER TABLE events ADD COLUMN span_id TEXT;
+ALTER TABLE events ADD COLUMN signal_kind TEXT NOT NULL DEFAULT 'log';
+ALTER TABLE events ADD COLUMN deployment_environment TEXT;
+ALTER TABLE events ADD COLUMN severity_text TEXT;
+CREATE INDEX IF NOT EXISTS idx_events_trace_ts ON events(trace_id, timestamp);
+"""
+
+_EVENTS_V6_DOWN = ""
+
+_EVENTS_V7_UP = """
+CREATE TABLE IF NOT EXISTS event_attributes (
+    event_id TEXT NOT NULL,
+    attr_key TEXT NOT NULL,
+    attr_value_text TEXT,
+    attr_value_num REAL,
+    attr_value_int INTEGER,
+    PRIMARY KEY (event_id, attr_key)
+);
+CREATE INDEX IF NOT EXISTS idx_event_attr_key_text ON event_attributes(attr_key, attr_value_text);
+CREATE INDEX IF NOT EXISTS idx_event_attr_key_num ON event_attributes(attr_key, attr_value_num);
+CREATE INDEX IF NOT EXISTS idx_event_attr_event ON event_attributes(event_id);
+"""
+
+_EVENTS_V7_DOWN = """
+DROP INDEX IF EXISTS idx_event_attr_event;
+DROP INDEX IF EXISTS idx_event_attr_key_num;
+DROP INDEX IF EXISTS idx_event_attr_key_text;
+DROP TABLE IF EXISTS event_attributes;
+"""
+
+_EVENTS_V8_UP = """
+DROP TRIGGER IF EXISTS events_fts_ai;
+DROP TRIGGER IF EXISTS events_fts_au;
+DROP TRIGGER IF EXISTS events_fts_ad;
+CREATE VIRTUAL TABLE IF NOT EXISTS events_fts USING fts5(
+    event_id UNINDEXED,
+    message,
+    tokenize = 'unicode61'
+);
+CREATE TRIGGER events_fts_ai AFTER INSERT ON events BEGIN
+    INSERT INTO events_fts(event_id, message)
+    VALUES (new.event_id, substr(new.message, 1, 8192));
+END;
+CREATE TRIGGER events_fts_au AFTER UPDATE ON events BEGIN
+    INSERT INTO events_fts(events_fts, event_id, message)
+    VALUES ('delete', old.event_id, old.message);
+    INSERT INTO events_fts(event_id, message)
+    VALUES (new.event_id, substr(new.message, 1, 8192));
+END;
+CREATE TRIGGER events_fts_ad AFTER DELETE ON events BEGIN
+    INSERT INTO events_fts(events_fts, event_id, message)
+    VALUES ('delete', old.event_id, old.message);
+END;
+INSERT INTO events_fts(event_id, message) SELECT event_id, substr(message, 1, 8192) FROM events;
+"""
+
+_EVENTS_V8_DOWN = """
+DROP TRIGGER IF EXISTS events_fts_ai;
+DROP TRIGGER IF EXISTS events_fts_au;
+DROP TRIGGER IF EXISTS events_fts_ad;
+DROP TABLE IF EXISTS events_fts;
+"""
+
 EVENTS_MIGRATIONS: list[Migration] = [
     Migration(
         version=1,
@@ -184,6 +249,24 @@ EVENTS_MIGRATIONS: list[Migration] = [
         description="Keep events schema version aligned with incidents release",
         up_sql=_EVENTS_V5_UP,
         down_sql=_EVENTS_V5_DOWN,
+    ),
+    Migration(
+        version=6,
+        description="Observability: trace_id, span_id, signal_kind, deployment_environment, severity_text",
+        up_sql=_EVENTS_V6_UP,
+        down_sql=_EVENTS_V6_DOWN,
+    ),
+    Migration(
+        version=7,
+        description="Indexed log attributes (EAV) for allowlisted keys",
+        up_sql=_EVENTS_V7_UP,
+        down_sql=_EVENTS_V7_DOWN,
+    ),
+    Migration(
+        version=8,
+        description="FTS5 virtual table events_fts + triggers for log message search",
+        up_sql=_EVENTS_V8_UP,
+        down_sql=_EVENTS_V8_DOWN,
     ),
 ]
 

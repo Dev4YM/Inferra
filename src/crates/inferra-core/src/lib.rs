@@ -363,6 +363,8 @@ pub fn build_overview_with_runtime_signals(
     } else {
         vec![]
     };
+    let incidents =
+        enrich_incident_rows_with_latest_traces(incidents, incidents_db.as_ref(), events_db.as_ref())?;
 
     let active_n = if let Some(ref db) = incidents_db {
         db.active_incident_count()?
@@ -390,7 +392,7 @@ pub fn build_overview_with_runtime_signals(
     let dedup = dedup_payload(config, recent_events.len(), &governance);
     let noise = noise_payload(config, &event_rate, &governance);
 
-    let services = enrich_service_rows(&service_stats, &incidents);
+    let services = enrich_service_rows(&service_stats, &incidents, events_db.as_ref())?;
     let containers = discover_runtime_containers();
     let containers_running = containers.as_ref().map(|items| items.len()).unwrap_or(0);
     let runtime_signals = runtime_signals.cloned().unwrap_or_default();
@@ -8249,7 +8251,29 @@ fn parse_rfc3339(raw: &str) -> Option<time::OffsetDateTime> {
     time::OffsetDateTime::parse(raw, &time::format_description::well_known::Rfc3339).ok()
 }
 
-fn enrich_service_rows(stats: &[ServiceStats], incidents: &[IncidentRow]) -> Vec<ServiceRow> {
+pub fn enrich_incident_rows_with_latest_traces(
+    incidents: Vec<IncidentRow>,
+    incidents_db: Option<&IncidentsStore>,
+    events_db: Option<&EventsStore>,
+) -> Result<Vec<IncidentRow>> {
+    let (Some(incidents_db), Some(events_db)) = (incidents_db, events_db) else {
+        return Ok(incidents);
+    };
+    incidents
+        .into_iter()
+        .map(|mut incident| {
+            let event_ids = incidents_db.incident_event_ids(&incident.incident_id)?;
+            incident.latest_trace_summary = events_db.latest_trace_summary_for_event_ids(&event_ids)?;
+            Ok(incident)
+        })
+        .collect()
+}
+
+fn enrich_service_rows(
+    stats: &[ServiceStats],
+    incidents: &[IncidentRow],
+    events_db: Option<&EventsStore>,
+) -> Result<Vec<ServiceRow>> {
     let mut incident_by_service: std::collections::HashMap<String, Vec<IncidentRow>> =
         std::collections::HashMap::new();
     for inc in incidents {
@@ -8267,7 +8291,7 @@ fn enrich_service_rows(stats: &[ServiceStats], incidents: &[IncidentRow]) -> Vec
 
     stats
         .iter()
-        .map(|s| {
+        .map(|s| -> Result<ServiceRow> {
             let event_count = s.event_count;
             let error_count = s.error_count;
             let ratio = if event_count > 0 {
@@ -8289,7 +8313,7 @@ fn enrich_service_rows(stats: &[ServiceStats], incidents: &[IncidentRow]) -> Vec
                 } else {
                     "healthy"
                 };
-            ServiceRow {
+            Ok(ServiceRow {
                 service_id: s.service_id.clone(),
                 status: status.into(),
                 event_count: Some(event_count),
@@ -8301,7 +8325,12 @@ fn enrich_service_rows(stats: &[ServiceStats], incidents: &[IncidentRow]) -> Vec
                 } else {
                     Some(related)
                 },
-            }
+                latest_trace_summary: if let Some(events_db) = events_db {
+                    events_db.latest_trace_summary_for_service(&s.service_id)?
+                } else {
+                    None
+                },
+            })
         })
         .collect()
 }
@@ -9359,6 +9388,7 @@ fn discover_pm2_runtime_apps(projects: &[WorkspaceProject]) -> Vec<WorkspaceRunt
                 script,
                 command,
                 project_path,
+                latest_trace_summary: None,
                 confidence,
                 source: "pm2".into(),
                 signals,
@@ -9574,6 +9604,7 @@ fn discover_process_runtime_apps(projects: &[WorkspaceProject]) -> Vec<Workspace
             script,
             command: Some(command),
             project_path,
+            latest_trace_summary: None,
             confidence,
             source: "process".into(),
             signals,

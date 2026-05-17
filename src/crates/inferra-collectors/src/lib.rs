@@ -24,6 +24,12 @@ use tokio::sync::{watch, RwLock};
 use tokio::task::JoinHandle;
 use toml::Value as TomlValue;
 
+mod otlp_logs;
+
+pub fn normalize_otlp_logs_protobuf_request(payload: &[u8]) -> Result<serde_json::Value> {
+    otlp_logs::normalize_otlp_logs_protobuf_request(payload)
+}
+
 static NEXT_EVENT_ID: AtomicU64 = AtomicU64::new(1);
 static GLOBAL_QUEUE_DEPTH: AtomicI64 = AtomicI64::new(0);
 
@@ -54,6 +60,14 @@ pub struct CollectorRuntimeRow {
 pub struct AppIngestResult {
     pub event_id: String,
     pub accepted: bool,
+    pub suppressed_duplicates: u64,
+    pub suppressed_noise: u64,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct OtlpLogsIngestResult {
+    pub inserted: u64,
+    pub rejected_log_records: u64,
     pub suppressed_duplicates: u64,
     pub suppressed_noise: u64,
 }
@@ -652,11 +666,13 @@ impl CollectorRuntime {
             .to_string();
         let message = payload
             .get("message")
+            .or_else(|| payload.get("body"))
             .and_then(|value| value.as_str())
             .unwrap_or("ingested application event")
             .to_string();
         let level = payload
             .get("level")
+            .or_else(|| payload.get("severity_text"))
             .and_then(|value| value.as_str())
             .unwrap_or("info");
         let source_id = payload
@@ -674,8 +690,62 @@ impl CollectorRuntime {
                     .collect::<Vec<_>>()
             })
             .unwrap_or_default();
+        let explicit_trace_id = payload
+            .get("trace_id")
+            .and_then(normalize_hex_trace_id_from_value);
+        let explicit_span_id = payload
+            .get("span_id")
+            .and_then(normalize_hex_span_id_from_value);
+        let payload_trace_id = payload_attribute_value(payload, "inferra.trace_id")
+            .and_then(normalize_hex_trace_id_from_value);
+        let payload_span_id = payload_attribute_value(payload, "inferra.span_id")
+            .and_then(normalize_hex_span_id_from_value);
+        let traceparent = payload_traceparent(payload).and_then(parse_w3c_traceparent);
+        let trace_id = explicit_trace_id
+            .clone()
+            .or(payload_trace_id.clone())
+            .or_else(|| traceparent.as_ref().map(|(trace_id, _)| trace_id.clone()));
+        let span_id = explicit_span_id
+            .clone()
+            .or(payload_span_id.clone())
+            .or_else(|| match (&trace_id, traceparent.as_ref()) {
+                (Some(trace_id), Some((tp_trace_id, tp_span_id))) if trace_id == tp_trace_id => {
+                    Some(tp_span_id.clone())
+                }
+                (None, Some((_, tp_span_id))) => Some(tp_span_id.clone()),
+                _ => None,
+            });
+        let signal_kind = payload
+            .get("signal_kind")
+            .and_then(|value| value.as_str())
+            .filter(|value| !value.is_empty())
+            .unwrap_or("log")
+            .to_string();
+        let deployment_environment = payload
+            .get("deployment_environment")
+            .or_else(|| payload.get("environment"))
+            .and_then(|value| value.as_str())
+            .map(str::to_string)
+            .or_else(|| {
+                payload
+                    .get("attributes")
+                    .and_then(|attrs| attrs.get("deployment.environment"))
+                    .and_then(|value| value.as_str())
+                    .map(str::to_string)
+            });
+        let severity_text = payload
+            .get("severity_text")
+            .and_then(|value| value.as_str())
+            .map(str::to_string)
+            .or_else(|| payload.get("level").and_then(|v| v.as_str()).map(str::to_string));
         let event_id = next_event_id("app");
-        let fingerprint = semantic_fingerprint("app", &service_id, "app_http", &message);
+        let fingerprint = semantic_fingerprint(
+            "app",
+            &service_id,
+            "app_http",
+            &message,
+            trace_id.as_deref(),
+        );
         adjust_queue_depth(1);
         let result = (|| {
             let mut store =
@@ -698,6 +768,11 @@ impl CollectorRuntime {
                     quality: Some("normalized".into()),
                     structured_data: Some(payload.clone()),
                     raw_offset: None,
+                    trace_id,
+                    span_id,
+                    signal_kind,
+                    deployment_environment,
+                    severity_text,
                 }],
                 &ingest_governance(config),
             )
@@ -719,6 +794,51 @@ impl CollectorRuntime {
         Ok(AppIngestResult {
             event_id,
             accepted,
+            suppressed_duplicates: result.suppressed_duplicates as u64,
+            suppressed_noise: result.suppressed_noise as u64,
+        })
+    }
+
+    /// Ingest normalized OpenTelemetry `ExportLogsServiceRequest` JSON (OTLP/HTTP JSON or decoded protobuf).
+    pub async fn ingest_otlp_logs_json(
+        &self,
+        events_db: &Path,
+        incidents_db: &Path,
+        config: &TomlValue,
+        payload: &serde_json::Value,
+        max_records: usize,
+    ) -> Result<OtlpLogsIngestResult> {
+        let built = otlp_logs::build_new_event_records_from_otlp_logs_json(payload, max_records)
+            .context("parse OTLP logs JSON")?;
+        let mut rejected = built.rejected_log_records;
+        if built.records.is_empty() {
+            return Ok(OtlpLogsIngestResult {
+                inserted: 0,
+                rejected_log_records: rejected,
+                suppressed_duplicates: 0,
+                suppressed_noise: 0,
+            });
+        }
+        adjust_queue_depth(1);
+        let result = persist_events(events_db, config, &built.records);
+        adjust_queue_depth(-1);
+        let result = result?;
+        rejected += result.suppressed_duplicates as u64 + result.suppressed_noise as u64;
+        if result.inserted > 0 {
+            reconcile_new_events(events_db, incidents_db, config, &result.inserted_event_ids)?;
+            let last_ts = built.records.last().map(|r| r.timestamp.clone());
+            self.bump_success(
+                "otlp",
+                "otlp_json",
+                result.inserted as u64,
+                (result.suppressed_duplicates + result.suppressed_noise) as u64,
+                last_ts,
+            )
+            .await;
+        }
+        Ok(OtlpLogsIngestResult {
+            inserted: result.inserted as u64,
+            rejected_log_records: rejected,
             suppressed_duplicates: result.suppressed_duplicates as u64,
             suppressed_noise: result.suppressed_noise as u64,
         })
@@ -2032,7 +2152,7 @@ fn persist_collector_diagnostic_event(
             collector_id.to_string(),
             kind.to_string(),
         ],
-        fingerprint: semantic_fingerprint("collector", collector_id, source_type, &message),
+        fingerprint: semantic_fingerprint("collector", collector_id, source_type, &message, None),
         host_id: System::host_name().unwrap_or_else(|| "local".into()),
         event_type: 1,
         timestamp_source: "collector".into(),
@@ -2045,6 +2165,11 @@ fn persist_collector_diagnostic_event(
             "reason": reason,
         })),
         raw_offset: None,
+        trace_id: None,
+        span_id: None,
+        signal_kind: "log".into(),
+        deployment_environment: None,
+        severity_text: None,
     };
     persist_events_and_reconcile(events_db, incidents_db, config, &[event]).map(|_| ())
 }
@@ -2170,6 +2295,11 @@ impl ThresholdState {
                 "disk_free_bytes": sample.disk_free_bytes,
             })),
             raw_offset: None,
+            trace_id: None,
+            span_id: None,
+            signal_kind: "log".into(),
+            deployment_environment: None,
+            severity_text: None,
         })
     }
 }
@@ -2272,6 +2402,11 @@ fn collect_process_events(
                         "status": format!("{:?}", process.status()),
                     })),
                     raw_offset: None,
+                    trace_id: None,
+                    span_id: None,
+                    signal_kind: "log".into(),
+                    deployment_environment: None,
+                    severity_text: None,
                 });
             }
         } else if seen_hot.contains(&key) {
@@ -2303,6 +2438,11 @@ fn collect_process_events(
                     "status": format!("{:?}", process.status()),
                 })),
                 raw_offset: None,
+                trace_id: None,
+                span_id: None,
+                signal_kind: "log".into(),
+                deployment_environment: None,
+                severity_text: None,
             });
         }
     }
@@ -2381,6 +2521,7 @@ fn collect_syslog_events(
                     &path.display().to_string(),
                     "linux_syslog",
                     trimmed,
+                    None,
                 ),
                 host_id: System::host_name().unwrap_or_else(|| "local".into()),
                 event_type: 0,
@@ -2393,6 +2534,11 @@ fn collect_syslog_events(
                     "raw": trimmed,
                 })),
                 raw_offset: Some(current_offset as i64),
+                trace_id: None,
+                span_id: None,
+                signal_kind: "log".into(),
+                deployment_environment: None,
+                severity_text: None,
             });
         }
         store.set_collector_state(
@@ -2606,7 +2752,7 @@ fn collect_journald_events(
             .and_then(serde_json::Value::as_str)
             .and_then(|value| value.parse::<i64>().ok())
             .unwrap_or(6);
-        let fingerprint = semantic_fingerprint("journald", &service_id, "journald", &message);
+        let fingerprint = semantic_fingerprint("journald", &service_id, "journald", &message, None);
         events.push(NewEventRecord {
             event_id: next_event_id("journald"),
             timestamp: timestamp.clone(),
@@ -2624,6 +2770,11 @@ fn collect_journald_events(
             quality: Some("raw".into()),
             structured_data: Some(value),
             raw_offset: None,
+            trace_id: None,
+            span_id: None,
+            signal_kind: "log".into(),
+            deployment_environment: None,
+            severity_text: None,
         });
     }
     if let Some(cursor) = last_cursor {
@@ -2713,6 +2864,11 @@ fn collect_windows_eventlog_events(
                     "level": item.level,
                 })),
                 raw_offset: Some(item.record_id as i64),
+                trace_id: None,
+                span_id: None,
+                signal_kind: "log".into(),
+                deployment_environment: None,
+                severity_text: None,
             });
         }
         if newest > last_record {
@@ -2795,6 +2951,11 @@ fn collect_windows_service_events(
                 "state": state,
             })),
             raw_offset: None,
+            trace_id: None,
+            span_id: None,
+            signal_kind: "log".into(),
+            deployment_environment: None,
+            severity_text: None,
         });
     }
     Ok(events)
@@ -2914,6 +3075,11 @@ fn collect_docker_events(
             quality: Some("raw".into()),
             structured_data: Some(value),
             raw_offset: None,
+            trace_id: None,
+            span_id: None,
+            signal_kind: "log".into(),
+            deployment_environment: None,
+            severity_text: None,
         });
     }
     store.set_collector_state("docker", "since", &until, &now_iso())?;
@@ -3030,6 +3196,11 @@ fn collect_kubernetes_events(
                 quality: Some("raw".into()),
                 structured_data: Some(item),
                 raw_offset: None,
+                trace_id: None,
+                span_id: None,
+                signal_kind: "log".into(),
+                deployment_environment: None,
+                severity_text: None,
             });
         }
         if !newest.is_empty() {
@@ -3098,6 +3269,11 @@ fn collect_kubernetes_events(
                         quality: Some("normalized".into()),
                         structured_data: Some(item.clone()),
                         raw_offset: None,
+                        trace_id: None,
+                        span_id: None,
+                        signal_kind: "log".into(),
+                        deployment_environment: None,
+                        severity_text: None,
                     });
                 }
             }
@@ -3184,6 +3360,7 @@ fn file_event_record(target: &FileTailTarget, message: &str, raw_offset: u64) ->
             &target.path.display().to_string(),
             "file",
             message,
+            None,
         ),
         host_id: System::host_name().unwrap_or_else(|| "local".into()),
         event_type: 0,
@@ -3196,6 +3373,11 @@ fn file_event_record(target: &FileTailTarget, message: &str, raw_offset: u64) ->
             "multiline_pattern": target.multiline_pattern,
         })),
         raw_offset: Some(raw_offset as i64),
+        trace_id: None,
+        span_id: None,
+        signal_kind: "log".into(),
+        deployment_environment: None,
+        severity_text: None,
     }
 }
 
@@ -3596,11 +3778,105 @@ fn ingest_governance(config: &TomlValue) -> IngestGovernance {
             .unwrap_or_else(|| severity_from_level("error")),
         blocklist: governance_rules(config, "blocklist"),
         allowlist: governance_rules(config, "allowlist"),
+        indexed_attribute_keys: inferra_config::observability_indexed_attribute_keys(config),
     }
 }
 
-fn semantic_fingerprint(prefix: &str, service: &str, source_type: &str, message: &str) -> String {
-    format!(
+fn normalize_hex_trace_id_from_value(value: &serde_json::Value) -> Option<String> {
+    let s = value.as_str()?.trim();
+    if s.is_empty() {
+        return None;
+    }
+    let hex: String = s
+        .chars()
+        .filter(|ch| ch.is_ascii_hexdigit())
+        .collect::<String>()
+        .to_ascii_lowercase();
+    (hex.len() == 32).then_some(hex)
+}
+
+fn normalize_hex_span_id_from_value(value: &serde_json::Value) -> Option<String> {
+    let s = value.as_str()?.trim();
+    if s.is_empty() {
+        return None;
+    }
+    let hex: String = s
+        .chars()
+        .filter(|ch| ch.is_ascii_hexdigit())
+        .collect::<String>()
+        .to_ascii_lowercase();
+    (hex.len() == 16).then_some(hex)
+}
+
+fn payload_traceparent(payload: &serde_json::Value) -> Option<&str> {
+    let object = payload.as_object()?;
+    find_case_insensitive_json_value(object, "traceparent")
+        .and_then(|value| value.as_str())
+        .or_else(|| {
+            find_case_insensitive_json_value(object, "headers")
+                .and_then(|value| value.as_object())
+                .and_then(|headers| find_case_insensitive_json_value(headers, "traceparent"))
+                .and_then(|value| value.as_str())
+        })
+}
+
+fn payload_attribute_value<'a>(
+    payload: &'a serde_json::Value,
+    key: &str,
+) -> Option<&'a serde_json::Value> {
+    payload
+        .as_object()
+        .and_then(|object| {
+            find_case_insensitive_json_value(object, key).or_else(|| {
+                find_case_insensitive_json_value(object, "attributes")
+                    .and_then(|value| value.as_object())
+                    .and_then(|attrs| find_case_insensitive_json_value(attrs, key))
+            })
+        })
+}
+
+fn find_case_insensitive_json_value<'a>(
+    map: &'a serde_json::Map<String, serde_json::Value>,
+    key: &str,
+) -> Option<&'a serde_json::Value> {
+    map.iter()
+        .find(|(candidate, _)| candidate.eq_ignore_ascii_case(key))
+        .map(|(_, value)| value)
+}
+
+fn parse_w3c_traceparent(raw: &str) -> Option<(String, String)> {
+    let parts = raw.trim().split('-').collect::<Vec<_>>();
+    if parts.len() != 4 {
+        return None;
+    }
+    let [version, trace_id, span_id, flags] = <[&str; 4]>::try_from(parts).ok()?;
+    if version.len() != 2
+        || trace_id.len() != 32
+        || span_id.len() != 16
+        || flags.len() != 2
+        || !version.chars().all(|ch| ch.is_ascii_hexdigit())
+        || !trace_id.chars().all(|ch| ch.is_ascii_hexdigit())
+        || !span_id.chars().all(|ch| ch.is_ascii_hexdigit())
+        || !flags.chars().all(|ch| ch.is_ascii_hexdigit())
+    {
+        return None;
+    }
+    let trace_id = trace_id.to_ascii_lowercase();
+    let span_id = span_id.to_ascii_lowercase();
+    if trace_id.chars().all(|ch| ch == '0') || span_id.chars().all(|ch| ch == '0') {
+        return None;
+    }
+    Some((trace_id, span_id))
+}
+
+fn semantic_fingerprint(
+    prefix: &str,
+    service: &str,
+    source_type: &str,
+    message: &str,
+    trace_id: Option<&str>,
+) -> String {
+    let mut out = format!(
         "{prefix}:{}:{}:{}",
         service.trim().to_ascii_lowercase(),
         source_type.trim().to_ascii_lowercase(),
@@ -3618,7 +3894,12 @@ fn semantic_fingerprint(prefix: &str, service: &str, source_type: &str, message:
             .take(18)
             .collect::<Vec<_>>()
             .join(" ")
-    )
+    );
+    if let Some(t) = trace_id.map(str::trim).filter(|t| !t.is_empty()) {
+        out.push_str("::tr:");
+        out.push_str(t);
+    }
+    out
 }
 
 fn now_iso() -> String {

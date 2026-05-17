@@ -174,6 +174,191 @@ fn merge_toml(base: TomlValue, overlay: TomlValue) -> TomlValue {
 }
 
 /// Merge defaults.toml + optional user file.
+/// Minimum 1 hour. Used for log/event query windows and aligns with `[storage].retention_hours`.
+pub fn storage_retention_hours(config: &TomlValue) -> i64 {
+    config
+        .get("storage")
+        .and_then(|s| s.get("retention_hours"))
+        .and_then(|v| v.as_integer())
+        .unwrap_or(72)
+        .max(1)
+}
+
+/// Keys under `attributes` in ingested JSON copied into `event_attributes` (see observability plan).
+pub fn observability_indexed_attribute_keys(config: &TomlValue) -> Vec<String> {
+    let mut out = Vec::new();
+    let Some(obs) = config.get("observability").and_then(|v| v.as_table()) else {
+        return out;
+    };
+    let Some(idx) = obs.get("indexed_attributes").and_then(|v| v.as_table()) else {
+        return out;
+    };
+    let Some(keys) = idx.get("keys").and_then(|v| v.as_array()) else {
+        return out;
+    };
+    const MAX_KEYS: usize = 64;
+    for item in keys.iter().filter_map(TomlValue::as_str) {
+        let trimmed = item.trim();
+        if trimmed.is_empty() || out.len() >= MAX_KEYS {
+            continue;
+        }
+        out.push(trimmed.to_string());
+    }
+    out
+}
+
+/// When true, `GET /api/v2/logs` `q=` uses SQLite FTS5 (`events_fts`); otherwise `q=` uses `LIKE` on `message`.
+pub fn observability_logs_fts_enabled(config: &TomlValue) -> bool {
+    config
+        .get("observability")
+        .and_then(|o| o.get("fts"))
+        .and_then(|f| f.get("enabled"))
+        .and_then(|v| v.as_bool())
+        .unwrap_or(false)
+}
+
+/// When true, `POST /v1/logs` accepts OTLP/HTTP log export batches over JSON or protobuf.
+pub fn observability_otlp_logs_enabled(config: &TomlValue) -> bool {
+    config
+        .get("observability")
+        .and_then(|o| o.get("otlp"))
+        .and_then(|o| o.get("enabled"))
+        .and_then(|v| v.as_bool())
+        .unwrap_or(false)
+}
+
+/// Max log records processed per OTLP request (additional records are counted as rejected).
+pub fn observability_otlp_max_logs_per_request(config: &TomlValue) -> usize {
+    let n = config
+        .get("observability")
+        .and_then(|o| o.get("otlp"))
+        .and_then(|o| o.get("max_logs_per_request"))
+        .and_then(|v| v.as_integer())
+        .unwrap_or(500);
+    (n.max(1) as usize).min(10_000)
+}
+
+/// Max raw body size for `POST /v1/logs` across OTLP JSON and protobuf payloads.
+pub fn observability_otlp_max_payload_bytes(config: &TomlValue) -> usize {
+    let n = config
+        .get("observability")
+        .and_then(|o| o.get("otlp"))
+        .and_then(|o| o.get("max_payload_bytes"))
+        .and_then(|v| v.as_integer())
+        .unwrap_or(4_194_304);
+    (n.max(1024) as usize).min(32 * 1024 * 1024)
+}
+
+/// When true, a background task forwards new `events` rows as OTLP/HTTP JSON to `[observability.export].url`.
+pub fn observability_export_enabled(config: &TomlValue) -> bool {
+    config
+        .get("observability")
+        .and_then(|o| o.get("export"))
+        .and_then(|e| e.get("enabled"))
+        .and_then(|v| v.as_bool())
+        .unwrap_or(false)
+}
+
+/// OTLP logs HTTP endpoint (must be `http://` or `https://`).
+pub fn observability_export_url(config: &TomlValue) -> Option<String> {
+    let url = config
+        .get("observability")
+        .and_then(|o| o.get("export"))
+        .and_then(|e| e.get("url"))
+        .and_then(|v| v.as_str())
+        .map(str::trim)
+        .filter(|s| !s.is_empty())?;
+    if url.starts_with("http://") || url.starts_with("https://") {
+        Some(url.to_string())
+    } else {
+        None
+    }
+}
+
+pub fn observability_export_interval_seconds(config: &TomlValue) -> u64 {
+    let n = config
+        .get("observability")
+        .and_then(|o| o.get("export"))
+        .and_then(|e| e.get("interval_seconds"))
+        .and_then(|v| v.as_integer())
+        .unwrap_or(30);
+    (n.max(5) as u64).min(3600)
+}
+
+pub fn observability_export_batch_size(config: &TomlValue) -> usize {
+    let n = config
+        .get("observability")
+        .and_then(|o| o.get("export"))
+        .and_then(|e| e.get("batch_size"))
+        .and_then(|v| v.as_integer())
+        .unwrap_or(100);
+    (n.max(1) as usize).min(2000)
+}
+
+pub fn observability_export_timeout_seconds(config: &TomlValue) -> u64 {
+    let n = config
+        .get("observability")
+        .and_then(|o| o.get("export"))
+        .and_then(|e| e.get("timeout_seconds"))
+        .and_then(|v| v.as_integer())
+        .unwrap_or(15);
+    (n.max(1) as u64).min(120)
+}
+
+pub fn observability_export_max_retries(config: &TomlValue) -> u64 {
+    let n = config
+        .get("observability")
+        .and_then(|o| o.get("export"))
+        .and_then(|e| e.get("max_retries"))
+        .and_then(|v| v.as_integer())
+        .unwrap_or(3);
+    (n.max(0) as u64).min(10)
+}
+
+pub fn observability_export_retry_initial_seconds(config: &TomlValue) -> f64 {
+    let n = config
+        .get("observability")
+        .and_then(|o| o.get("export"))
+        .and_then(|e| e.get("retry_initial_seconds"))
+        .and_then(|v| v.as_float().or_else(|| v.as_integer().map(|i| i as f64)))
+        .unwrap_or(1.0);
+    n.clamp(0.1, 300.0)
+}
+
+pub fn observability_export_retry_max_seconds(config: &TomlValue) -> f64 {
+    let initial = observability_export_retry_initial_seconds(config);
+    let n = config
+        .get("observability")
+        .and_then(|o| o.get("export"))
+        .and_then(|e| e.get("retry_max_seconds"))
+        .and_then(|v| v.as_float().or_else(|| v.as_integer().map(|i| i as f64)))
+        .unwrap_or(30.0);
+    n.clamp(initial, 3600.0)
+}
+
+/// When false (default), the first run seeds the export cursor to the newest row so historical rows are not re-sent.
+pub fn observability_export_backfill_on_start(config: &TomlValue) -> bool {
+    config
+        .get("observability")
+        .and_then(|o| o.get("export"))
+        .and_then(|e| e.get("backfill_on_start"))
+        .and_then(|v| v.as_bool())
+        .unwrap_or(false)
+}
+
+/// Optional `Authorization: Bearer …` for the export HTTP client (plain string; prefer env-based secrets in production).
+pub fn observability_export_bearer_token(config: &TomlValue) -> String {
+    config
+        .get("observability")
+        .and_then(|o| o.get("export"))
+        .and_then(|e| e.get("bearer_token"))
+        .and_then(|v| v.as_str())
+        .unwrap_or_default()
+        .trim()
+        .to_string()
+}
+
+/// Merge defaults.toml + optional user file.
 pub fn load_merged_config(config_path: &Path) -> Result<TomlValue> {
     let defaults = parse_toml_str(DEFAULTS_TOML).context("defaults.toml")?;
     if !config_path.exists() {

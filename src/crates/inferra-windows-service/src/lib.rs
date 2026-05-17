@@ -560,6 +560,13 @@ mod imp {
             result
         });
 
+        match &serve_result {
+            Ok(()) => append_service_log(
+                "http server finished without error (shutdown or listener ended unexpectedly)",
+            ),
+            Err(error) => append_service_log(&format!("http server error: {error:#}")),
+        }
+
         status_handle
             .set_service_status(ServiceStatus {
                 service_type: ServiceType::OWN_PROCESS,

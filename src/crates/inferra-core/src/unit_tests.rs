@@ -48,6 +48,11 @@ fn event(
             source_type: Some(source_type.into()),
         }),
         tags: None,
+        trace_id: None,
+        span_id: None,
+        signal_kind: None,
+        deployment_environment: None,
+        severity_text: None,
     }
 }
 
@@ -152,6 +157,7 @@ fn runtime_apps_map_to_projects_with_manager_confidence() {
         script: Some(r"C:\workspace\api\server.js".into()),
         command: Some("node server.js".into()),
         project_path: Some(project.path.clone()),
+        latest_trace_summary: None,
         confidence: 0.95,
         source: "pm2".into(),
         signals: vec![WorkspaceMappingSignal {
@@ -242,6 +248,7 @@ kind = "file"
         script: None,
         command: None,
         project_path: Some(display_path(&app_dir)),
+        latest_trace_summary: None,
         confidence: 0.8,
         source: "process".into(),
         signals: Vec::new(),
@@ -476,6 +483,7 @@ fn dependency_scan_discovers_framework_log_files_without_manifest() {
         script: None,
         command: None,
         project_path: Some(project_path),
+        latest_trace_summary: None,
         confidence: 0.8,
         source: "process".into(),
         signals: Vec::new(),

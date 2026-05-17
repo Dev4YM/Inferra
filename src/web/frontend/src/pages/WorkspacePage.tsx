@@ -1,4 +1,4 @@
-import { BrainCircuit, RefreshCcw } from "lucide-react";
+import { BrainCircuit, RefreshCcw, Waypoints } from "lucide-react";
 import { useCallback, useEffect, useMemo, useState } from "react";
 import { Link, useSearchParams } from "react-router-dom";
 import { toast } from "sonner";
@@ -19,6 +19,7 @@ import { errorMessage, postJson } from "@/api";
 import { Button } from "@/components/ui/button";
 import { Card, CardContent, CardHeader, CardTitle } from "@/components/ui/card";
 import { Badge } from "@/components/ui/badge";
+import { TraceSummaryInline } from "@/components/inferra/trace-summary";
 import { Td, Th, Table, TableWrap } from "@/components/ui/table";
 import { PageHeader } from "@/components/layout/page-header";
 import { EmptyState, ErrorState, LoadingState } from "@/components/feedback/states";
@@ -27,6 +28,7 @@ import { Input } from "@/components/ui/input";
 import type { Mode } from "@/lib/experience";
 import { isAdvancedMode } from "@/lib/experience";
 import { formatDisplayValue, formatSeverityLabel } from "@/lib/format";
+import { buildTracePath, hasValidTraceId, shortTraceId } from "@/lib/observability";
 import { useApiMutation, useApiQuery } from "@/lib/query";
 
 export function WorkspacePage({ mode }: { mode: Mode }) {
@@ -154,6 +156,7 @@ export function WorkspacePage({ mode }: { mode: Mode }) {
                 <Th>Host CPU / Memory</Th>
                 <Th>Project</Th>
                 <Th>Confidence</Th>
+                <Th>Latest trace</Th>
                 <Th>Details</Th>
                 {isAdvancedMode(mode) ? <Th>Signals</Th> : null}
               </tr>
@@ -187,6 +190,14 @@ export function WorkspacePage({ mode }: { mode: Mode }) {
                   </Td>
                   <Td className="font-mono text-xs text-muted-foreground">{app.project_path ?? app.cwd ?? "-"}</Td>
                   <Td>{app.confidence.toFixed(2)}</Td>
+                  <Td>
+                    <TraceSummaryInline
+                      summary={app.latest_trace_summary}
+                      context={{ from: "workspace", appName: app.name }}
+                      emptyLabel="—"
+                      openLabel="View"
+                    />
+                  </Td>
                   <Td>
                     <Button variant="outline" size="sm" asChild>
                       <Link to={`/workspace/apps?name=${encodeURIComponent(app.name)}`}>View</Link>
@@ -488,6 +499,16 @@ function WorkspaceAppDetails({
               </div>
             </div>
           ) : null}
+          <div className="space-y-2">
+            <p className="text-xs font-semibold uppercase tracking-[0.18em] text-muted-foreground">Latest trace</p>
+            <TraceSummaryInline
+              summary={app.latest_trace_summary}
+              context={{ from: "workspace", appName: app.name }}
+              emptyLabel="No correlated trace found yet"
+              openLabel="Open trace"
+              showMessage
+            />
+          </div>
         </CardContent>
       </Card>
 
@@ -529,8 +550,23 @@ function WorkspaceAppDetails({
                     <span>{event.timestamp ?? "-"}</span>
                     <Badge variant="outline">Severity {event.severity == null ? "-" : formatSeverityLabel(event.severity)}</Badge>
                     {event.source_ref?.source_type ? <Badge variant="outline">{formatDisplayValue(event.source_ref.source_type)}</Badge> : null}
+                    {hasValidTraceId(event.trace_id) ? (
+                      <Badge variant="info" className="font-mono">
+                        {shortTraceId(event.trace_id)}
+                      </Badge>
+                    ) : null}
                   </div>
                   <p className="mt-2 break-words text-sm">{event.message ?? event.summary ?? "-"}</p>
+                  {hasValidTraceId(event.trace_id) ? (
+                    <div className="mt-3">
+                      <Button variant="outline" size="sm" asChild>
+                        <Link to={buildTracePath(event.trace_id ?? "", { from: "workspace", appName: app.name })}>
+                          <Waypoints className="size-4" />
+                          Open trace
+                        </Link>
+                      </Button>
+                    </div>
+                  ) : null}
                 </div>
               ))}
             </div>

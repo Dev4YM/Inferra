@@ -20,6 +20,33 @@ prune_interval_seconds = 60
 enable_mmap = true
 mmap_size_mb = 256
 
+[observability.indexed_attributes]
+# Flat OTel-style keys under JSON `attributes` copied into SQLite `event_attributes` on ingest.
+keys = ["http.status_code", "http.route", "exception.type"]
+
+[observability.fts]
+enabled = false
+
+# OTLP/HTTP logs (`POST /v1/logs`) via JSON or protobuf. Uses the same Bearer token as [collectors.app].shared_token when set.
+[observability.otlp]
+enabled = false
+max_logs_per_request = 500
+max_payload_bytes = 4194304
+
+# Forward new events as OTLP/HTTP JSON (`ExportLogsServiceRequest`) to an external collector.
+# Do not point `url` at this same Inferra instance's `/v1/logs` (ingest loop).
+[observability.export]
+enabled = false
+url = ""
+interval_seconds = 30
+batch_size = 100
+timeout_seconds = 15
+max_retries = 3
+retry_initial_seconds = 1.0
+retry_max_seconds = 30.0
+backfill_on_start = false
+bearer_token = ""
+
 [collectors]
 auto_start = false
 retry_initial_seconds = 1.0

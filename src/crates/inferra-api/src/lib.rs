@@ -11,15 +11,20 @@ use axum::{
     Json, Router,
 };
 use futures_util::Stream;
-use inferra_collectors::{configured_collectors, CollectorRuntime};
+use inferra_collectors::{
+    configured_collectors, normalize_otlp_logs_protobuf_request, CollectorRuntime,
+};
 use inferra_config::{
     apply_config_put, config_to_json, experience_from_config, load_merged_config, resolve_data_dir,
-    server_listen, Paths,
+    observability_export_enabled, observability_export_url, observability_logs_fts_enabled,
+    observability_otlp_logs_enabled, observability_otlp_max_logs_per_request,
+    observability_otlp_max_payload_bytes, server_listen, storage_retention_hours, Paths,
 };
 use inferra_contracts::{
     AiDoctorResponse, AiStatusResponse, ApiVersionResponse, CollectorRow, CollectorsResponse,
-    ConfigResponse, IncidentDetailResponse, IncidentRow, OverviewResponse, ServiceDetailResponse,
-    SeverityValue, WorkspaceMapResponse, WorkspaceRuntimeApp,
+    ConfigResponse, EventRow, IncidentDetailResponse, IncidentRow, OverviewResponse,
+    ServiceDetailResponse, SeverityValue, TraceSummary, WorkspaceMapResponse, WorkspaceMapping,
+    WorkspaceRuntimeApp,
 };
 use inferra_core::{
     adaptive_learning_audit_log, adaptive_learning_bulk_review_artifacts,
@@ -30,11 +35,11 @@ use inferra_core::{
     build_overview, build_overview_with_runtime_signals, build_workspace_map,
     collect_host_resources_snapshot, collect_runtime_monitor_window, refresh_incident_reasoning,
     try_collect_gpu_summary, workspace_app_live_resources, AdaptiveArtifactSelection,
-    AdaptiveSavedReviewViewDraft, OverviewRuntimeSignals,
+    AdaptiveSavedReviewViewDraft, OverviewRuntimeSignals, enrich_incident_rows_with_latest_traces,
 };
 use inferra_storage::{
     initialize_databases, AdaptiveLearningAuditQuery, AdaptiveLearningHistoryQuery, EventsStore,
-    IncidentsStore, StoredAiGeneration, StoredAiTrace, StoredExplanation, StoredFeedback,
+    IncidentsStore, LogsQuery, StoredAiGeneration, StoredAiTrace, StoredExplanation, StoredFeedback,
     StoredUiSnapshot,
 };
 use serde_json::{json, Value as JsonValue};
@@ -49,6 +54,8 @@ use std::time::{Duration, Instant};
 use time::OffsetDateTime;
 use tokio::sync::RwLock;
 use toml::Value as TomlValue;
+
+mod export_sink;
 
 const INVESTIGATION_MAX_AI_ATTEMPTS: usize = 3;
 const SCANNER_WORKSPACE_MIN_INTERVAL_SECONDS: u64 = 15;
@@ -237,11 +244,17 @@ pub fn app_router(state: AppState) -> Router {
         .route("/api/events/{event_id}", get(api_event_detail))
         .route("/api/anomaly/{service_id}/status", get(api_anomaly_status))
         .route("/api/logs", get(api_logs))
+        .route("/api/v2/logs", get(api_logs_v2))
+        .route("/api/traces/{trace_id}", get(api_trace_timeline))
         .route("/api/incidents", get(api_incidents))
         .route("/api/incidents/{incident_id}", get(api_incident_detail))
         .route(
             "/api/incidents/{incident_id}/events",
             get(api_incident_events),
+        )
+        .route(
+            "/api/incidents/{incident_id}/logs",
+            get(api_incident_logs),
         )
         .route(
             "/api/incidents/{incident_id}/hypotheses",
@@ -327,6 +340,7 @@ pub fn app_router(state: AppState) -> Router {
         .route("/api/scanner/status", get(api_scanner_status))
         .route("/api/scanner/run", post(api_scanner_run))
         .route("/api/ingest", post(api_ingest))
+        .route("/v1/logs", post(api_otlp_logs))
         .route("/api/workspace/projects", get(api_workspace_projects))
         .route("/api/workspace/map", get(api_workspace_map))
         .route("/api/workspace/services", get(api_workspace_services))
@@ -379,14 +393,26 @@ where
             .await?;
     }
     tokio::spawn(scanner_service_loop(state.clone()));
+    let export_handle = {
+        let cfg = state.config.read().await;
+        if observability_export_enabled(&cfg) && observability_export_url(&cfg).is_some() {
+            Some(tokio::spawn(export_sink::run(state.clone())))
+        } else {
+            None
+        }
+    };
     let app = app_router(state);
 
     let addr = format!("{host}:{port}");
     let listener = tokio::net::TcpListener::bind(&addr).await?;
     tracing::info!("inferra Rust runtime listening on http://{addr}");
-    axum::serve(listener, app)
+    let serve_result = axum::serve(listener, app)
         .with_graceful_shutdown(shutdown)
-        .await?;
+        .await;
+    if let Some(handle) = export_handle {
+        handle.abort();
+    }
+    serve_result?;
     Ok(())
 }
 
@@ -511,8 +537,16 @@ async fn api_metrics(State(state): State<AppState>) -> Response {
         .and_then(|store| store.active_incident_count().ok())
         .unwrap_or(0);
     let queue_depth = state.collectors.queue_depth();
+    let ex_ok = export_sink::EXPORT_BATCHES_SUCCESS.load(std::sync::atomic::Ordering::Relaxed);
+    let ex_fail = export_sink::EXPORT_BATCHES_FAILED.load(std::sync::atomic::Ordering::Relaxed);
+    let ex_events = export_sink::EXPORT_EVENTS_FORWARDED.load(std::sync::atomic::Ordering::Relaxed);
+    let ex_dropped = export_sink::EXPORT_EVENTS_DROPPED.load(std::sync::atomic::Ordering::Relaxed);
+    let ex_retries = export_sink::EXPORT_RETRIES_TOTAL.load(std::sync::atomic::Ordering::Relaxed);
+    let ex_split = export_sink::EXPORT_BATCHES_SPLIT.load(std::sync::atomic::Ordering::Relaxed);
+    let ex_partial = export_sink::EXPORT_PARTIAL_REJECTIONS.load(std::sync::atomic::Ordering::Relaxed);
+    let ex_busy = export_sink::EXPORT_TICKS_SKIPPED_BUSY.load(std::sync::atomic::Ordering::Relaxed);
     let payload = format!(
-        "# HELP inferra_events_total Approximate stored normalized events.\n# TYPE inferra_events_total counter\ninferra_events_total {event_count}\n# HELP inferra_active_incidents Active incidents (open, investigating, explained).\n# TYPE inferra_active_incidents gauge\ninferra_active_incidents {active_incidents}\n# HELP inferra_raw_queue_depth In-flight ingestion operations.\n# TYPE inferra_raw_queue_depth gauge\ninferra_raw_queue_depth {queue_depth}\n"
+        "# HELP inferra_events_total Approximate stored normalized events.\n# TYPE inferra_events_total counter\ninferra_events_total {event_count}\n# HELP inferra_active_incidents Active incidents (open, investigating, explained).\n# TYPE inferra_active_incidents gauge\ninferra_active_incidents {active_incidents}\n# HELP inferra_raw_queue_depth In-flight ingestion operations.\n# TYPE inferra_raw_queue_depth gauge\ninferra_raw_queue_depth {queue_depth}\n# HELP inferra_observability_export_batches_success_total OTLP export HTTP batches accepted by sink.\n# TYPE inferra_observability_export_batches_success_total counter\ninferra_observability_export_batches_success_total {ex_ok}\n# HELP inferra_observability_export_batches_failed_total OTLP export HTTP batches that failed or were rejected.\n# TYPE inferra_observability_export_batches_failed_total counter\ninferra_observability_export_batches_failed_total {ex_fail}\n# HELP inferra_observability_export_events_forwarded_total Event rows included in successful export batches.\n# TYPE inferra_observability_export_events_forwarded_total counter\ninferra_observability_export_events_forwarded_total {ex_events}\n# HELP inferra_observability_export_events_dropped_total Event rows skipped after sink rejection was isolated to a single poison record.\n# TYPE inferra_observability_export_events_dropped_total counter\ninferra_observability_export_events_dropped_total {ex_dropped}\n# HELP inferra_observability_export_retries_total Additional export attempts made after retryable sink failures.\n# TYPE inferra_observability_export_retries_total counter\ninferra_observability_export_retries_total {ex_retries}\n# HELP inferra_observability_export_batches_split_total Export batches recursively split after sink-side validation or partial rejection.\n# TYPE inferra_observability_export_batches_split_total counter\ninferra_observability_export_batches_split_total {ex_split}\n# HELP inferra_observability_export_partial_rejections_total Downstream OTLP partialSuccess rejected log record count observed by the exporter.\n# TYPE inferra_observability_export_partial_rejections_total counter\ninferra_observability_export_partial_rejections_total {ex_partial}\n# HELP inferra_observability_export_ticks_skipped_busy_total Export ticks skipped because a previous export was still running (backpressure).\n# TYPE inferra_observability_export_ticks_skipped_busy_total counter\ninferra_observability_export_ticks_skipped_busy_total {ex_busy}\n"
     );
     (
         StatusCode::OK,
@@ -628,17 +662,27 @@ async fn api_logs(
         .get("severity")
         .and_then(|value| value.parse::<i64>().ok())
         .map(|value| value.clamp(0, 4));
+    let cfg = state.config.read().await.clone();
+    let retention = storage_retention_hours(&cfg);
     let store = EventsStore::open(&state.paths.events_db)
         .map_err(|e| (StatusCode::INTERNAL_SERVER_ERROR, e.to_string()))?;
     let logs = if let Some(store) = store {
         store
-            .query_logs(
+            .query_logs(&LogsQuery {
                 limit,
-                params.get("service").map(String::as_str),
-                severity,
-                params.get("search").map(String::as_str),
-                params.get("source_type").map(String::as_str),
-            )
+                retention_hours: retention,
+                service_id: params.get("service").cloned(),
+                min_severity: severity,
+                search: params
+                    .get("search")
+                    .or_else(|| params.get("q"))
+                    .cloned(),
+                source_type: params.get("source_type").cloned(),
+                trace_id: params.get("trace_id").cloned(),
+                attr_key: params.get("attr_key").cloned(),
+                attr_value: params.get("attr_value").cloned(),
+                ..Default::default()
+            })
             .map_err(|e| (StatusCode::INTERNAL_SERVER_ERROR, e.to_string()))?
     } else {
         vec![]
@@ -646,15 +690,141 @@ async fn api_logs(
     Ok(Json(json!({ "logs": logs, "limit": limit })))
 }
 
+async fn api_logs_v2(
+    State(state): State<AppState>,
+    Query(params): Query<std::collections::HashMap<String, String>>,
+) -> Result<Json<JsonValue>, (StatusCode, String)> {
+    let limit = params
+        .get("limit")
+        .and_then(|value| value.parse::<usize>().ok())
+        .unwrap_or(100)
+        .clamp(1, 2000);
+    let severity = params
+        .get("severity")
+        .and_then(|value| value.parse::<i64>().ok())
+        .map(|value| value.clamp(0, 4));
+    let cfg = state.config.read().await.clone();
+    let retention = storage_retention_hours(&cfg);
+    let log_fts_enabled = observability_logs_fts_enabled(&cfg);
+    let query = LogsQuery {
+        limit,
+        retention_hours: retention,
+        service_id: params.get("service").cloned(),
+        min_severity: severity,
+        search: params.get("search").cloned(),
+        fts_query: params.get("q").cloned(),
+        log_fts_enabled,
+        source_type: params.get("source_type").cloned(),
+        trace_id: params.get("trace_id").cloned(),
+        timestamp_after: params.get("start").cloned(),
+        timestamp_before: params.get("end").cloned(),
+        cursor_timestamp: params.get("cursor_timestamp").cloned(),
+        cursor_event_id: params.get("cursor_event_id").cloned(),
+        attr_key: params.get("attr_key").cloned(),
+        attr_value: params.get("attr_value").cloned(),
+        ..Default::default()
+    };
+    let store = EventsStore::open(&state.paths.events_db)
+        .map_err(|e| (StatusCode::INTERNAL_SERVER_ERROR, e.to_string()))?;
+    let items = if let Some(store) = store {
+        store
+            .query_logs(&query)
+            .map_err(|e| (StatusCode::INTERNAL_SERVER_ERROR, e.to_string()))?
+    } else {
+        vec![]
+    };
+    let next_cursor = if items.len() == limit {
+        items.last().map(|row| {
+            json!({
+                "cursor_timestamp": row.timestamp,
+                "cursor_event_id": row.event_id,
+            })
+        })
+    } else {
+        None
+    };
+    Ok(Json(json!({
+        "items": items,
+        "limit": limit,
+        "retention_hours": retention,
+        "log_fts_enabled": log_fts_enabled,
+        "next_cursor": next_cursor,
+    })))
+}
+
+fn normalize_w3c_trace_id_for_api(raw: &str) -> Result<String, (StatusCode, String)> {
+    let hex: String = raw
+        .chars()
+        .filter(|c| c.is_ascii_hexdigit())
+        .collect::<String>()
+        .to_ascii_lowercase();
+    if hex.len() == 32 {
+        Ok(hex)
+    } else {
+        Err((
+            StatusCode::BAD_REQUEST,
+            "trace_id must be 32 hex characters (W3C trace id)".to_string(),
+        ))
+    }
+}
+
+async fn api_trace_timeline(
+    State(state): State<AppState>,
+    AxumPath(trace_id): AxumPath<String>,
+    Query(params): Query<std::collections::HashMap<String, String>>,
+) -> Result<Json<JsonValue>, (StatusCode, String)> {
+    let trace_id = normalize_w3c_trace_id_for_api(&trace_id)?;
+    initialize_databases(&state.paths.events_db, &state.paths.incidents_db)
+        .map_err(|e| (StatusCode::INTERNAL_SERVER_ERROR, e.to_string()))?;
+    let cfg = state.config.read().await.clone();
+    let retention = storage_retention_hours(&cfg);
+    let limit = params
+        .get("limit")
+        .and_then(|value| value.parse::<usize>().ok())
+        .unwrap_or(500)
+        .clamp(1, 2000);
+    let store = EventsStore::open(&state.paths.events_db)
+        .map_err(|e| (StatusCode::INTERNAL_SERVER_ERROR, e.to_string()))?;
+    let items = if let Some(store) = store {
+        store
+            .query_trace_timeline(
+                &trace_id,
+                limit,
+                retention,
+                params.get("start").cloned(),
+                params.get("end").cloned(),
+            )
+            .map_err(|e| (StatusCode::INTERNAL_SERVER_ERROR, e.to_string()))?
+    } else {
+        vec![]
+    };
+    let count = items.len();
+    Ok(Json(json!({
+        "trace_id": trace_id,
+        "items": items,
+        "limit": limit,
+        "retention_hours": retention,
+        "count": count,
+    })))
+}
+
 async fn api_incidents(
     State(state): State<AppState>,
 ) -> Result<Json<JsonValue>, (StatusCode, String)> {
-    let store = IncidentsStore::open(&state.paths.incidents_db)
+    let incidents_store = IncidentsStore::open(&state.paths.incidents_db)
         .map_err(|e| (StatusCode::INTERNAL_SERVER_ERROR, e.to_string()))?;
-    let incidents = if let Some(store) = store {
-        store
+    let events_store = EventsStore::open(&state.paths.events_db)
+        .map_err(|e| (StatusCode::INTERNAL_SERVER_ERROR, e.to_string()))?;
+    let incidents = if let Some(ref store) = incidents_store {
+        let rows = store
             .active_incidents(100)
-            .map_err(|e| (StatusCode::INTERNAL_SERVER_ERROR, e.to_string()))?
+            .map_err(|e| (StatusCode::INTERNAL_SERVER_ERROR, e.to_string()))?;
+        enrich_incident_rows_with_latest_traces(
+            rows,
+            incidents_store.as_ref(),
+            events_store.as_ref(),
+        )
+        .map_err(|e| (StatusCode::INTERNAL_SERVER_ERROR, e.to_string()))?
     } else {
         vec![]
     };
@@ -746,6 +916,94 @@ async fn api_incident_events(
         .get_events(&event_ids)
         .map_err(|e| (StatusCode::INTERNAL_SERVER_ERROR, e.to_string()))?;
     Ok(Json(json!({ "events": event_rows })))
+}
+
+async fn api_incident_logs(
+    State(state): State<AppState>,
+    AxumPath(incident_id): AxumPath<String>,
+    Query(params): Query<std::collections::HashMap<String, String>>,
+) -> Result<Json<JsonValue>, (StatusCode, String)> {
+    initialize_databases(&state.paths.events_db, &state.paths.incidents_db)
+        .map_err(|e| (StatusCode::INTERNAL_SERVER_ERROR, e.to_string()))?;
+    let cfg = state.config.read().await.clone();
+    let retention = storage_retention_hours(&cfg);
+    let log_fts_enabled = observability_logs_fts_enabled(&cfg);
+    let limit = params
+        .get("limit")
+        .and_then(|value| value.parse::<usize>().ok())
+        .unwrap_or(100)
+        .clamp(1, 2000);
+    let min_severity = params
+        .get("severity")
+        .and_then(|value| value.parse::<i64>().ok())
+        .map(|value| value.clamp(0, 4));
+    let search = params.get("search").cloned();
+    let fts_query = params.get("q").cloned();
+    let trace_id = params.get("trace_id").cloned();
+    let incidents = IncidentsStore::open(&state.paths.incidents_db)
+        .map_err(|e| (StatusCode::INTERNAL_SERVER_ERROR, e.to_string()))?
+        .ok_or_else(|| {
+            (
+                StatusCode::NOT_FOUND,
+                "Incident store not found".to_string(),
+            )
+        })?;
+    let events = EventsStore::open(&state.paths.events_db)
+        .map_err(|e| (StatusCode::INTERNAL_SERVER_ERROR, e.to_string()))?
+        .ok_or_else(|| (StatusCode::NOT_FOUND, "Event store not found".to_string()))?;
+    let incident = incidents
+        .get_incident(&incident_id)
+        .map_err(|e| (StatusCode::INTERNAL_SERVER_ERROR, e.to_string()))?
+        .ok_or_else(|| (StatusCode::NOT_FOUND, "Incident not found".to_string()))?;
+    let event_ids = incidents
+        .incident_event_ids(&incident_id)
+        .map_err(|e| (StatusCode::INTERNAL_SERVER_ERROR, e.to_string()))?;
+    let mut base_query = LogsQuery {
+        limit,
+        retention_hours: retention,
+        min_severity,
+        search,
+        fts_query,
+        log_fts_enabled,
+        trace_id,
+        timestamp_after: params.get("start").cloned(),
+        timestamp_before: params.get("end").cloned(),
+        cursor_timestamp: params.get("cursor_timestamp").cloned(),
+        cursor_event_id: params.get("cursor_event_id").cloned(),
+        source_type: params.get("source_type").cloned(),
+        attr_key: params.get("attr_key").cloned(),
+        attr_value: params.get("attr_value").cloned(),
+        ..Default::default()
+    };
+    let logs = if !event_ids.is_empty() {
+        events
+            .query_logs_for_event_ids(&event_ids, &base_query)
+            .map_err(|e| (StatusCode::INTERNAL_SERVER_ERROR, e.to_string()))?
+    } else {
+        if base_query.service_id.is_none() && !incident.primary_service.trim().is_empty() {
+            base_query.service_id = Some(incident.primary_service.clone());
+        }
+        events
+            .query_logs(&base_query)
+            .map_err(|e| (StatusCode::INTERNAL_SERVER_ERROR, e.to_string()))?
+    };
+    let next_cursor = if logs.len() == limit {
+        logs.last().map(|row| {
+            json!({
+                "cursor_timestamp": row.timestamp,
+                "cursor_event_id": row.event_id,
+            })
+        })
+    } else {
+        None
+    };
+    Ok(Json(json!({
+        "incident_id": incident_id,
+        "logs": logs,
+        "limit": limit,
+        "retention_hours": retention,
+        "next_cursor": next_cursor,
+    })))
 }
 
 async fn api_incident_hypotheses(
@@ -2295,6 +2553,138 @@ async fn api_ingest(
     Ok(Json(accepted))
 }
 
+async fn api_otlp_logs(
+    State(state): State<AppState>,
+    headers: axum::http::HeaderMap,
+    body: Body,
+) -> Response {
+    let cfg = state.config.read().await.clone();
+    if !observability_otlp_logs_enabled(&cfg) {
+        return (StatusCode::NOT_FOUND, "otlp logs ingest is disabled").into_response();
+    }
+    let max_payload = observability_otlp_max_payload_bytes(&cfg);
+    let max_records = observability_otlp_max_logs_per_request(&cfg);
+    let ingest = app_ingest_config(&cfg);
+    if !ingest.shared_token.is_empty() {
+        let auth = headers
+            .get(header::AUTHORIZATION)
+            .and_then(|value| value.to_str().ok())
+            .unwrap_or_default();
+        let expected = format!("Bearer {}", ingest.shared_token);
+        if auth != expected {
+            return (StatusCode::UNAUTHORIZED, "missing or invalid bearer token").into_response();
+        }
+    }
+    let ct = headers
+        .get(header::CONTENT_TYPE)
+        .and_then(|value| value.to_str().ok())
+        .unwrap_or("")
+        .to_ascii_lowercase();
+    let is_protobuf =
+        ct.contains("application/x-protobuf") || ct.contains("application/protobuf");
+    if ct.contains("application/grpc") {
+        return (
+            StatusCode::UNSUPPORTED_MEDIA_TYPE,
+            Json(json!({
+                "partialSuccess": {
+                    "rejectedLogRecords": 0u64,
+                    "errorMessage": "OTLP gRPC is not supported on /v1/logs; use Content-Type: application/json or application/x-protobuf with ExportLogsServiceRequest"
+                }
+            })),
+        )
+            .into_response();
+    }
+    let bytes = match axum::body::to_bytes(body, max_payload).await {
+        Ok(bytes) => bytes,
+        Err(error) => {
+            return (
+                StatusCode::PAYLOAD_TOO_LARGE,
+                format!("failed to read OTLP body: {error}"),
+            )
+                .into_response();
+        }
+    };
+    let payload: JsonValue = if is_protobuf {
+        match normalize_otlp_logs_protobuf_request(&bytes) {
+            Ok(payload) => payload,
+            Err(error) => {
+                return (
+                    StatusCode::BAD_REQUEST,
+                    Json(json!({
+                        "partialSuccess": {
+                            "rejectedLogRecords": 0u64,
+                            "errorMessage": format!("invalid OTLP protobuf: {error}")
+                        }
+                    })),
+                )
+                    .into_response();
+            }
+        }
+    } else {
+        match serde_json::from_slice(&bytes) {
+            Ok(payload) => payload,
+            Err(error) => {
+                return (
+                    StatusCode::BAD_REQUEST,
+                    Json(json!({
+                        "partialSuccess": {
+                            "rejectedLogRecords": 0u64,
+                            "errorMessage": format!("invalid OTLP JSON: {error}")
+                        }
+                    })),
+                )
+                    .into_response();
+            }
+        }
+    };
+    if let Err(error) =
+        initialize_databases(&state.paths.events_db, &state.paths.incidents_db)
+    {
+        return (
+            StatusCode::INTERNAL_SERVER_ERROR,
+            error.to_string(),
+        )
+            .into_response();
+    }
+    let ingest_result = match state
+        .collectors
+        .ingest_otlp_logs_json(
+            &state.paths.events_db,
+            &state.paths.incidents_db,
+            &cfg,
+            &payload,
+            max_records,
+        )
+        .await
+    {
+        Ok(result) => result,
+        Err(error) => {
+            return (
+                StatusCode::INTERNAL_SERVER_ERROR,
+                error.to_string(),
+            )
+                .into_response();
+        }
+    };
+    let msg = if ingest_result.inserted == 0 && ingest_result.rejected_log_records > 0 {
+        "No log records were stored (empty batch, parse errors, over limit, or governance suppression)"
+    } else if ingest_result.rejected_log_records > 0 {
+        "Some log records were rejected or suppressed; see rejectedLogRecords"
+    } else {
+        ""
+    };
+    (
+        StatusCode::OK,
+        Json(json!({
+            "partialSuccess": {
+                "rejectedLogRecords": ingest_result.rejected_log_records,
+                "errorMessage": msg
+            }
+        })),
+    )
+        .into_response()
+}
+
 async fn cached_workspace_map(
     state: &AppState,
     config: &TomlValue,
@@ -2305,15 +2695,18 @@ async fn cached_workspace_map(
         let cache = state.scanner_cache.read().await;
         if let Some(cached) = cache.workspace.as_ref() {
             if cached.cached_at.elapsed() < Duration::from_secs(interval_seconds) {
-                return Ok(cached.value.clone());
+                let mut value = cached.value.clone();
+                hydrate_workspace_runtime_app_traces(state.paths.as_ref(), &mut value)?;
+                return Ok(value);
             }
         }
         drop(cache);
         if let Some(snapshot) = read_ui_snapshot(state.paths.as_ref(), SNAPSHOT_WORKSPACE)? {
             let snapshot_age = ui_snapshot_age_seconds(&snapshot.updated_at).unwrap_or(u64::MAX);
             if snapshot_age < interval_seconds {
-                let value: WorkspaceMapResponse = serde_json::from_value(snapshot.payload.clone())
+                let mut value: WorkspaceMapResponse = serde_json::from_value(snapshot.payload.clone())
                     .context("deserialize workspace snapshot")?;
+                hydrate_workspace_runtime_app_traces(state.paths.as_ref(), &mut value)?;
                 state.scanner_cache.write().await.workspace = Some(CachedWorkspaceMap {
                     value: value.clone(),
                     scanned_at: parse_offset_datetime(&snapshot.updated_at)
@@ -2330,12 +2723,139 @@ async fn cached_workspace_map(
     refresh_workspace_scan_cache(state, config).await
 }
 
+fn workspace_app_service_candidates(
+    app: &WorkspaceRuntimeApp,
+    service_mappings: &[WorkspaceMapping],
+) -> Vec<String> {
+    let mut out = Vec::new();
+    let mut seen = HashSet::new();
+    if let Some(project_path) = app.project_path.as_deref() {
+        for mapping in service_mappings
+            .iter()
+            .filter(|mapping| mapping.project_path == project_path)
+        {
+            if seen.insert(mapping.service_id.clone()) {
+                out.push(mapping.service_id.clone());
+            }
+        }
+    }
+    if seen.insert(app.name.clone()) {
+        out.push(app.name.clone());
+    }
+    if let Some(display_name) = app.display_name.as_ref() {
+        let display_name = display_name.trim();
+        if !display_name.is_empty() && seen.insert(display_name.to_string()) {
+            out.push(display_name.to_string());
+        }
+    }
+    out
+}
+
+fn workspace_app_source_candidates(app: &WorkspaceRuntimeApp) -> Vec<String> {
+    let mut out = Vec::new();
+    let mut seen = HashSet::new();
+    if seen.insert(app.name.clone()) {
+        out.push(app.name.clone());
+    }
+    if let Some(display_name) = app.display_name.as_ref() {
+        let display_name = display_name.trim();
+        if !display_name.is_empty() && seen.insert(display_name.to_string()) {
+            out.push(display_name.to_string());
+        }
+    }
+    out
+}
+
+fn workspace_app_events(
+    store: &EventsStore,
+    app: &WorkspaceRuntimeApp,
+    service_mappings: &[WorkspaceMapping],
+    retention_hours: i64,
+    limit: usize,
+) -> Result<Vec<EventRow>> {
+    for service_id in workspace_app_service_candidates(app, service_mappings) {
+        let rows = store.query_logs(&LogsQuery {
+            limit,
+            retention_hours,
+            service_id: Some(service_id),
+            ..Default::default()
+        })?;
+        if !rows.is_empty() {
+            return Ok(rows);
+        }
+    }
+    for source_type in workspace_app_source_candidates(app) {
+        let rows = store.query_logs(&LogsQuery {
+            limit,
+            retention_hours,
+            source_type: Some(source_type),
+            ..Default::default()
+        })?;
+        if !rows.is_empty() {
+            return Ok(rows);
+        }
+    }
+    Ok(Vec::new())
+}
+
+fn workspace_app_latest_trace_summary(
+    store: &EventsStore,
+    app: &WorkspaceRuntimeApp,
+    service_mappings: &[WorkspaceMapping],
+) -> Result<Option<TraceSummary>> {
+    let mut latest: Option<TraceSummary> = None;
+    for service_id in workspace_app_service_candidates(app, service_mappings) {
+        let Some(candidate) = store.latest_trace_summary_for_service(&service_id)? else {
+            continue;
+        };
+        let replace = match latest.as_ref() {
+            None => true,
+            Some(current) => {
+                let candidate_seen = candidate.last_seen_at.as_deref().unwrap_or("");
+                let current_seen = current.last_seen_at.as_deref().unwrap_or("");
+                candidate_seen > current_seen
+                    || (candidate_seen == current_seen && candidate.event_count > current.event_count)
+            }
+        };
+        if replace {
+            latest = Some(candidate);
+        }
+    }
+    Ok(latest)
+}
+
+fn enrich_workspace_runtime_apps_with_latest_traces(
+    workspace: &mut WorkspaceMapResponse,
+    store: &EventsStore,
+) -> Result<()> {
+    let service_mappings = workspace.service_mappings.clone();
+    for app in &mut workspace.runtime_apps {
+        app.latest_trace_summary =
+            workspace_app_latest_trace_summary(store, app, &service_mappings)?;
+    }
+    Ok(())
+}
+
+fn hydrate_workspace_runtime_app_traces(
+    paths: &Paths,
+    workspace: &mut WorkspaceMapResponse,
+) -> Result<()> {
+    if workspace.runtime_apps.is_empty() {
+        return Ok(());
+    }
+    if let Some(store) = EventsStore::open(&paths.events_db)? {
+        enrich_workspace_runtime_apps_with_latest_traces(workspace, &store)?;
+    }
+    Ok(())
+}
+
 async fn refresh_workspace_scan_cache(
     state: &AppState,
     config: &TomlValue,
 ) -> Result<WorkspaceMapResponse> {
     let interval_seconds = workspace_scan_interval_seconds(config);
-    let value = build_workspace_map(config, state.paths.as_ref())?;
+    let mut value = build_workspace_map(config, state.paths.as_ref())?;
+    hydrate_workspace_runtime_app_traces(state.paths.as_ref(), &mut value)?;
     let cached = CachedWorkspaceMap {
         value: value.clone(),
         scanned_at: OffsetDateTime::now_utc(),
@@ -2473,19 +2993,12 @@ async fn api_workspace_app_logs(
             item.name == app_name || item.display_name.as_deref() == Some(app_name.as_str())
         })
         .ok_or_else(|| (StatusCode::NOT_FOUND, "workspace app not found".to_string()))?;
+    let retention = storage_retention_hours(&cfg);
     let events = if let Some(store) = EventsStore::open(&state.paths.events_db)
         .map_err(|e| (StatusCode::INTERNAL_SERVER_ERROR, e.to_string()))?
     {
-        let by_service = store
-            .query_logs(limit, Some(&app.name), None, None, None)
-            .map_err(|e| (StatusCode::INTERNAL_SERVER_ERROR, e.to_string()))?;
-        if by_service.is_empty() {
-            store
-                .query_logs(limit, None, None, Some(&app.name), None)
-                .map_err(|e| (StatusCode::INTERNAL_SERVER_ERROR, e.to_string()))?
-        } else {
-            by_service
-        }
+        workspace_app_events(&store, app, &workspace.service_mappings, retention, limit)
+            .map_err(|e| (StatusCode::INTERNAL_SERVER_ERROR, e.to_string()))?
     } else {
         Vec::new()
     };
@@ -3608,10 +4121,21 @@ fn build_investigation_bundle(
                 .find(|item| item.name == app_name)
                 .cloned()
                 .with_context(|| format!("workspace app not found: {app_name}"))?;
+            let retention = storage_retention_hours(config);
             let events = if let Some(store) = EventsStore::open(&paths.events_db)? {
-                let by_service = store.query_logs(50, Some(&app.name), None, None, None)?;
+                let by_service = store.query_logs(&LogsQuery {
+                    limit: 50,
+                    retention_hours: retention,
+                    service_id: Some(app.name.clone()),
+                    ..Default::default()
+                })?;
                 if by_service.is_empty() {
-                    store.query_logs(50, None, None, Some(&app.name), None)?
+                    store.query_logs(&LogsQuery {
+                        limit: 50,
+                        retention_hours: retention,
+                        source_type: Some(app.name.clone()),
+                        ..Default::default()
+                    })?
                 } else {
                     by_service
                 }
@@ -5256,6 +5780,7 @@ mod tests {
     use rusqlite::Connection;
     use serde_json::Value as JsonValue;
     use std::time::{SystemTime, UNIX_EPOCH};
+    use toml::Value as TomlValue;
     use tower::util::ServiceExt;
 
     fn test_root(name: &str) -> PathBuf {
@@ -5304,6 +5829,12 @@ watch_pids = []
 [collectors.app]
 enabled = true
 enable_main_api = true
+
+[observability.otlp]
+enabled = true
+
+[observability.fts]
+enabled = true
 
 [ai]
 enabled = false
@@ -5483,14 +6014,41 @@ enabled = false
                     service_id TEXT,
                     message TEXT,
                     source_type TEXT,
-                    tags TEXT
-                );",
+                    tags TEXT,
+                    trace_id TEXT,
+                    span_id TEXT,
+                    signal_kind TEXT NOT NULL DEFAULT 'log',
+                    deployment_environment TEXT,
+                    severity_text TEXT
+                );
+                DROP TRIGGER IF EXISTS events_fts_ai;
+                DROP TRIGGER IF EXISTS events_fts_au;
+                DROP TRIGGER IF EXISTS events_fts_ad;
+                CREATE VIRTUAL TABLE IF NOT EXISTS events_fts USING fts5(
+                    event_id UNINDEXED,
+                    message,
+                    tokenize = 'unicode61'
+                );
+                CREATE TRIGGER events_fts_ai AFTER INSERT ON events BEGIN
+                    INSERT INTO events_fts(event_id, message)
+                    VALUES (new.event_id, substr(new.message, 1, 8192));
+                END;
+                CREATE TRIGGER events_fts_au AFTER UPDATE ON events BEGIN
+                    INSERT INTO events_fts(events_fts, event_id, message)
+                    VALUES ('delete', old.event_id, old.message);
+                    INSERT INTO events_fts(event_id, message)
+                    VALUES (new.event_id, substr(new.message, 1, 8192));
+                END;
+                CREATE TRIGGER events_fts_ad AFTER DELETE ON events BEGIN
+                    INSERT INTO events_fts(events_fts, event_id, message)
+                    VALUES ('delete', old.event_id, old.message);
+                END;",
             )
             .expect("create events schema");
         events
             .execute(
-                "INSERT INTO events (event_id, timestamp, severity, service_id, message, source_type, tags)
-                 VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7)",
+                "INSERT INTO events (event_id, timestamp, severity, service_id, message, source_type, tags, trace_id)
+                 VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8)",
                 rusqlite::params![
                     "evt-1",
                     ts_evt1.as_str(),
@@ -5498,14 +6056,15 @@ enabled = false
                     "api",
                     "timeout calling postgres",
                     "app",
-                    "[\"database\"]"
+                    "[\"database\"]",
+                    "aabbccdd0011223344556677889900aa",
                 ],
             )
             .expect("insert event 1");
         events
             .execute(
-                "INSERT INTO events (event_id, timestamp, severity, service_id, message, source_type, tags)
-                 VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7)",
+                "INSERT INTO events (event_id, timestamp, severity, service_id, message, source_type, tags, trace_id)
+                 VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8)",
                 rusqlite::params![
                     "evt-2",
                     ts_evt2.as_str(),
@@ -5513,10 +6072,27 @@ enabled = false
                     "api",
                     "connection refused from postgres",
                     "app",
-                    "[\"database\",\"critical\"]"
+                    "[\"database\",\"critical\"]",
+                    "aabbccdd0011223344556677889900aa",
                 ],
             )
             .expect("insert event 2");
+        events
+            .execute_batch(
+                "CREATE TABLE IF NOT EXISTS event_attributes (
+                    event_id TEXT NOT NULL,
+                    attr_key TEXT NOT NULL,
+                    attr_value_text TEXT,
+                    attr_value_num REAL,
+                    attr_value_int INTEGER,
+                    PRIMARY KEY (event_id, attr_key)
+                );
+                CREATE INDEX IF NOT EXISTS idx_event_attr_key_text ON event_attributes(attr_key, attr_value_text);
+                CREATE INDEX IF NOT EXISTS idx_event_attr_key_num ON event_attributes(attr_key, attr_value_num);
+                INSERT OR REPLACE INTO event_attributes (event_id, attr_key, attr_value_text, attr_value_num, attr_value_int)
+                    VALUES ('evt-2', 'http.status_code', NULL, NULL, 503);",
+            )
+            .expect("seed event_attributes");
 
         let incidents = Connection::open(&paths.incidents_db).expect("open test incidents db");
         incidents
@@ -5610,6 +6186,39 @@ enabled = false
                 rusqlite::params!["inc-1", "cluster-1", "{\"kind\":\"database\"}"],
             )
             .expect("insert cluster");
+    }
+
+    fn workspace_test_app(name: &str, project_path: &str) -> WorkspaceRuntimeApp {
+        WorkspaceRuntimeApp {
+            pid: None,
+            name: name.into(),
+            display_name: Some(name.into()),
+            runtime: "nodejs".into(),
+            language: Some("nodejs".into()),
+            process_kind: Some("server".into()),
+            framework: Some("nextjs".into()),
+            libraries: Vec::new(),
+            log_hints: Vec::new(),
+            log_sources: Vec::new(),
+            app_url: None,
+            endpoints: Vec::new(),
+            health_endpoint: None,
+            app_location: None,
+            resources: None,
+            app_state: None,
+            context_capabilities: Vec::new(),
+            app_structure: Vec::new(),
+            manager: None,
+            status: Some("running".into()),
+            cwd: Some(project_path.into()),
+            script: None,
+            command: None,
+            project_path: Some(project_path.into()),
+            latest_trace_summary: None,
+            confidence: 0.9,
+            source: "process".into(),
+            signals: Vec::new(),
+        }
     }
 
     #[test]
@@ -5768,17 +6377,47 @@ redact_raw_logs = true
         assert!(overview.get("runtime").is_some());
         assert!(overview.get("workspace_projects").is_some());
         assert!(overview.get("experience").is_some());
+        assert!(overview
+            .get("dashboard")
+            .and_then(|dashboard| dashboard.get("incidents"))
+            .and_then(|items| items.as_array())
+            .and_then(|items| items.first())
+            .and_then(|incident| incident.get("latest_trace_summary"))
+            .and_then(JsonValue::as_object)
+            .is_some());
+        assert!(overview
+            .get("dashboard")
+            .and_then(|dashboard| dashboard.get("services"))
+            .and_then(|items| items.as_array())
+            .and_then(|items| items.first())
+            .and_then(|service| service.get("latest_trace_summary"))
+            .and_then(JsonValue::as_object)
+            .is_some());
 
         let incidents = get_json(app.clone(), "/api/incidents").await;
         assert!(incidents
             .get("incidents")
             .and_then(|v| v.as_array())
             .is_some());
+        assert!(incidents
+            .get("incidents")
+            .and_then(|items| items.as_array())
+            .and_then(|items| items.first())
+            .and_then(|incident| incident.get("latest_trace_summary"))
+            .and_then(JsonValue::as_object)
+            .is_some());
 
         let services = get_json(app.clone(), "/api/services").await;
         assert!(services
             .get("services")
             .and_then(|v| v.as_array())
+            .is_some());
+        assert!(services
+            .get("services")
+            .and_then(|items| items.as_array())
+            .and_then(|items| items.first())
+            .and_then(|service| service.get("latest_trace_summary"))
+            .and_then(JsonValue::as_object)
             .is_some());
 
         let logs = get_json(app.clone(), "/api/logs?limit=5").await;
@@ -5824,6 +6463,74 @@ redact_raw_logs = true
             .is_some());
     }
 
+    #[test]
+    fn workspace_trace_summary_enrichment_uses_project_service_mapping() {
+        let state = seeded_test_state("workspace-trace-summary", false);
+        let project_path = "D:/workspace/api";
+        let mut workspace = WorkspaceMapResponse {
+            enabled: true,
+            support_layers: Vec::new(),
+            projects: Vec::new(),
+            runtime_apps: vec![workspace_test_app("frontend", project_path)],
+            service_mappings: vec![WorkspaceMapping {
+                service_id: "api".into(),
+                project_path: project_path.into(),
+                confidence: 0.98,
+                source: "test".into(),
+                notes: None,
+                signals: Vec::new(),
+            }],
+            unmapped_services: Vec::new(),
+            config_mappings: Vec::new(),
+        };
+        let store = EventsStore::open(&state.paths.events_db)
+            .expect("open events db")
+            .expect("events store");
+
+        enrich_workspace_runtime_apps_with_latest_traces(&mut workspace, &store)
+            .expect("enrich workspace apps");
+
+        let summary = workspace.runtime_apps[0]
+            .latest_trace_summary
+            .as_ref()
+            .expect("latest trace summary");
+        assert_eq!(summary.trace_id, "aabbccdd0011223344556677889900aa");
+        assert_eq!(summary.event_count, 2);
+        assert_eq!(
+            summary.sample_message.as_deref(),
+            Some("connection refused from postgres")
+        );
+    }
+
+    #[test]
+    fn workspace_app_events_fallback_to_mapped_service_when_app_name_has_no_rows() {
+        let state = seeded_test_state("workspace-app-events", false);
+        let project_path = "D:/workspace/api";
+        let app = workspace_test_app("frontend", project_path);
+        let mappings = vec![WorkspaceMapping {
+            service_id: "api".into(),
+            project_path: project_path.into(),
+            confidence: 0.98,
+            source: "test".into(),
+            notes: None,
+            signals: Vec::new(),
+        }];
+        let store = EventsStore::open(&state.paths.events_db)
+            .expect("open events db")
+            .expect("events store");
+
+        let rows = workspace_app_events(&store, &app, &mappings, 72, 10)
+            .expect("workspace app events");
+
+        assert_eq!(rows.len(), 2);
+        assert_eq!(
+            rows[0].event_id.as_deref(),
+            Some("evt-2"),
+            "newest api event should be reused for the mapped workspace app"
+        );
+        assert!(rows.iter().all(|row| row.service_id.as_deref() == Some("api")));
+    }
+
     #[tokio::test]
     async fn parity_routes_expose_legacy_read_models() {
         let app = app_router(seeded_test_state("parity-routes", false));
@@ -5844,11 +6551,29 @@ redact_raw_logs = true
         assert_eq!(anomaly["service_id"], JsonValue::String("api".into()));
         assert!(anomaly.get("buckets").is_some());
 
-        let incident_events = get_json(app.clone(), "/api/incidents/inc-1/events").await;
+        let incident_logs = get_json(app.clone(), "/api/incidents/inc-1/logs").await;
         assert_eq!(
-            incident_events["events"]
+            incident_logs["logs"]
                 .as_array()
                 .map(|items| items.len()),
+            Some(2)
+        );
+        let log_ids: std::collections::HashSet<String> = incident_logs["logs"]
+            .as_array()
+            .expect("logs")
+            .iter()
+            .filter_map(|row| row.get("event_id").and_then(|v| v.as_str()).map(str::to_owned))
+            .collect();
+        assert!(log_ids.contains("evt-1"));
+        assert!(log_ids.contains("evt-2"));
+
+        let trace_timeline = get_json(
+            app.clone(),
+            "/api/traces/aabbccdd0011223344556677889900aa?limit=10",
+        )
+        .await;
+        assert_eq!(
+            trace_timeline["items"].as_array().map(|items| items.len()),
             Some(2)
         );
 
@@ -5907,6 +6632,75 @@ redact_raw_logs = true
             .hypotheses(&active[0].incident_id)
             .expect("incident hypotheses");
         assert!(!hypotheses.is_empty());
+    }
+
+    #[tokio::test]
+    async fn app_ingest_route_derives_trace_fields_from_traceparent() {
+        let state = test_state("app-ingest-traceparent", false);
+        let events_db = state.paths.events_db.clone();
+        let app = app_router(state);
+        let (status, _) = post_json(
+            app,
+            "/api/ingest",
+            serde_json::json!({
+                "timestamp": "2026-05-07T10:10:00Z",
+                "level": "error",
+                "service": "api",
+                "message": "application ingest traceparent path",
+                "headers": {
+                    "traceparent": "00-4bf92f3577b34da6a3ce929d0e0e4736-00f067aa0ba902b7-01"
+                }
+            }),
+            None,
+        )
+        .await;
+        assert_eq!(status, StatusCode::OK);
+
+        let events = EventsStore::open(&events_db)
+            .expect("open events db")
+            .expect("events store");
+        let latest = events.latest_events(10).expect("latest events");
+        assert_eq!(latest.len(), 1);
+        assert_eq!(
+            latest[0].trace_id.as_deref(),
+            Some("4bf92f3577b34da6a3ce929d0e0e4736")
+        );
+        assert_eq!(latest[0].span_id.as_deref(), Some("00f067aa0ba902b7"));
+    }
+
+    #[tokio::test]
+    async fn app_ingest_route_promotes_inferra_trace_keys_from_attributes() {
+        let state = test_state("app-ingest-inferra-trace-id", false);
+        let events_db = state.paths.events_db.clone();
+        let app = app_router(state);
+        let (status, _) = post_json(
+            app,
+            "/api/ingest",
+            serde_json::json!({
+                "timestamp": "2026-05-07T10:10:00Z",
+                "level": "info",
+                "service": "worker",
+                "message": "background job correlation path",
+                "attributes": {
+                    "inferra.trace_id": "4bf92f3577b34da6a3ce929d0e0e4736",
+                    "inferra.span_id": "00f067aa0ba902b7"
+                }
+            }),
+            None,
+        )
+        .await;
+        assert_eq!(status, StatusCode::OK);
+
+        let events = EventsStore::open(&events_db)
+            .expect("open events db")
+            .expect("events store");
+        let latest = events.latest_events(10).expect("latest events");
+        assert_eq!(latest.len(), 1);
+        assert_eq!(
+            latest[0].trace_id.as_deref(),
+            Some("4bf92f3577b34da6a3ce929d0e0e4736")
+        );
+        assert_eq!(latest[0].span_id.as_deref(), Some("00f067aa0ba902b7"));
     }
 
     #[tokio::test]
@@ -6316,6 +7110,249 @@ roots = ["{}"]
     }
 
     #[tokio::test]
+    async fn logs_v2_route_filters_by_indexed_attribute() {
+        let app = app_router(seeded_test_state("logs-v2-attr", false));
+        let payload = get_json(
+            app,
+            "/api/v2/logs?service=api&attr_key=http.status_code&attr_value=503&limit=10",
+        )
+        .await;
+        let items = payload["items"].as_array().expect("items");
+        assert_eq!(items.len(), 1);
+        assert_eq!(
+            items[0].get("event_id"),
+            Some(&JsonValue::String("evt-2".into()))
+        );
+    }
+
+    #[tokio::test]
+    async fn logs_v2_q_uses_fts_when_enabled() {
+        let app = app_router(seeded_test_state("logs-v2-fts", false));
+        let payload = get_json(
+            app,
+            "/api/v2/logs?service=api&q=refused&limit=10",
+        )
+        .await;
+        assert_eq!(
+            payload.get("log_fts_enabled").and_then(JsonValue::as_bool),
+            Some(true)
+        );
+        let items = payload["items"].as_array().expect("items");
+        assert_eq!(items.len(), 1);
+        assert_eq!(
+            items[0].get("event_id"),
+            Some(&JsonValue::String("evt-2".into()))
+        );
+    }
+
+    #[tokio::test]
+    async fn trace_timeline_returns_chronological_items() {
+        let app = app_router(seeded_test_state("trace-timeline", false));
+        let payload = get_json(
+            app,
+            "/api/traces/AABBCCDD0011223344556677889900AA?limit=20",
+        )
+        .await;
+        assert_eq!(payload.get("count"), Some(&JsonValue::Number(2.into())));
+        let items = payload["items"].as_array().expect("items");
+        assert_eq!(items.len(), 2);
+        assert_eq!(items[0]["event_id"], JsonValue::String("evt-1".into()));
+        assert_eq!(items[1]["event_id"], JsonValue::String("evt-2".into()));
+    }
+
+    #[tokio::test]
+    async fn trace_timeline_rejects_malformed_trace_id() {
+        let app = app_router(seeded_test_state("trace-bad", false));
+        let response = app
+            .oneshot(
+                Request::builder()
+                    .uri("/api/traces/not-a-valid-trace-id")
+                    .body(Body::empty())
+                    .expect("request"),
+            )
+            .await
+            .expect("response");
+        assert_eq!(response.status(), StatusCode::BAD_REQUEST);
+    }
+
+    #[tokio::test]
+    async fn otlp_logs_returns_404_when_disabled() {
+        let state = test_state("otlp-disabled", false);
+        {
+            let mut cfg = state.config.write().await;
+            let table = cfg.as_table_mut().expect("root table");
+            let obs = table
+                .entry("observability".to_string())
+                .or_insert(TomlValue::Table(Default::default()));
+            let obs_table = obs.as_table_mut().expect("observability table");
+            let otlp = obs_table
+                .entry("otlp".to_string())
+                .or_insert(TomlValue::Table(Default::default()));
+            let otlp_table = otlp.as_table_mut().expect("otlp table");
+            otlp_table.insert("enabled".to_string(), TomlValue::Boolean(false));
+        }
+        let app = app_router(state);
+        let (status, _) = post_json(app, "/v1/logs", json!({ "resourceLogs": [] }), None).await;
+        assert_eq!(status, StatusCode::NOT_FOUND);
+    }
+
+    #[tokio::test]
+    async fn otlp_logs_protobuf_ingest_returns_partial_success() {
+        use prost::Message;
+
+        let app = app_router(test_state("otlp-proto", false));
+        let trace_id = [
+            0xca, 0xfe, 0xba, 0xbe, 0x00, 0x11, 0x22, 0x33, 0x44, 0x55, 0x66, 0x77, 0x88, 0x99,
+            0x00, 0xaa,
+        ];
+        let request =
+            opentelemetry_proto::tonic::collector::logs::v1::ExportLogsServiceRequest {
+                resource_logs: vec![opentelemetry_proto::tonic::logs::v1::ResourceLogs {
+                    resource: Some(opentelemetry_proto::tonic::resource::v1::Resource {
+                        attributes: vec![opentelemetry_proto::tonic::common::v1::KeyValue {
+                            key: "service.name".into(),
+                            value: Some(opentelemetry_proto::tonic::common::v1::AnyValue {
+                                value: Some(
+                                    opentelemetry_proto::tonic::common::v1::any_value::Value::StringValue(
+                                        "api-otlp-proto".into(),
+                                    ),
+                                ),
+                            }),
+                            key_strindex: 0,
+                        }],
+                        dropped_attributes_count: 0,
+                        entity_refs: Vec::new(),
+                    }),
+                    scope_logs: vec![opentelemetry_proto::tonic::logs::v1::ScopeLogs {
+                        scope: Some(
+                            opentelemetry_proto::tonic::common::v1::InstrumentationScope {
+                                name: "api-test".into(),
+                                version: "1.0.0".into(),
+                                attributes: Vec::new(),
+                                dropped_attributes_count: 0,
+                            },
+                        ),
+                        log_records: vec![opentelemetry_proto::tonic::logs::v1::LogRecord {
+                            time_unix_nano: 1_715_689_200_000_000_000,
+                            observed_time_unix_nano: 0,
+                            severity_number: 9,
+                            severity_text: "INFO".into(),
+                            body: Some(opentelemetry_proto::tonic::common::v1::AnyValue {
+                                value: Some(
+                                    opentelemetry_proto::tonic::common::v1::any_value::Value::StringValue(
+                                        "otlp protobuf ingest probe".into(),
+                                    ),
+                                ),
+                            }),
+                            attributes: Vec::new(),
+                            dropped_attributes_count: 0,
+                            flags: 0,
+                            trace_id: trace_id.to_vec(),
+                            span_id: Vec::new(),
+                            event_name: String::new(),
+                        }],
+                        schema_url: String::new(),
+                    }],
+                    schema_url: String::new(),
+                }],
+            };
+        let response = app
+            .clone()
+            .oneshot(
+                Request::builder()
+                    .method("POST")
+                    .uri("/v1/logs")
+                    .header(header::CONTENT_TYPE, "application/x-protobuf")
+                    .body(Body::from(request.encode_to_vec()))
+                    .expect("request"),
+            )
+            .await
+            .expect("response");
+        assert_eq!(response.status(), StatusCode::OK);
+        let body = axum::body::to_bytes(response.into_body(), usize::MAX)
+            .await
+            .expect("read body");
+        let payload: JsonValue = serde_json::from_slice(&body).expect("parse payload");
+        assert_eq!(
+            payload["partialSuccess"]["rejectedLogRecords"],
+            JsonValue::Number(0.into())
+        );
+        let events = get_json(app, "/api/events?limit=20").await;
+        let arr = events["events"].as_array().expect("events");
+        assert!(arr.iter().any(|e| {
+            e.get("message").and_then(|m| m.as_str()) == Some("otlp protobuf ingest probe")
+                && e.get("trace_id").and_then(|t| t.as_str())
+                    == Some("cafebabe0011223344556677889900aa")
+        }));
+    }
+
+    #[tokio::test]
+    async fn otlp_logs_rejects_invalid_protobuf_payload() {
+        let app = app_router(test_state("otlp-proto-invalid", false));
+        let response = app
+            .oneshot(
+                Request::builder()
+                    .method("POST")
+                    .uri("/v1/logs")
+                    .header(header::CONTENT_TYPE, "application/x-protobuf")
+                    .body(Body::from(vec![0x01, 0x02, 0x03]))
+                    .expect("request"),
+            )
+            .await
+            .expect("response");
+        assert_eq!(response.status(), StatusCode::BAD_REQUEST);
+    }
+
+    #[tokio::test]
+    async fn otlp_logs_returns_415_for_grpc_content_type() {
+        let app = app_router(test_state("otlp-grpc", false));
+        let response = app
+            .oneshot(
+                Request::builder()
+                    .method("POST")
+                    .uri("/v1/logs")
+                    .header(header::CONTENT_TYPE, "application/grpc")
+                    .body(Body::empty())
+                    .expect("request"),
+            )
+            .await
+            .expect("response");
+        assert_eq!(response.status(), StatusCode::UNSUPPORTED_MEDIA_TYPE);
+    }
+
+    #[tokio::test]
+    async fn otlp_logs_json_ingest_returns_partial_success() {
+        let app = app_router(test_state("otlp-json-api", false));
+        let tid = "cafebabe0011223344556677889900aa";
+        let payload = json!({
+            "resourceLogs": [{
+                "resource": {
+                    "attributes": [{"key": "service.name", "value": {"stringValue": "api-otlp"}}]
+                },
+                "scopeLogs": [{
+                    "logRecords": [{
+                        "timeUnixNano": "1715689200000000000",
+                        "severityNumber": 9,
+                        "body": {"stringValue": "otlp json ingest probe"},
+                        "traceId": tid
+                    }]
+                }]
+            }]
+        });
+        let (status, body) = post_json(app.clone(), "/v1/logs", payload, None).await;
+        assert_eq!(status, StatusCode::OK, "{body:?}");
+        assert_eq!(
+            body["partialSuccess"]["rejectedLogRecords"],
+            JsonValue::Number(0.into())
+        );
+        let events = get_json(app, "/api/events?limit=20").await;
+        let arr = events["events"].as_array().expect("events");
+        assert!(arr.iter().any(|e| {
+            e.get("message").and_then(|m| m.as_str()) == Some("otlp json ingest probe")
+        }));
+    }
+
+    #[tokio::test]
     async fn metrics_route_exposes_prometheus_text_payload() {
         let app = app_router(seeded_test_state("metrics", false));
         let response = app
@@ -6338,6 +7375,8 @@ roots = ["{}"]
         let text = String::from_utf8(body.to_vec()).expect("metrics text");
         assert!(text.contains("inferra_events_total"));
         assert!(text.contains("inferra_active_incidents"));
+        assert!(text.contains("inferra_observability_export_batches_success_total"));
+        assert!(text.contains("inferra_observability_export_retries_total"));
         assert!(text.contains("inferra_raw_queue_depth"));
     }
 

@@ -8,6 +8,7 @@ license.workspace = true
 anyhow = { workspace = true }
 async-stream = "0.3"
 axum = { workspace = true }
+base64 = "0.22"
 bytes = { workspace = true }
 http = "1"
 inferra-config = { path = "../inferra-config" }
@@ -28,4 +29,6 @@ tracing = { workspace = true }
 walkdir = { workspace = true }
 
 [dev-dependencies]
+opentelemetry-proto = { version = "0.32.0", default-features = false, features = ["gen-tonic-messages", "logs"] }
+prost = "0.14.3"
 rusqlite = { workspace = true }

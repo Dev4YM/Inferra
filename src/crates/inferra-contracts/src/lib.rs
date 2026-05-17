@@ -45,6 +45,26 @@ pub struct QuickAnalysis {
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct TraceSummary {
+    pub trace_id: String,
+    pub event_count: i64,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub last_seen_at: Option<String>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub service_id: Option<String>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub source_type: Option<String>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub signal_kind: Option<String>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub deployment_environment: Option<String>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub severity: Option<SeverityValue>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub sample_message: Option<String>,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct IncidentRow {
     pub incident_id: String,
     pub state: String,
@@ -58,6 +78,8 @@ pub struct IncidentRow {
     pub updated_at: Option<String>,
     #[serde(skip_serializing_if = "Option::is_none")]
     pub event_count: Option<i64>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub latest_trace_summary: Option<TraceSummary>,
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
@@ -74,6 +96,8 @@ pub struct ServiceRow {
     pub last_event_at: Option<String>,
     #[serde(skip_serializing_if = "Option::is_none")]
     pub active_incidents: Option<Vec<IncidentRow>>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub latest_trace_summary: Option<TraceSummary>,
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
@@ -304,6 +328,8 @@ pub struct WorkspaceRuntimeApp {
     pub command: Option<String>,
     #[serde(skip_serializing_if = "Option::is_none")]
     pub project_path: Option<String>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub latest_trace_summary: Option<TraceSummary>,
     pub confidence: f64,
     pub source: String,
     pub signals: Vec<WorkspaceMappingSignal>,
@@ -461,6 +487,16 @@ pub struct EventRow {
     pub source_ref: Option<EventSourceRef>,
     #[serde(skip_serializing_if = "Option::is_none")]
     pub tags: Option<Vec<String>>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub trace_id: Option<String>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub span_id: Option<String>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub signal_kind: Option<String>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub deployment_environment: Option<String>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub severity_text: Option<String>,
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize)]

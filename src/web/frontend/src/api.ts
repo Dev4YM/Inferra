@@ -588,16 +588,6 @@ export type QuickAnalysis = {
   ai_role: string;
 };
 
-export type ServiceRow = {
-  service_id: string;
-  status: string;
-  event_count?: number;
-  error_count?: number;
-  error_ratio?: number;
-  last_event_at?: string | null;
-  active_incidents?: IncidentRow[];
-};
-
 export type IncidentRow = {
   incident_id: string;
   state: string;
@@ -607,6 +597,30 @@ export type IncidentRow = {
   created_at?: string;
   updated_at?: string;
   event_count?: number;
+  latest_trace_summary?: TraceSummary | null;
+};
+
+export type TraceSummary = {
+  trace_id: string;
+  event_count: number;
+  last_seen_at?: string | null;
+  service_id?: string | null;
+  source_type?: string | null;
+  signal_kind?: string | null;
+  deployment_environment?: string | null;
+  severity?: number | string | null;
+  sample_message?: string | null;
+};
+
+export type ServiceRow = {
+  service_id: string;
+  status: string;
+  event_count?: number;
+  error_count?: number;
+  error_ratio?: number;
+  last_event_at?: string | null;
+  active_incidents?: IncidentRow[];
+  latest_trace_summary?: TraceSummary | null;
 };
 
 export type DashboardPayload = {
@@ -961,6 +975,7 @@ export type WorkspaceRuntimeApp = {
   script?: string | null;
   command?: string | null;
   project_path?: string | null;
+  latest_trace_summary?: TraceSummary | null;
   confidence: number;
   source: string;
   signals: WorkspaceMappingSignal[];
@@ -1036,7 +1051,33 @@ export type EventRow = {
   summary?: string;
   source_ref?: { source_type?: string };
   tags?: string[];
+  trace_id?: string;
+  span_id?: string;
+  signal_kind?: string;
+  deployment_environment?: string;
+  severity_text?: string;
 };
+
+/** Response from `GET /api/v2/logs` (trace-aware normalized log explorer with keyset pagination). */
+export type LogsV2Response = {
+  items: EventRow[];
+  limit: number;
+  retention_hours: number;
+  log_fts_enabled: boolean;
+  next_cursor?: { cursor_timestamp?: string | null; cursor_event_id?: string | null } | null;
+};
+
+export function apiLogsV2Path(query?: Record<string, string | number | undefined>): string {
+  const base = "/api/v2/logs";
+  if (!query) return base;
+  const sp = new URLSearchParams();
+  for (const [k, v] of Object.entries(query)) {
+    if (v === undefined) continue;
+    sp.set(k, String(v));
+  }
+  const qs = sp.toString();
+  return qs ? `${base}?${qs}` : base;
+}
 
 export type IncidentDetailResponse = {
   incident: IncidentRow;
@@ -1061,6 +1102,56 @@ export type IncidentDetailResponse = {
   }>;
   learning_provenance?: IncidentLearningProvenance | null;
 };
+
+/** Response from `GET /api/incidents/{incident_id}/logs` (log-shaped rows, pagination). */
+export type IncidentLogsResponse = {
+  incident_id: string;
+  logs: EventRow[];
+  limit: number;
+  retention_hours: number;
+  next_cursor?: { cursor_timestamp: string; cursor_event_id: string } | null;
+};
+
+export function apiIncidentLogsPath(
+  incidentId: string,
+  query?: Record<string, string | number | undefined>,
+): string {
+  const base = `/api/incidents/${encodeURIComponent(incidentId)}/logs`;
+  if (!query) return base;
+  const sp = new URLSearchParams();
+  for (const [k, v] of Object.entries(query)) {
+    if (v === undefined) continue;
+    sp.set(k, String(v));
+  }
+  const qs = sp.toString();
+  return qs ? `${base}?${qs}` : base;
+}
+
+/** Response from `GET /api/traces/{trace_id}` (chronological log-shaped rows for one W3C trace id). */
+export type TraceTimelineResponse = {
+  trace_id: string;
+  items: EventRow[];
+  limit: number;
+  retention_hours: number;
+  count: number;
+};
+
+/** Build path for trace timeline; `traceId` is normalized to 32 lowercase hex (non-hex stripped) before encoding. */
+export function apiTraceTimelinePath(
+  traceId: string,
+  query?: Record<string, string | number | undefined>,
+): string {
+  const normalized = traceId.replace(/[^0-9a-fA-F]/g, "").toLowerCase();
+  const base = `/api/traces/${encodeURIComponent(normalized)}`;
+  if (!query) return base;
+  const sp = new URLSearchParams();
+  for (const [k, v] of Object.entries(query)) {
+    if (v === undefined) continue;
+    sp.set(k, String(v));
+  }
+  const qs = sp.toString();
+  return qs ? `${base}?${qs}` : base;
+}
 
 export type AnomalyStatus = {
   enabled: boolean;

@@ -29,6 +29,7 @@ import { IncidentDetailPage, IncidentsPage } from "@/pages/IncidentsPage";
 import { LearningReviewPage } from "@/pages/LearningReviewPage";
 import { OverviewPage } from "@/pages/OverviewPage";
 import { SettingsPage } from "@/pages/SettingsPage";
+import { TracePage } from "@/pages/TracePage";
 import { ServiceDetailPage, SystemsPage } from "@/pages/SystemsPage";
 import { WorkspaceAppPage, WorkspacePage } from "@/pages/WorkspacePage";
 
@@ -105,6 +106,7 @@ export default function App() {
           <Route path="/" element={<OverviewPage mode={mode} />} />
           <Route path="/incidents" element={<IncidentsPage mode={mode} />} />
           <Route path="/incidents/:incidentId" element={<IncidentDetailPage mode={mode} />} />
+          <Route path="/traces/:traceId" element={<TracePage mode={mode} />} />
           <Route path="/learning" element={<LearningReviewPage mode={mode} />} />
           <Route path="/systems" element={<SystemsPage mode={mode} />} />
           <Route path="/systems/:serviceId" element={<ServiceDetailPage mode={mode} />} />

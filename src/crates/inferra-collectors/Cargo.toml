@@ -7,8 +7,12 @@ license.workspace = true
 [dependencies]
 anyhow = { workspace = true }
 axum = { workspace = true }
+base64 = "0.22"
+inferra-config = { path = "../inferra-config" }
 inferra-core = { path = "../inferra-core" }
 inferra-storage = { path = "../inferra-storage" }
+opentelemetry-proto = { version = "0.32.0", default-features = false, features = ["gen-tonic-messages", "logs"] }
+prost = "0.14.3"
 serde = { workspace = true }
 serde_json = { workspace = true }
 sysinfo = { workspace = true }

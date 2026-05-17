@@ -1,7 +1,7 @@
 //! Unit tests for inferra-collectors (split from `lib.rs` for maintainability).
 
 use super::*;
-use inferra_storage::initialize_databases;
+use inferra_storage::{initialize_databases, EventsStore};
 use std::fs;
 use std::time::{SystemTime, UNIX_EPOCH};
 
@@ -112,6 +112,97 @@ reason = "routine health signal"
         .expect("open events store")
         .expect("events store exists");
     assert_eq!(store.count_events().expect("count events"), 0);
+
+    let _ = fs::remove_dir_all(root);
+}
+
+#[tokio::test]
+async fn ingest_app_event_derives_trace_fields_from_traceparent() {
+    let (root, events_db, incidents_db) = temp_db_paths("app-traceparent");
+    initialize_databases(&events_db, &incidents_db).expect("initialize dbs");
+    let runtime = CollectorRuntime::default();
+    let config: TomlValue = r#"
+[collectors.app]
+enabled = true
+enable_main_api = true
+"#
+    .parse()
+    .expect("parse config");
+
+    let result = runtime
+        .ingest_app_event(
+            &events_db,
+            &incidents_db,
+            &config,
+            &serde_json::json!({
+                "service": "checkout",
+                "level": "error",
+                "message": "traceparent propagation works",
+                "headers": {
+                    "traceparent": "00-4bf92f3577b34da6a3ce929d0e0e4736-00f067aa0ba902b7-01"
+                }
+            }),
+        )
+        .await
+        .expect("ingest app event");
+
+    assert!(result.accepted);
+    let store = EventsStore::open(&events_db)
+        .expect("open events store")
+        .expect("events store exists");
+    let latest = store.latest_events(5).expect("latest events");
+    assert_eq!(latest.len(), 1);
+    assert_eq!(
+        latest[0].trace_id.as_deref(),
+        Some("4bf92f3577b34da6a3ce929d0e0e4736")
+    );
+    assert_eq!(latest[0].span_id.as_deref(), Some("00f067aa0ba902b7"));
+
+    let _ = fs::remove_dir_all(root);
+}
+
+#[tokio::test]
+async fn ingest_app_event_promotes_inferra_trace_keys_from_attributes() {
+    let (root, events_db, incidents_db) = temp_db_paths("app-inferra-trace-id");
+    initialize_databases(&events_db, &incidents_db).expect("initialize dbs");
+    let runtime = CollectorRuntime::default();
+    let config: TomlValue = r#"
+[collectors.app]
+enabled = true
+enable_main_api = true
+"#
+    .parse()
+    .expect("parse config");
+
+    let result = runtime
+        .ingest_app_event(
+            &events_db,
+            &incidents_db,
+            &config,
+            &serde_json::json!({
+                "service": "worker",
+                "level": "info",
+                "message": "background job progress",
+                "attributes": {
+                    "inferra.trace_id": "4bf92f3577b34da6a3ce929d0e0e4736",
+                    "inferra.span_id": "00f067aa0ba902b7"
+                }
+            }),
+        )
+        .await
+        .expect("ingest app event");
+
+    assert!(result.accepted);
+    let store = EventsStore::open(&events_db)
+        .expect("open events store")
+        .expect("events store exists");
+    let latest = store.latest_events(5).expect("latest events");
+    assert_eq!(latest.len(), 1);
+    assert_eq!(
+        latest[0].trace_id.as_deref(),
+        Some("4bf92f3577b34da6a3ce929d0e0e4736")
+    );
+    assert_eq!(latest[0].span_id.as_deref(), Some("00f067aa0ba902b7"));
 
     let _ = fs::remove_dir_all(root);
 }
@@ -358,9 +449,9 @@ fn next_event_id_generates_unique_ids() {
 
 #[test]
 fn semantic_fingerprint_is_deterministic() {
-    let fp_a = semantic_fingerprint("src", "svc", "file", "msg");
-    let fp_b = semantic_fingerprint("src", "svc", "file", "msg");
+    let fp_a = semantic_fingerprint("src", "svc", "file", "msg", None);
+    let fp_b = semantic_fingerprint("src", "svc", "file", "msg", None);
     assert_eq!(fp_a, fp_b);
-    let fp_c = semantic_fingerprint("src", "svc", "file", "other");
+    let fp_c = semantic_fingerprint("src", "svc", "file", "other", None);
     assert_ne!(fp_a, fp_c);
 }

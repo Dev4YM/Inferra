@@ -11,10 +11,12 @@ import { Badge } from "@/components/ui/badge";
 import { PageHeader } from "@/components/layout/page-header";
 import { EmptyState, ErrorState, LoadingState, MetricGridSkeleton } from "@/components/feedback/states";
 import { formatDisplayValue, formatRiskTone, formatSeverity, formatSeverityLabel, formatRelativeDate } from "@/lib/format";
+import { shortTraceId } from "@/lib/observability";
 import { useApiQuery } from "@/lib/query";
 import { EventRateBars, SeverityDistribution } from "@/components/inferra/charts";
 import { IncidentCard } from "@/components/inferra/incident";
 import { RuntimeStatusCard, ServiceHealthBadge, riskTone } from "@/components/inferra/health";
+import { TraceSummaryInline } from "@/components/inferra/trace-summary";
 
 export function OverviewPage({ mode }: { mode: Mode }) {
   const overview = useApiQuery<OverviewResponse>("/api/overview");
@@ -49,6 +51,8 @@ export function OverviewPage({ mode }: { mode: Mode }) {
   const incidents = dashboard.incidents ?? [];
   const services = dashboard.services ?? [];
   const riskyServices = services.filter((item) => ["critical", "degraded", "elevated"].includes(item.status));
+  const traceLinkedIncidents = incidents.filter((incident) => Boolean(incident.latest_trace_summary));
+  const traceLinkedServices = services.filter((service) => Boolean(service.latest_trace_summary));
   const visibleIncidents = quickFilter === "active" ? incidents.filter((incident) => incident.state !== "resolved") : incidents;
   const visibleServices = quickFilter === "degraded" ? riskyServices : services;
   const eventRate = normalizeEventRate(dashboard.event_rate);
@@ -93,14 +97,14 @@ export function OverviewPage({ mode }: { mode: Mode }) {
           label="Active incidents"
           value={String(incidents.length)}
           tone={incidents.length ? "warning" : "success"}
-          detail="Open failures currently worth inspecting."
+          detail={`${traceLinkedIncidents.length} include a latest trace jump.`}
         />
         <RuntimeStatusCard
           icon={ServerCog}
           label="Monitored services"
           value={String(services.length)}
           tone={riskyServices.length ? "warning" : "success"}
-          detail={`${riskyServices.length} services need attention.`}
+          detail={`${traceLinkedServices.length} have latest trace context.`}
         />
         <RuntimeStatusCard
           icon={Bot}
@@ -238,6 +242,12 @@ export function OverviewPage({ mode }: { mode: Mode }) {
                   <p className="text-sm text-muted-foreground">
                     {service.event_count ?? 0} events, {service.error_count ?? 0} errors
                   </p>
+                  {service.latest_trace_summary ? (
+                    <p className="mt-1 text-xs text-muted-foreground">
+                      Latest trace {shortTraceId(service.latest_trace_summary.trace_id)} · {service.latest_trace_summary.event_count} rows ·{" "}
+                      {formatRelativeDate(service.latest_trace_summary.last_seen_at)}
+                    </p>
+                  ) : null}
                 </div>
                 <ServiceHealthBadge status={service.status} />
               </Link>
@@ -319,6 +329,14 @@ export function OverviewPage({ mode }: { mode: Mode }) {
                   <p className="mt-3 text-sm text-muted-foreground">
                     Updated {formatRelativeDate(incident.updated_at)} with {incident.event_count ?? 0} correlated events.
                   </p>
+                  {incident.latest_trace_summary ? (
+                    <TraceSummaryInline
+                      summary={incident.latest_trace_summary}
+                      context={{ from: "incident", incidentId: incident.incident_id }}
+                      className="mt-3"
+                      emptyLabel="—"
+                    />
+                  ) : null}
                 </div>
               ))
             ) : (
@@ -346,6 +364,14 @@ export function OverviewPage({ mode }: { mode: Mode }) {
                     </div>
                     <Badge variant={formatRiskTone(service.status)}>{formatDisplayValue(service.status)}</Badge>
                   </div>
+                  {service.latest_trace_summary ? (
+                    <TraceSummaryInline
+                      summary={service.latest_trace_summary}
+                      context={{ from: "service", serviceId: service.service_id }}
+                      className="mt-3"
+                      emptyLabel="—"
+                    />
+                  ) : null}
                 </div>
               ))
             ) : (

@@ -4,17 +4,16 @@ import { Link } from "react-router-dom";
 
 import type { EventRow, HypothesisRow, IncidentRow, InvestigationEvidence, InvestigationStep } from "@/api";
 import { Badge } from "@/components/ui/badge";
+import { Button } from "@/components/ui/button";
 import { ConfidenceMeter, SeverityIndicator } from "@/components/inferra/health";
+import { TraceSummaryInline } from "@/components/inferra/trace-summary";
 import { TimelineView } from "@/components/inferra/timeline";
 import { formatDisplayValue, formatRelativeDate, formatSeverityLabel, summarizeEvent } from "@/lib/format";
 import { cn } from "@/lib/utils";
 
 export function IncidentCard({ incident }: { incident: IncidentRow }) {
   return (
-    <Link
-      to={`/incidents/${incident.incident_id}`}
-      className="block rounded-2xl border border-border/70 bg-card/70 p-4 text-foreground shadow-sm transition hover:-translate-y-0.5 hover:border-primary/30 hover:opacity-100 hover:shadow-md"
-    >
+    <div className="rounded-2xl border border-border/70 bg-card/70 p-4 text-foreground shadow-sm transition hover:-translate-y-0.5 hover:border-primary/30 hover:opacity-100 hover:shadow-md">
       <div className="flex flex-wrap items-start justify-between gap-3">
         <div className="min-w-0">
           <div className="flex flex-wrap items-center gap-2">
@@ -37,7 +36,23 @@ export function IncidentCard({ incident }: { incident: IncidentRow }) {
         ))}
         <span>updated {formatRelativeDate(incident.updated_at)}</span>
       </div>
-    </Link>
+      {incident.latest_trace_summary ? (
+        <div className="mt-4 rounded-2xl border border-border/60 bg-background/35 p-3">
+          <p className="text-xs font-semibold uppercase tracking-[0.18em] text-muted-foreground">Latest trace</p>
+          <TraceSummaryInline
+            summary={incident.latest_trace_summary}
+            context={{ from: "incident", incidentId: incident.incident_id }}
+            className="mt-3"
+            showMessage
+          />
+        </div>
+      ) : null}
+      <div className="mt-4 flex flex-wrap gap-2">
+        <Button variant="outline" size="sm" asChild>
+          <Link to={`/incidents/${incident.incident_id}`}>Open incident</Link>
+        </Button>
+      </div>
+    </div>
   );
 }
 

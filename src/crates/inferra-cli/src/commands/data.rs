@@ -1,7 +1,7 @@
 use anyhow::{Context, Result};
-use inferra_config::load_merged_config;
+use inferra_config::{load_merged_config, storage_retention_hours};
 use inferra_core::{build_overview, build_workspace_map};
-use inferra_storage::{EventsStore, IncidentsStore};
+use inferra_storage::{EventsStore, IncidentsStore, LogsQuery};
 use serde_json::{json, Value as JsonValue};
 
 use crate::cli::{EventAction, IncidentAction, ServiceDataAction, WorkspaceAction};
@@ -144,13 +144,17 @@ pub fn run_event_command(ctx: &AppContext, action: EventAction) -> Result<()> {
     };
     match action {
         EventAction::List(args) => {
-            let events = store.query_logs(
-                args.limit,
-                args.service.as_deref(),
-                args.severity,
-                args.search.as_deref(),
-                args.source_type.as_deref(),
-            )?;
+            let config = load_merged_config(&paths.config_path)?;
+            let retention = storage_retention_hours(&config);
+            let events = store.query_logs(&LogsQuery {
+                limit: args.limit,
+                retention_hours: retention,
+                service_id: args.service.clone(),
+                min_severity: args.severity,
+                search: args.search.clone(),
+                source_type: args.source_type.clone(),
+                ..Default::default()
+            })?;
             let payload = json!({ "events": events });
             if ctx.ui.is_json() {
                 ctx.ui.print_json(&payload);
