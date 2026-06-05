@@ -450,7 +450,29 @@ pub fn apply_config_put(base_merged: TomlValue, body: &JsonValue) -> Result<Toml
     let mut base_json = config_to_json(&base_merged);
     merge_json(&mut base_json, &patch);
     let merged_tables = json_to_toml(&base_json)?;
-    Ok(merge_toml(defaults, merged_tables))
+    let merged = merge_toml(defaults, merged_tables);
+    validate_merged_config(&merged)?;
+    Ok(merged)
+}
+
+pub fn validate_merged_config(config: &TomlValue) -> Result<()> {
+    let require_loopback = config
+        .get("server")
+        .and_then(|s| s.get("require_loopback"))
+        .and_then(TomlValue::as_bool)
+        .unwrap_or(true);
+    let auth_token_env = config
+        .get("server")
+        .and_then(|s| s.get("auth_token_env"))
+        .and_then(TomlValue::as_str)
+        .unwrap_or_default()
+        .trim();
+    if !require_loopback && auth_token_env.is_empty() {
+        anyhow::bail!(
+            "server.auth_token_env is required when server.require_loopback is false"
+        );
+    }
+    Ok(())
 }
 
 pub fn write_config(path: &Path, config: &TomlValue) -> Result<()> {
@@ -627,6 +649,50 @@ port = 7433
         assert!(error
             .to_string()
             .contains("null config values are not supported"));
+    }
+
+    #[test]
+    fn apply_config_put_rejects_remote_binding_without_auth_env() {
+        let base: TomlValue = r#"
+[server]
+host = "127.0.0.1"
+port = 7433
+require_loopback = true
+auth_token_env = ""
+"#
+        .parse()
+        .expect("parse base");
+        let error = apply_config_put(
+            base,
+            &json!({ "config": { "server": { "host": "0.0.0.0", "require_loopback": false } } }),
+        )
+        .expect_err("remote binding without auth should fail");
+        assert!(error.to_string().contains("server.auth_token_env is required"));
+    }
+
+    #[test]
+    fn apply_config_put_allows_remote_binding_with_auth_env() {
+        let base: TomlValue = r#"
+[server]
+host = "127.0.0.1"
+port = 7433
+require_loopback = true
+auth_token_env = ""
+"#
+        .parse()
+        .expect("parse base");
+        let config = apply_config_put(
+            base,
+            &json!({ "config": { "server": { "host": "0.0.0.0", "require_loopback": false, "auth_token_env": "INFERRA_API_TOKEN" } } }),
+        )
+        .expect("auth env makes remote binding explicit");
+        assert_eq!(
+            config
+                .get("server")
+                .and_then(|s| s.get("auth_token_env"))
+                .and_then(TomlValue::as_str),
+            Some("INFERRA_API_TOKEN")
+        );
     }
 
     #[test]

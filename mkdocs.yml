@@ -15,6 +15,8 @@ nav:
   - Home: index.md
   - Operator Guides:
       - Install: operations/install.md
+      - Docker: operations/docker.md
+      - Kubernetes: operations/kubernetes.md
       - Windows exe - start here: operations/windows_exe_build.md
       - AI provider: operations/ai_provider.md
       - Collectors: operations/collectors.md

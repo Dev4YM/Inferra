@@ -1,3 +1,6 @@
+# Production: keep server.requireLoopback=false only with a non-empty auth token
+# env name and a mounted Secret. Without the Secret, protected /api/* routes fail
+# closed with 503 while /healthz and /readyz remain usable for probes.
 replicaCount: 1
 
 image:
@@ -8,6 +11,7 @@ image:
 serviceAccount:
   create: true
   name: ""
+  automountServiceAccountToken: false
 
 rbac:
   create: true
@@ -16,19 +20,41 @@ service:
   type: ClusterIP
   port: 7433
 
+server:
+  host: "0.0.0.0"
+  requireLoopback: false
+  authTokenEnv: "INFERRA_API_TOKEN"
+  exposePrometheusMetrics: false
+  corsOrigins: []
+
+auth:
+  # Use an ExternalSecret/SealedSecret by setting existingSecret, or create a
+  # chart-managed Secret for small private installs by setting createSecret=true
+  # and token to a non-empty value.
+  existingSecret: ""
+  createSecret: false
+  secretName: ""
+  secretKey: "api-token"
+  token: ""
+
 storage:
   size: 5Gi
+  accessModes:
+    - ReadWriteOnce
+  storageClassName: ""
 
 podSecurityContext:
   fsGroup: 1000
   runAsNonRoot: true
+  seccompProfile:
+    type: RuntimeDefault
 
 securityContext:
   allowPrivilegeEscalation: false
   capabilities:
     drop:
       - ALL
-  readOnlyRootFilesystem: false
+  readOnlyRootFilesystem: true
   runAsNonRoot: true
   runAsUser: 1000
 
@@ -39,15 +65,40 @@ serviceMonitor:
   path: /api/metrics
   labels: {}
 
+probes:
+  liveness:
+    enabled: true
+    path: /healthz
+    initialDelaySeconds: 10
+    periodSeconds: 30
+    timeoutSeconds: 2
+    failureThreshold: 3
+  readiness:
+    enabled: true
+    path: /readyz
+    initialDelaySeconds: 5
+    periodSeconds: 10
+    timeoutSeconds: 2
+    failureThreshold: 3
+  startup:
+    enabled: true
+    path: /readyz
+    periodSeconds: 5
+    timeoutSeconds: 2
+    failureThreshold: 24
+
 config:
   ai:
     enabled: false
     baseUrl: "http://ollama.default.svc.cluster.local:11434"
     model: "gemma4:e4b"
+    allowRemote: false
+    tokenEnv: ""
   collectors:
     auto_start: true
     kubernetes:
-      enabled: true
+      # Disable unless this cluster should be scraped by Inferra collectors.
+      enabled: false
       poll_interval_seconds: 15.0
       namespaces: []
       all_namespaces: true
@@ -63,3 +114,11 @@ resources:
   limits:
     cpu: "1"
     memory: 1Gi
+
+initResources:
+  requests:
+    cpu: 50m
+    memory: 128Mi
+  limits:
+    cpu: 500m
+    memory: 512Mi

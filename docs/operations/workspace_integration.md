@@ -1,4 +1,20 @@
-# Workspace App Integration
+# Workspace Integration
+
+Inferra discovers local projects from configured workspace roots and maps runtime
+processes back to source directories where possible.
+
+## Inspect Scope
+
+`GET /api/workspace/inspect?path=...` only accepts paths under the configured
+workspace roots. Relative roots are resolved from the directory containing
+`inferra.toml`; when no roots are configured, the config directory is the default
+root.
+
+With `workspace.redact_env_files = true` (the default), `.env*` markers and
+directory entries are omitted from inspection responses. Inferra reports project
+structure and known build/runtime markers, not secret file contents.
+
+## App Manifest Integration
 
 Inferra can infer many local apps from process managers, runtime commands, project manifests, and framework files. For the strongest signal, add an app-owned manifest at:
 

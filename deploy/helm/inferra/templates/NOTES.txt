@@ -1,0 +1,21 @@
+Inferra has been installed.
+
+Probe endpoints:
+  Liveness:  /healthz
+  Readiness: /readyz
+
+Protected API routes under /api/* use server.auth_token_env:
+  {{ .Values.server.authTokenEnv | quote }}
+
+{{- if not (include "inferra.mountAuthSecret" .) }}
+
+WARNING: no auth Secret is mounted by this release. Because the chart renders
+server.require_loopback={{ .Values.server.requireLoopback }} and
+server.auth_token_env={{ .Values.server.authTokenEnv | quote }}, protected API
+routes will fail closed with 503 until you set auth.existingSecret,
+auth.secretName, or auth.createSecret=true with auth.token.
+{{- end }}
+
+Prometheus metrics are {{ ternary "enabled" "disabled" .Values.server.exposePrometheusMetrics }}.
+When metrics are enabled and API auth is enabled, scrape /api/metrics with the
+same bearer token or restrict the scrape path with NetworkPolicy.

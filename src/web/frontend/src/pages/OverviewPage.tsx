@@ -21,7 +21,7 @@ import { TraceSummaryInline } from "@/components/inferra/trace-summary";
 export function OverviewPage({ mode }: { mode: Mode }) {
   const overview = useApiQuery<OverviewResponse>("/api/overview");
   const collectors = useApiQuery<{ collectors: CollectorRow[]; queue_depth: number }>("/api/collectors", { staleTime: 15_000 });
-  const [quickFilter, setQuickFilter] = useState<"all" | "active" | "degraded" | "ai">("all");
+  const [quickFilter, setQuickFilter] = useState<"all" | "active" | "degraded">("all");
 
   if (overview.isLoading && !overview.data) {
     return (
@@ -51,9 +51,10 @@ export function OverviewPage({ mode }: { mode: Mode }) {
   const incidents = dashboard.incidents ?? [];
   const services = dashboard.services ?? [];
   const riskyServices = services.filter((item) => ["critical", "degraded", "elevated"].includes(item.status));
+  const activeIncidents = incidents.filter((incident) => incident.state !== "resolved");
   const traceLinkedIncidents = incidents.filter((incident) => Boolean(incident.latest_trace_summary));
   const traceLinkedServices = services.filter((service) => Boolean(service.latest_trace_summary));
-  const visibleIncidents = quickFilter === "active" ? incidents.filter((incident) => incident.state !== "resolved") : incidents;
+  const visibleIncidents = quickFilter === "active" ? activeIncidents : incidents;
   const visibleServices = quickFilter === "degraded" ? riskyServices : services;
   const eventRate = normalizeEventRate(dashboard.event_rate);
   const severityCounts = normalizeSeverityCounts(dashboard.severity_counts);
@@ -95,8 +96,8 @@ export function OverviewPage({ mode }: { mode: Mode }) {
         <RuntimeStatusCard
           icon={AlertTriangle}
           label="Active incidents"
-          value={String(incidents.length)}
-          tone={incidents.length ? "warning" : "success"}
+          value={String(health.active_incidents ?? activeIncidents.length)}
+          tone={(health.active_incidents ?? activeIncidents.length) ? "warning" : "success"}
           detail={`${traceLinkedIncidents.length} include a latest trace jump.`}
         />
         <RuntimeStatusCard
@@ -174,13 +175,13 @@ export function OverviewPage({ mode }: { mode: Mode }) {
           ["all", "All signals"],
           ["active", "Active incidents"],
           ["degraded", "Degraded services"],
-          ["ai", "AI state"],
         ].map(([value, label]) => (
           <Button
             key={value}
             type="button"
             variant={quickFilter === value ? "default" : "outline"}
             size="sm"
+            aria-pressed={quickFilter === value}
             onClick={() => setQuickFilter(value as typeof quickFilter)}
           >
             {label}
@@ -342,7 +343,7 @@ export function OverviewPage({ mode }: { mode: Mode }) {
             ) : (
               <EmptyState
                 title="No active incidents"
-                description="Inferra is quiet right now. Seed demo events or wait for collectors to observe failures."
+                description="Inferra is quiet right now. Keep collectors running and refresh when new evidence arrives."
                 action={<Button onClick={() => void overview.reload({ silent: true })}>Refresh snapshot</Button>}
               />
             )}

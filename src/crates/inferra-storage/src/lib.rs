@@ -1769,6 +1769,23 @@ pub fn initialize_databases(events_db: &Path, incidents_db: &Path) -> Result<()>
     Ok(())
 }
 
+/// Open the database, run `PRAGMA quick_check`, and verify a write transaction can start.
+pub fn probe_database_writable(path: &Path) -> Result<(), String> {
+    if !path.exists() {
+        return Err(format!("database not found: {}", path.display()));
+    }
+    let conn = Connection::open(path).map_err(|error| format!("open: {error}"))?;
+    let quick: String = conn
+        .query_row("PRAGMA quick_check", [], |row| row.get(0))
+        .map_err(|error| format!("quick_check: {error}"))?;
+    if quick != "ok" {
+        return Err(format!("quick_check failed: {quick}"));
+    }
+    conn.execute_batch("BEGIN IMMEDIATE; ROLLBACK;")
+        .map_err(|error| format!("write probe: {error}"))?;
+    Ok(())
+}
+
 pub struct IncidentsStore {
     conn: Connection,
 }
@@ -4795,6 +4812,123 @@ mod tests {
             .expect("query with attr");
         assert_eq!(logs.len(), 1);
         assert_eq!(logs[0].event_id.as_deref(), Some("e-attr-1"));
+    }
+
+    #[test]
+    fn prune_expired_removes_old_events_and_indexed_attributes() {
+        let (_root, events_db, incidents_db) = temp_db_paths("events-prune-expired");
+        initialize_databases(&events_db, &incidents_db).expect("initialize dbs");
+        let mut store = EventsStore::open(&events_db)
+            .expect("open events result")
+            .expect("events store present");
+        let governance = IngestGovernance {
+            dedup_enabled: false,
+            noise_enabled: false,
+            indexed_attribute_keys: vec!["http.status_code".into()],
+            ..Default::default()
+        };
+        let inserted = store
+            .insert_batch_governed(
+                &[
+                    NewEventRecord {
+                        event_id: "e-prune-old".into(),
+                        timestamp: "2026-06-05T10:00:00Z".into(),
+                        service_id: "api".into(),
+                        severity: 3,
+                        message: "old upstream error".into(),
+                        source_type: "app_http".into(),
+                        source_id: "ingest".into(),
+                        tags: Vec::new(),
+                        fingerprint: "fp-prune-old".into(),
+                        host_id: "host.local".into(),
+                        event_type: 0,
+                        timestamp_source: "collector".into(),
+                        collected_at: "2026-06-05T10:00:01Z".into(),
+                        quality: Some("normalized".into()),
+                        structured_data: Some(
+                            serde_json::json!({"attributes": {"http.status_code": 500}}),
+                        ),
+                        raw_offset: None,
+                        trace_id: None,
+                        span_id: None,
+                        signal_kind: "log".into(),
+                        deployment_environment: None,
+                        severity_text: None,
+                    },
+                    NewEventRecord {
+                        event_id: "e-prune-fresh".into(),
+                        timestamp: "2026-06-05T10:01:00Z".into(),
+                        service_id: "api".into(),
+                        severity: 2,
+                        message: "fresh warning".into(),
+                        source_type: "app_http".into(),
+                        source_id: "ingest".into(),
+                        tags: Vec::new(),
+                        fingerprint: "fp-prune-fresh".into(),
+                        host_id: "host.local".into(),
+                        event_type: 0,
+                        timestamp_source: "collector".into(),
+                        collected_at: "2026-06-05T10:01:01Z".into(),
+                        quality: Some("normalized".into()),
+                        structured_data: Some(
+                            serde_json::json!({"attributes": {"http.status_code": 429}}),
+                        ),
+                        raw_offset: None,
+                        trace_id: None,
+                        span_id: None,
+                        signal_kind: "log".into(),
+                        deployment_environment: None,
+                        severity_text: None,
+                    },
+                ],
+                &governance,
+            )
+            .expect("insert prune fixtures");
+        assert_eq!(inserted.inserted, 2);
+
+        store
+            .conn
+            .execute(
+                "UPDATE events SET inserted_at = datetime('now', '-4 hours') WHERE event_id = 'e-prune-old'",
+                [],
+            )
+            .expect("backdate old row");
+        store
+            .conn
+            .execute(
+                "UPDATE events SET inserted_at = datetime('now', '-30 minutes') WHERE event_id = 'e-prune-fresh'",
+                [],
+            )
+            .expect("backdate fresh row");
+
+        let deleted = store.prune_expired(2).expect("prune expired");
+        assert_eq!(deleted, 1);
+        assert!(store
+            .get_event("e-prune-old")
+            .expect("query old event")
+            .is_none());
+        assert!(store
+            .get_event("e-prune-fresh")
+            .expect("query fresh event")
+            .is_some());
+        let old_attrs: i64 = store
+            .conn
+            .query_row(
+                "SELECT COUNT(*) FROM event_attributes WHERE event_id = 'e-prune-old'",
+                [],
+                |row| row.get(0),
+            )
+            .expect("old attr count");
+        let fresh_attrs: i64 = store
+            .conn
+            .query_row(
+                "SELECT COUNT(*) FROM event_attributes WHERE event_id = 'e-prune-fresh'",
+                [],
+                |row| row.get(0),
+            )
+            .expect("fresh attr count");
+        assert_eq!(old_attrs, 0);
+        assert_eq!(fresh_attrs, 1);
     }
 
     #[test]

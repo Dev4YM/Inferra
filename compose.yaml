@@ -9,6 +9,12 @@ services:
     volumes:
       - inferra-data:/data
       - ./deploy/examples/inferra.container.toml:/etc/inferra/inferra.toml:ro
+    healthcheck:
+      test: ["CMD", "curl", "-fsS", "http://127.0.0.1:7433/healthz"]
+      interval: 30s
+      timeout: 3s
+      retries: 3
+      start_period: 20s
     restart: unless-stopped
 
 volumes:

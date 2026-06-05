@@ -1,25 +1,21 @@
 # Continuous integration
 
-Reference runners (documented 2026-05): GitHub Actions `ubuntu-latest` / `windows-latest` / `macos-latest`, Python 3.11 and 3.12, Node 20, and the stable Rust toolchain.
+Reference runners (documented 2026-06): GitHub Actions `ubuntu-latest`, Python 3.12, Node 20, Docker, Helm, and the stable Rust toolchain.
 
 ## Default gate
 
-- Install Python support tooling: `python -m pip install -e ".[dev,legacy]"` (the `legacy` extra pulls archived `deprecated/` runtime deps used by pytest).
+- Python tooling and Rust packaging contracts: `python -m pip install -e ".[dev]"`, `compileall`, `ruff`, and `pytest tests/unit/test_rust_packaging_contracts.py`.
 - Frontend build: `npm ci && npm run build` in `src/web/frontend`.
 - Docs: `python -m pip install -e ".[docs,dev]"` then `mkdocs build --strict`.
 - Rust checks: `cargo fmt --manifest-path src/Cargo.toml --all --check`, `cargo clippy --manifest-path src/Cargo.toml --workspace --all-targets -- -D warnings`, `cargo test --manifest-path src/Cargo.toml --workspace`.
-- Native runtime smoke: build the release CLI binary and run `tests/scripts/rust_runtime_smoke.py` against the built executable plus `src/web/ui_dist`.
-- Compile: `python -m compileall tests deploy deprecated`.
-- Lint: `python -m ruff check tests deploy deprecated`.
-- Tests: matrix-specific pytest invocation (see below).
-- Coverage (optional local only): `python -m pytest --cov --cov-report=term` — coverage config in `pyproject.toml` now scopes the remaining Python support surfaces (`tests`, `deploy/windows`, `deprecated/inferra_legacy`) rather than the active Rust runtime.
+- Native runtime smoke: build the release CLI binary, run `tests/scripts/rust_runtime_smoke.py`, then run `tests/integration/test_rust_api.py` against the built executable.
+- Helm: `helm lint`, render the chart, and assert rendered auth/probe/security fields.
+- Docker: build the image, run it with the container config, and probe `/healthz`.
+- Coverage: Rust coverage is measured by `cargo llvm-cov`; Python archive coverage is not the product coverage signal.
 
-## Platform matrix
+## Archived Python Runtime
 
-- **Linux and macOS runners**: `python -m pytest -q -m "not windows and not chaos"` — skips tests marked `@pytest.mark.windows` (Windows-oriented collectors and mocks) and `@pytest.mark.chaos` (POSIX-heavy failure injection; see dedicated chaos job).
-- **Windows runner**: `python -m pytest -q -m "not linux and not chaos"` — skips tests marked `@pytest.mark.linux` (journald / Linux syslog harness) and chaos tests.
-
-Unmarked tests always execute on every OS.
+The `legacy-archive` job installs `.[dev,legacy]` and runs the deprecated Python runtime tests under an explicitly named job. These tests protect archived reference behavior only; shipping runtime confidence comes from Rust workspace tests and Rust black-box integration.
 
 ## Chaos (`pytest.mark.chaos`)
 

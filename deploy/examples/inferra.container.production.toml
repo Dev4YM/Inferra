@@ -2,12 +2,9 @@
 host = "0.0.0.0"
 port = 7433
 cors_origins = []
-# The default compose.yaml binds the published port to 127.0.0.1, so this
-# container config is intended for local workstation use. If you publish Inferra
-# on a LAN, through a reverse proxy, or on a public interface, set
-# auth_token_env to an environment variable containing a bearer token.
-auth_token_env = ""
+auth_token_env = "INFERRA_API_TOKEN"
 require_loopback = false
+expose_prometheus_metrics = false
 
 [storage]
 data_dir = "/data"
@@ -25,4 +22,4 @@ top_p = 0.95
 top_k = 64
 max_context_events = 30
 redact_raw_logs = true
-allow_remote = true
+allow_remote = false

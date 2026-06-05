@@ -8,6 +8,8 @@ import pytest
 
 from inferra_legacy.cli import main
 
+pytestmark = pytest.mark.legacy_runtime
+
 
 def test_readme_and_operations_cli_smoke(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
     lines: list[tuple[str, str]] = []

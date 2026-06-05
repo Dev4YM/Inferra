@@ -6,6 +6,9 @@ from core.enums import IncidentState
 from explanation.template import TemplateExplanationEngine
 from web._shared import hypothesis_to_dict as _hypothesis_to_dict
 from web._shared import incident_to_dict as _incident_to_dict
+import pytest
+
+pytestmark = pytest.mark.legacy_runtime
 
 
 def test_runtime_ingest_creates_simple_incident(tmp_path):

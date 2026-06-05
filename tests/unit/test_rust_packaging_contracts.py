@@ -34,12 +34,17 @@ def test_windows_service_install_is_rust_only() -> None:
 def test_docker_runtime_is_native_binary_only() -> None:
     dockerfile = read("Dockerfile")
     entrypoint = read("deploy/docker-entrypoint.sh")
+    compose = read("compose.yaml")
     assert "FROM debian:bookworm-slim" in dockerfile
     assert "COPY src/Cargo.toml src/Cargo.lock ./src/" in dockerfile
     assert "/app/runtime-assets/src" not in dockerfile
     assert "INFERRA_PYTHON" not in dockerfile
     assert "INFERRA_PYTHON" not in entrypoint
     assert '/app/inferra --config "${CONFIG_PATH}" init-db' in entrypoint
+    assert "HEALTHCHECK" in dockerfile
+    assert "/healthz" in dockerfile
+    assert "127.0.0.1:7433:7433" in compose
+    assert "/healthz" in compose
 
 
 def test_linux_and_systemd_entrypoints_are_rust_only() -> None:
@@ -61,3 +66,20 @@ def test_helm_and_macos_launchd_drop_python_runtime_env() -> None:
     assert "INFERRA_PYTHON" not in chart
     assert "INFERRA_PYTHON" not in plist
     assert "init-db" in plist
+
+
+def test_helm_chart_wires_auth_and_probes() -> None:
+    values = read("deploy/helm/inferra/values.yaml")
+    configmap = read("deploy/helm/inferra/templates/configmap.yaml")
+    deployment = read("deploy/helm/inferra/templates/deployment.yaml")
+    secret = read("deploy/helm/inferra/templates/secret.yaml")
+    assert 'authTokenEnv: "INFERRA_API_TOKEN"' in values
+    assert "require_loopback = {{ .Values.server.requireLoopback }}" in configmap
+    assert 'auth_token_env = "{{ .Values.server.authTokenEnv }}"' in configmap
+    assert 'fail "server.authTokenEnv is required when server.requireLoopback=false"' in configmap
+    assert "secretKeyRef" in deployment
+    assert "/healthz" in deployment
+    assert "/readyz" in deployment
+    assert "readOnlyRootFilesystem: true" in values
+    assert "seccompProfile" in values
+    assert "{{ .Values.auth.token | quote }}" in secret

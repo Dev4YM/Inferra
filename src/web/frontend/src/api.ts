@@ -1,3 +1,32 @@
+export const INFERRA_AUTH_TOKEN_STORAGE_KEY = "inferra_auth_token";
+
+/** Optional bearer token for protected `/api/*` routes (matches `server.auth_token_env` on the host). */
+export function getInferraAuthToken(): string {
+  if (typeof sessionStorage === "undefined") return "";
+  return sessionStorage.getItem(INFERRA_AUTH_TOKEN_STORAGE_KEY)?.trim() ?? "";
+}
+
+export function setInferraAuthToken(token: string): void {
+  if (typeof sessionStorage === "undefined") return;
+  const trimmed = token.trim();
+  if (!trimmed) {
+    sessionStorage.removeItem(INFERRA_AUTH_TOKEN_STORAGE_KEY);
+    return;
+  }
+  sessionStorage.setItem(INFERRA_AUTH_TOKEN_STORAGE_KEY, trimmed);
+}
+
+function apiAuthHeaders(path: string, init?: RequestInit): HeadersInit {
+  const headers: Record<string, string> = {};
+  if (path.startsWith("/api/") || path.startsWith("/v1/")) {
+    const token = getInferraAuthToken();
+    if (token) {
+      headers.Authorization = `Bearer ${token}`;
+    }
+  }
+  return { ...headers, ...(init?.headers as Record<string, string> | undefined) };
+}
+
 export class ApiError extends Error {
   status: number;
   path: string;
@@ -10,6 +39,42 @@ export class ApiError extends Error {
     this.path = path;
     this.body = body;
   }
+}
+
+export function parseApiErrorBody(body: string): string {
+  const trimmed = body.trim();
+  if (!trimmed) return "";
+  try {
+    const parsed = JSON.parse(trimmed) as unknown;
+    if (parsed && typeof parsed === "object") {
+      const record = parsed as Record<string, unknown>;
+      for (const key of ["detail", "message", "error"]) {
+        const value = record[key];
+        if (typeof value === "string" && value.trim()) return value.trim();
+      }
+    }
+  } catch {
+    // Fall through to plain text.
+  }
+  return trimmed;
+}
+
+export function apiErrorDetail(error: ApiError): string {
+  const detail = parseApiErrorBody(error.body);
+  if (error.status === 401) return detail || "API token required or invalid. Add the bearer token in Settings.";
+  if (error.status === 403) {
+    return detail === "local clients only"
+      ? "This API only accepts local clients. Use a local browser, tunnel, or protected reverse proxy."
+      : detail || "Request forbidden by the Inferra API.";
+  }
+  if (error.status === 404) return detail || "The requested Inferra resource was not found.";
+  if (error.status === 429) return detail || "Rate limit exceeded. Wait briefly before trying again.";
+  if (error.status === 503) {
+    return detail.includes("auth_token_env")
+      ? "Inferra is configured to require an API token, but the server token environment variable is not set."
+      : detail || "Inferra is temporarily unavailable.";
+  }
+  return detail || error.message;
 }
 
 async function parseResponseBody(response: Response, path: string): Promise<unknown> {
@@ -30,7 +95,7 @@ async function parseResponseBody(response: Response, path: string): Promise<unkn
 }
 
 export function errorMessage(error: unknown): string {
-  if (error instanceof ApiError) return error.message;
+  if (error instanceof ApiError) return apiErrorDetail(error);
   if (error instanceof Error) return error.message;
   return String(error);
 }
@@ -40,13 +105,14 @@ export async function fetchJson<T>(path: string, init?: RequestInit): Promise<T>
     ...init,
     headers: {
       Accept: "application/json",
-      ...(init?.headers ?? {}),
+      ...apiAuthHeaders(path, init),
     },
   });
   if (!response.ok) {
     const text = await response.text();
+    const detail = parseApiErrorBody(text) || response.statusText || "Request failed";
     throw new ApiError(
-      `${response.status} ${path}: ${text.trim() || response.statusText || "Request failed"}`,
+      `${response.status} ${path}: ${detail}`,
       path,
       response.status,
       text,
@@ -468,14 +534,16 @@ export async function postInvestigateStream(
     headers: {
       "content-type": "application/json",
       accept: "text/event-stream",
+      ...apiAuthHeaders(path),
     },
     body: JSON.stringify(body),
     signal,
   });
   if (!response.ok) {
     const text = await response.text();
+    const detail = parseApiErrorBody(text) || response.statusText || "Request failed";
     throw new ApiError(
-      `${response.status} ${path}: ${text.trim() || response.statusText || "Request failed"}`,
+      `${response.status} ${path}: ${detail}`,
       path,
       response.status,
       text,

@@ -9,24 +9,45 @@ spec:
       app.kubernetes.io/name: {{ include "inferra.name" . }}
   template:
     metadata:
+      annotations:
+        checksum/config: {{ include (print $.Template.BasePath "/configmap.yaml") . | sha256sum }}
+        {{ if .Values.auth.createSecret }}
+        checksum/auth-secret: {{ include (print $.Template.BasePath "/secret.yaml") . | sha256sum }}
+        {{ end }}
       labels:
         app.kubernetes.io/name: {{ include "inferra.name" . }}
     spec:
       serviceAccountName: {{ include "inferra.serviceAccountName" . }}
+      automountServiceAccountToken: {{ or .Values.serviceAccount.automountServiceAccountToken .Values.config.collectors.kubernetes.enabled }}
       securityContext:
 {{ toYaml .Values.podSecurityContext | indent 8 }}
       initContainers:
         - name: inferra-init-db
           image: "{{ .Values.image.repository }}:{{ .Values.image.tag }}"
           imagePullPolicy: {{ .Values.image.pullPolicy }}
+          securityContext:
+{{ toYaml .Values.securityContext | indent 12 }}
           command: ["/bin/sh", "-lc"]
           args:
             - inferra --config /etc/inferra/inferra.toml init-db
+          {{ if eq (include "inferra.mountAuthSecret" .) "true" }}
+          env:
+            - name: {{ .Values.server.authTokenEnv }}
+              valueFrom:
+                secretKeyRef:
+                  name: {{ include "inferra.authSecretName" . }}
+                  key: {{ .Values.auth.secretKey }}
+          {{ end }}
           volumeMounts:
             - name: config
               mountPath: /etc/inferra
+              readOnly: true
             - name: data
               mountPath: /data
+            - name: tmp
+              mountPath: /tmp
+          resources:
+{{ toYaml .Values.initResources | indent 12 }}
       containers:
         - name: inferra
           image: "{{ .Values.image.repository }}:{{ .Values.image.tag }}"
@@ -37,14 +58,54 @@ spec:
             - "--config"
             - "/etc/inferra/inferra.toml"
             - "serve"
+          {{ if eq (include "inferra.mountAuthSecret" .) "true" }}
+          env:
+            - name: {{ .Values.server.authTokenEnv }}
+              valueFrom:
+                secretKeyRef:
+                  name: {{ include "inferra.authSecretName" . }}
+                  key: {{ .Values.auth.secretKey }}
+          {{ end }}
           ports:
             - name: http
               containerPort: {{ .Values.service.port }}
+          {{ if .Values.probes.liveness.enabled }}
+          livenessProbe:
+            httpGet:
+              path: {{ .Values.probes.liveness.path | quote }}
+              port: http
+            initialDelaySeconds: {{ .Values.probes.liveness.initialDelaySeconds }}
+            periodSeconds: {{ .Values.probes.liveness.periodSeconds }}
+            timeoutSeconds: {{ .Values.probes.liveness.timeoutSeconds }}
+            failureThreshold: {{ .Values.probes.liveness.failureThreshold }}
+          {{ end }}
+          {{ if .Values.probes.readiness.enabled }}
+          readinessProbe:
+            httpGet:
+              path: {{ .Values.probes.readiness.path | quote }}
+              port: http
+            initialDelaySeconds: {{ .Values.probes.readiness.initialDelaySeconds }}
+            periodSeconds: {{ .Values.probes.readiness.periodSeconds }}
+            timeoutSeconds: {{ .Values.probes.readiness.timeoutSeconds }}
+            failureThreshold: {{ .Values.probes.readiness.failureThreshold }}
+          {{ end }}
+          {{ if .Values.probes.startup.enabled }}
+          startupProbe:
+            httpGet:
+              path: {{ .Values.probes.startup.path | quote }}
+              port: http
+            periodSeconds: {{ .Values.probes.startup.periodSeconds }}
+            timeoutSeconds: {{ .Values.probes.startup.timeoutSeconds }}
+            failureThreshold: {{ .Values.probes.startup.failureThreshold }}
+          {{ end }}
           volumeMounts:
             - name: config
               mountPath: /etc/inferra
+              readOnly: true
             - name: data
               mountPath: /data
+            - name: tmp
+              mountPath: /tmp
           resources:
 {{ toYaml .Values.resources | indent 12 }}
       volumes:
@@ -54,3 +115,5 @@ spec:
         - name: data
           persistentVolumeClaim:
             claimName: {{ include "inferra.fullname" . }}-data
+        - name: tmp
+          emptyDir: {}

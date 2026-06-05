@@ -1,4 +1,4 @@
-import { useCallback, useMemo } from "react";
+import { useCallback, useMemo, useState } from "react";
 import { useMutation, useQuery, useQueryClient } from "@tanstack/react-query";
 
 import { type ApiError, errorMessage, fetchJson } from "@/api";
@@ -13,6 +13,7 @@ type QueryOptions = {
 export function useApiQuery<T>(path: string | null, options: QueryOptions = {}) {
   const { deps = [], enabled = true, staleTime, refetchInterval } = options;
   const queryClient = useQueryClient();
+  const [silentReloads, setSilentReloads] = useState(0);
   const queryKey = useMemo(() => ["api", path, ...deps], [deps, path]);
   const query = useQuery<T, ApiError>({
     queryKey,
@@ -23,14 +24,19 @@ export function useApiQuery<T>(path: string | null, options: QueryOptions = {}) 
   });
 
   const reload = useCallback(
-    async (_opts?: { silent?: boolean }) => {
+    async (opts?: { silent?: boolean }) => {
       if (!path || !enabled) return undefined;
-      const result = await queryClient.fetchQuery({
-        queryKey,
-        staleTime: 0,
-        queryFn: ({ signal }) => fetchJson<T>(path, { signal }),
-      });
-      return result;
+      if (opts?.silent) setSilentReloads((count) => count + 1);
+      try {
+        const result = await queryClient.fetchQuery({
+          queryKey,
+          staleTime: 0,
+          queryFn: ({ signal }) => fetchJson<T>(path, { signal }),
+        });
+        return result;
+      } finally {
+        if (opts?.silent) setSilentReloads((count) => Math.max(0, count - 1));
+      }
     },
     [enabled, path, queryClient, queryKey],
   );
@@ -49,7 +55,7 @@ export function useApiQuery<T>(path: string | null, options: QueryOptions = {}) 
     error: query.error ?? null,
     errorMessage: query.error ? errorMessage(query.error) : null,
     isLoading: query.isLoading,
-    isRefreshing: query.isFetching && !query.isLoading,
+    isRefreshing: query.isFetching && !query.isLoading && silentReloads === 0,
     reload,
     setData,
   };

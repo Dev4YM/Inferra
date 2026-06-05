@@ -3,8 +3,11 @@ kind: PersistentVolumeClaim
 metadata:
   name: {{ include "inferra.fullname" . }}-data
 spec:
+  {{- if .Values.storage.storageClassName }}
+  storageClassName: {{ .Values.storage.storageClassName | quote }}
+  {{- end }}
   accessModes:
-    - ReadWriteOnce
+{{ toYaml .Values.storage.accessModes | indent 4 }}
   resources:
     requests:
       storage: {{ .Values.storage.size }}

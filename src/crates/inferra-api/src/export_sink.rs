@@ -871,6 +871,7 @@ bearer_token = ""
             collectors: CollectorRuntime::default(),
             scanner_cache: Arc::new(RwLock::new(ScannerCache::default())),
             ui_dist,
+            rate_limits: Arc::new(crate::middleware::RateLimitState::new(30.0, 15.0)),
         };
         (state, root)
     }

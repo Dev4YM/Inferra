@@ -3,9 +3,12 @@
 from __future__ import annotations
 
 from fastapi.testclient import TestClient
+import pytest
 
 from config.model import InferraConfig, StorageConfig
 from web import create_app
+
+pytestmark = pytest.mark.legacy_runtime
 
 
 def _ingest_two_errors(client: TestClient) -> str:

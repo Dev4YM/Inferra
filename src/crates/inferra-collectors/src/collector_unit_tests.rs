@@ -318,6 +318,7 @@ fn threshold_state_detects_entered_and_recovered() {
         memory_percent: 50.0,
         disk_percent: 40.0,
         disk_free_bytes: 1024,
+        disks: Vec::new(),
     };
     let event = state.update_and_build_event(&sample, 85.0, 85.0, 90.0);
     assert!(event.is_some());
@@ -332,6 +333,7 @@ fn threshold_state_detects_entered_and_recovered() {
         memory_percent: 50.0,
         disk_percent: 40.0,
         disk_free_bytes: 1024,
+        disks: Vec::new(),
     };
     let event2 = state.update_and_build_event(&sample2, 85.0, 85.0, 90.0);
     assert!(event2.is_some());
@@ -347,6 +349,7 @@ fn threshold_state_returns_none_when_stable() {
         memory_percent: 50.0,
         disk_percent: 50.0,
         disk_free_bytes: 1024,
+        disks: Vec::new(),
     };
     // First sample sets baseline, no transition
     let event = state.update_and_build_event(&sample, 85.0, 85.0, 90.0);
@@ -454,4 +457,113 @@ fn semantic_fingerprint_is_deterministic() {
     assert_eq!(fp_a, fp_b);
     let fp_c = semantic_fingerprint("src", "svc", "file", "other", None);
     assert_ne!(fp_a, fp_c);
+}
+
+#[test]
+fn structured_with_attributes_exposes_indexable_attributes() {
+    let mut attrs = serde_json::Map::new();
+    insert_attr(&mut attrs, "service.name", serde_json::json!("api"));
+    let structured = structured_with_attributes(attrs, "file", serde_json::json!({"raw": "ok"}));
+    assert_eq!(
+        structured
+            .get("attributes")
+            .and_then(|value| value.get("service.name"))
+            .and_then(serde_json::Value::as_str),
+        Some("api")
+    );
+    assert_eq!(
+        structured
+            .get("file")
+            .and_then(|value| value.get("raw"))
+            .and_then(serde_json::Value::as_str),
+        Some("ok")
+    );
+}
+
+#[test]
+fn json_log_parser_extracts_semantic_fields() {
+    let parsed = parse_collector_log_line(
+        r#"{"timestamp":"2026-05-14T10:00:00Z","service":"checkout","level":"error","message":"payment failed","trace_id":"4bf92f3577b34da6a3ce929d0e0e4736","span_id":"00f067aa0ba902b7","attributes":{"http.route":"/pay"}}"#,
+    );
+    assert_eq!(parsed.service_id.as_deref(), Some("checkout"));
+    assert_eq!(parsed.severity, 3);
+    assert_eq!(parsed.message, "payment failed");
+    assert_eq!(
+        parsed
+            .attributes
+            .get("http.route")
+            .and_then(serde_json::Value::as_str),
+        Some("/pay")
+    );
+    assert_eq!(
+        parsed.trace_id.as_deref(),
+        Some("4bf92f3577b34da6a3ce929d0e0e4736")
+    );
+}
+
+#[test]
+fn windows_service_parser_enriches_start_type() {
+    let output = r#"
+SERVICE_NAME: MSSQLSERVER
+DISPLAY_NAME: SQL Server
+        TYPE               : 10  WIN32_OWN_PROCESS
+        STATE              : 1  STOPPED
+        PID                : 0
+"#;
+    let mut snapshot = parse_windows_service_snapshot(output);
+    let service = snapshot.get_mut("MSSQLSERVER").expect("service");
+    apply_windows_service_qc(
+        service,
+        r#"
+SERVICE_NAME: MSSQLSERVER
+        DISPLAY_NAME       : SQL Server
+        START_TYPE         : 2   AUTO_START
+        BINARY_PATH_NAME   : C:\Program Files\SQL\sqlservr.exe
+        SERVICE_START_NAME : LocalSystem
+"#,
+    );
+    assert_eq!(service.state, "stopped");
+    assert_eq!(service.start_type.as_deref(), Some("automatic"));
+    assert!(service.is_automatic());
+}
+
+#[test]
+fn wevtutil_xml_parser_preserves_event_metadata() {
+    let xml = r#"<Event xmlns='http://schemas.microsoft.com/win/2004/08/events/event'><System><Provider Name='MSSQLSERVER'/><EventID Qualifiers='49152'>18456</EventID><Level>2</Level><TimeCreated SystemTime='2026-05-14T10:24:15.5994746Z'/><EventRecordID>158828</EventRecordID><Channel>Application</Channel><Computer>db-host</Computer></System><EventData><Data>Login failed</Data><Data> [CLIENT: &lt;local machine&gt;]</Data></EventData></Event>"#;
+    let records = parse_wevtutil_xml_events(xml, "Application");
+    assert_eq!(records.len(), 1);
+    assert_eq!(records[0].event_id, "18456");
+    assert_eq!(records[0].computer_name, "db-host");
+    assert_eq!(records[0].event_data.len(), 2);
+}
+
+#[test]
+fn docker_service_identity_prefers_labels() {
+    let attrs = serde_json::json!({
+        "name": "checkout-1",
+        "label:com.docker.compose.service": "checkout"
+    })
+    .as_object()
+    .cloned()
+    .expect("object");
+    assert_eq!(docker_service_id("checkout-1", &attrs), "checkout");
+    assert_eq!(docker_action_severity("health_status: unhealthy"), 3);
+}
+
+#[test]
+fn kubernetes_helpers_extract_workload_health() {
+    assert_eq!(kubernetes_workload_name("checkout-7d998f9c9d-x4abc"), "checkout");
+    let pod = serde_json::json!({
+        "status": {
+            "phase": "Running",
+            "conditions": [{"type": "Ready", "status": "False"}],
+            "containerStatuses": [{
+                "restartCount": 2,
+                "lastState": {"terminated": {"reason": "OOMKilled"}}
+            }]
+        }
+    });
+    assert!(!kubernetes_pod_ready(&pod));
+    assert_eq!(kubernetes_restart_count(&pod), 2);
+    assert!(kubernetes_oom_killed(&pod));
 }

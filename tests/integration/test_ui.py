@@ -15,6 +15,8 @@ from playwright.sync_api import sync_playwright
 from config.model import InferraConfig, StorageConfig
 from web import create_app
 
+pytestmark = [pytest.mark.legacy_runtime, pytest.mark.integration]
+
 
 def _serve(app, host: str, port: int) -> None:
     import uvicorn

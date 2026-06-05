@@ -8,6 +8,9 @@ from fastapi.testclient import TestClient
 from inferra_legacy.app import InferraRuntime
 from config.model import DeduplicationConfig, InferraConfig, StorageConfig
 from core.enums import Severity
+import pytest
+
+pytestmark = pytest.mark.legacy_runtime
 
 
 def test_runtime_dedup_collapses_duplicates_and_emits_summaries(tmp_path):

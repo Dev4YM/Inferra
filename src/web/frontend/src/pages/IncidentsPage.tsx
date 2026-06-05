@@ -73,7 +73,7 @@ export function IncidentsPage({ mode }: { mode: Mode }) {
       />
 
       {rows.length === 0 ? (
-        <EmptyState title="No active incidents" description="The current runtime looks stable. Seed demo data or wait for collectors to observe problems." />
+        <EmptyState title="No active incidents" description="The current runtime looks stable. Keep collectors running or ingest real application events to observe failures." />
       ) : (
         <TableWrap>
           <Table>

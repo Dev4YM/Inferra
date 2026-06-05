@@ -63,9 +63,20 @@ Application ingest is part of the collector surface. It can run on the main API 
 
 ---
 
+## Meaningful collector events
+
+Collectors emit governed `events.db` rows directly. Each event includes source identity,
+severity, tags, stable fingerprints, and a `structured_data.attributes` object for fields
+that can be indexed and queried. Common attributes include `service.name`, `host.name`,
+`process.pid`, `host.cpu_percent`, `http.route`, and collector-specific keys such as
+`windows.eventlog.event_id`, `windows.service.state`, `k8s.pod.restart_count`, and
+`container.action`.
+
 ## Host metrics
 
-Polls CPU/memory/disk thresholds and emits metric-style events and ringbuffer snapshots.
+Polls CPU/memory/disk thresholds and emits metric-style resource events. Events include
+`resource_pressure` or `recovered` tags, host CPU/memory attributes, and the observed disk
+samples so resource-pressure hypotheses can be tied back to concrete host evidence.
 
 ```toml
 [collectors.host_metrics]
@@ -80,7 +91,9 @@ warn_disk_percent = 90.0
 
 Tracks watched processes and PID lists with CPU/memory thresholds and disk paths.
 Process `min_cpu_percent` is evaluated as a share of total host CPU. Events also include
-`cpu_raw_percent` for the runtime's single-core-equivalent process reading.
+`cpu_raw_percent` for the runtime's single-core-equivalent process reading. Process events
+use `name:pid:create_time` identity, include command/status context, and tag threshold
+entries as `resource_pressure` and recoveries as `recovered`.
 
 ```toml
 [collectors.process]
@@ -96,19 +109,25 @@ min_memory_mb = 512.0
 
 ## Windows services
 
-Emits state-change events for service status transitions.
+Emits state-change events for service status transitions. The Rust runtime enriches
+changed services with `sc.exe qc` metadata such as display name, start type, binary path,
+and service account. Automatic services that are stopped are emitted as `ERROR` even when
+ordinary stopped services are hidden.
 
 ```toml
 [collectors.windows_service]
 enabled = true
 poll_interval_seconds = 30.0
 include_stopped = false
+include_automatic_stopped = true
 names = []
 ```
 
 ## Windows Event Log
 
-Bookmarked channel polling through the native Rust runtime.
+Bookmarked channel polling through the native Rust runtime. Events preserve channel,
+provider, event id, record id, computer name, level text, and event-data fields under
+`structured_data.windows_eventlog`, with indexable `windows.eventlog.*` attributes.
 
 ```toml
 [collectors.windows_eventlog]
@@ -119,7 +138,9 @@ poll_interval_seconds = 5.0
 
 ## Linux syslog files
 
-File-follow with rotation awareness.
+File-follow with rotation awareness. JSON log lines are parsed when possible to extract
+timestamp, service, level, message, trace/span ids, deployment environment, and attributes;
+non-JSON lines are kept as raw syslog text with path and offset attributes.
 
 ```toml
 [collectors.linux_syslog]
@@ -131,7 +152,9 @@ start_at_end = true
 
 ## journald
 
-Native bindings or `journalctl` fallback.
+`journalctl` JSON collection with cursor checkpoints. Events include systemd unit,
+priority, process id, host, and service attributes while preserving the original journal
+record.
 
 ```toml
 [collectors.journald]
@@ -146,7 +169,9 @@ limit = 200
 
 ## File glob / multiline
 
-Long-lived file tails with optional service identity from paths.
+Long-lived file tails with optional service identity from paths. JSON lines are parsed
+using the same semantics as syslog; multiline records keep the raw body plus file path,
+offset, parsed payload, and extracted trace/service attributes.
 
 ```toml
 [collectors.file]
@@ -165,7 +190,9 @@ multiline_pattern = ""
 
 ## Docker Engine
 
-Events and container logs via the Docker HTTP API.
+Container lifecycle events via `docker events`. Service identity prefers Docker Compose or
+application labels before the container name. OOM, kill, die, restart, and unhealthy health
+status actions are tagged and severity-ranked for incident correlation.
 
 ```toml
 [collectors.docker]
@@ -180,6 +207,9 @@ include_all = true
 ## Kubernetes
 
 Namespace-scoped events and workloads through the native Rust runtime and in-cluster `kubectl`/API access configured by the deployment target.
+Kubernetes events derive workload identity from object names, classify warning/backoff/OOM
+signals, and pod snapshots track phase, readiness, restart count, OOMKilled state, node,
+namespace, and labels.
 
 ```toml
 [collectors.kubernetes]

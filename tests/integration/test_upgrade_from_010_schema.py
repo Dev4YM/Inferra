@@ -10,6 +10,8 @@ from events.models import DataQuality, NormalizedEvent, SourceRef
 from storage.migrations import EVENTS_MIGRATIONS, migrate
 from storage.event_store import SqliteEventStore
 
+pytestmark = pytest.mark.legacy_runtime
+
 
 def _legacy_event(event_id: str, ts: datetime) -> NormalizedEvent:
     return NormalizedEvent(

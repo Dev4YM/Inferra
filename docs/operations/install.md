@@ -98,7 +98,7 @@ From the repository root:
 docker compose up --build
 ```
 
-The image now follows the same packaged layout as the other Rust-first targets: `/app/inferra` plus `/app/runtime-assets`. Adjust published ports and volume mounts for `inferra.toml` and persistent `data/` per `compose.yaml`.
+The image now follows the same packaged layout as the other Rust-first targets: `/app/inferra` plus `/app/runtime-assets`. Adjust published ports and volume mounts for `inferra.toml` and persistent `data/` per `compose.yaml`. For anything beyond host-loopback development, follow the production notes in [Docker Deployment](docker.md).
 
 ## Kubernetes
 
@@ -106,7 +106,7 @@ The image now follows the same packaged layout as the other Rust-first targets: 
 helm install inferra ./deploy/helm/inferra
 ```
 
-The chart runs the native `inferra init-db` init container followed by the native `inferra serve` container. For in-cluster Kubernetes collection, align `rbac.create`, ServiceAccount bindings, and `[collectors.kubernetes]` in `values.yaml` with your namespace scope. See [Troubleshooting](troubleshooting.md) for RBAC symptoms.
+The chart runs the native `inferra init-db` init container followed by the native `inferra serve` container. For in-cluster Kubernetes collection, align `rbac.create`, ServiceAccount bindings, and `[collectors.kubernetes]` in `values.yaml` with your namespace scope. Production installs must mount the API bearer token Secret described in [Kubernetes Deployment](kubernetes.md). See [Troubleshooting](troubleshooting.md) for RBAC symptoms.
 
 ## macOS (LaunchDaemon)
 

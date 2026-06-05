@@ -3,7 +3,7 @@ import { useEffect, useState } from "react";
 import { toast } from "sonner";
 
 import type { InferraConfigPayload } from "@/api";
-import { putJson } from "@/api";
+import { errorMessage, getInferraAuthToken, putJson, setInferraAuthToken } from "@/api";
 import { JsonInspector } from "@/components/ui/json-inspector";
 import { Button } from "@/components/ui/button";
 import { Card, CardContent, CardHeader, CardTitle } from "@/components/ui/card";
@@ -31,6 +31,7 @@ export function SettingsPage({
     putJson("/api/config", { config: payload }),
   );
   const [text, setText] = useState("");
+  const [apiToken, setApiToken] = useState(() => getInferraAuthToken());
 
   useEffect(() => {
     if (settings.data) {
@@ -64,6 +65,14 @@ export function SettingsPage({
       void settings.reload({ silent: true });
     } catch (error) {
       toast.error("Could not save configuration", { description: error instanceof Error ? error.message : String(error) });
+    }
+  };
+  const testApiToken = async () => {
+    try {
+      await settings.reload();
+      toast.success("API token accepted.");
+    } catch (error) {
+      toast.error("API token test failed", { description: errorMessage(error) });
     }
   };
   const config = settings.data?.config ?? {};
@@ -140,6 +149,30 @@ export function SettingsPage({
               <SettingTile icon={Shield} label="Safe actions" value={formatDisplayValue(Boolean(experience?.suggest_safe_actions ?? true))} />
               <SettingTile icon={Bot} label="AI role" value={formatDisplayValue(String(experience?.ai_role ?? "investigator"))} />
               <SettingTile icon={Database} label="Storage policy" value={retention ? "Custom" : "Default"} />
+            </div>
+            <div className="rounded-2xl border border-border/60 bg-background/30 p-4">
+              <div className="space-y-2">
+                <p className="font-medium">API bearer token</p>
+                <p className="text-sm text-muted-foreground">
+                  When the server uses server.auth_token_env, paste the matching token here. Stored only in this
+                  browser session.
+                </p>
+                <Input
+                  aria-label="API bearer token"
+                  type="password"
+                  autoComplete="off"
+                  placeholder="Bearer token (optional)"
+                  value={apiToken}
+                  onChange={(event) => {
+                    const value = event.target.value;
+                    setApiToken(value);
+                    setInferraAuthToken(value);
+                  }}
+                />
+                <Button type="button" variant="outline" size="sm" onClick={() => void testApiToken()}>
+                  Test API token
+                </Button>
+              </div>
             </div>
             <div className="rounded-2xl border border-border/60 bg-background/30 p-4">
               <div className="flex flex-wrap items-center justify-between gap-3">

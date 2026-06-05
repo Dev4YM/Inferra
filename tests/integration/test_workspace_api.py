@@ -3,9 +3,12 @@
 from __future__ import annotations
 
 from fastapi.testclient import TestClient
+import pytest
 
 from config import InferraConfig, StorageConfig, WorkspaceConfig, WorkspaceServiceMapping
 from web import create_app
+
+pytestmark = pytest.mark.legacy_runtime
 
 
 def test_workspace_projects_endpoint_returns_list(tmp_path):

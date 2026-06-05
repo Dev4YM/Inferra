@@ -31,15 +31,15 @@ Set-Location D:\MYFiles\Projects\py\Inferra
 .\deploy\windows\build-rust-exe.ps1 -CopyUiBundle
 ```
 
-2. Install the Windows service from an elevated PowerShell:
+1. Install the Windows service from an elevated PowerShell:
 
 ```powershell
 .\deploy\windows\install-service.ps1 -InferraExe (Resolve-Path .\dist\inferra-rust.exe) -AddCliToPath
 ```
 
-This stages the runtime under `%ProgramFiles%\Inferra\` and keeps mutable state under `%ProgramData%\Inferra\`.
+This stages the runtime under `%ProgramlFiles%\Inferra\` and keeps mutable state under `%ProgramData%\Inferra\`.
 
-3. Run `inferra` (or `inferra status`) to confirm the installed CLI sees the runtime and version banner, then open `http://127.0.0.1:7433/` (or the port in `%ProgramData%\Inferra\inferra.toml`). If the dashboard does not load, inspect `%ProgramData%\Inferra\logs\serve.log`.
+1. Run `inferra` (or `inferra status`) to confirm the installed CLI sees the runtime and version banner, then open `http://127.0.0.1:7433/` (or the port in `%ProgramData%\Inferra\inferra.toml`). If the dashboard does not load, inspect `%ProgramData%\Inferra\logs\serve.log`.
 
 ## Legacy PyInstaller path
 
@@ -49,7 +49,7 @@ The remainder of this document describes the archived PyInstaller flow. Use it o
 
 On developer and server machines, `**dist\inferra.exe` or `**dist\inferra-rust.exe` can still be locked** if an older/manual install points directly at the project tree:
 
-- The **Inferra** Windows service loads the project-copy binary instead of the packaged install root.
+- lThe **Inferra** Windows service loads the project-copy binary instead of the packaged install root.
 - The service spawns a **child `inferra.exe serve`** process.
 - Antivirus or indexing may briefly hold handles during scans.
 
@@ -99,8 +99,8 @@ After a successful **legacy PyInstaller** run you should have a staged or promot
 
 Exit codes:
 
-- `**0**` — success.
-- `**1**` — hard failure (PyInstaller, smoke test, missing artifacts, …).
+- `**0`** — success.
+- `**1`** — hard failure (PyInstaller, smoke test, missing artifacts, …).
 - `**2**` — promotion failed (staged exe is still valid; see message).
 
 ## CI / automation
@@ -122,18 +122,18 @@ Use this **only** when you intentionally want every `inferra.exe` stopped (for e
 ## Troubleshooting
 
 
-| Symptom                                                                                        | Likely cause                                | Mitigation                                                                                                                                                                                                |
-| ---------------------------------------------------------------------------------------------- | ------------------------------------------- | --------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
+| Symptom                                                                                        | Likely cause                                | Mitigation                                                                                                                                                                                                                                 |
+| ---------------------------------------------------------------------------------------------- | ------------------------------------------- | ------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------ |
 | `**ERROR: To modify pip, please run … python.exe -m pip`** during `**prepare-build-venv.ps1`** | `**pip.exe` cannot self-upgrade** (pip 24+) | Already fixed in repo: script uses `**python -m pip`**. Update your checkout or run: `**.\venv\Scripts\python.exe -m pip install --upgrade pip wheel`**. Or `**.\deprecated\windows-pyinstaller\prepare-build-venv.ps1 -SkipPipUpgrade**`. |
-| Promotion exits `**2**` or copy errors mention **sharing violation** / **being used**          | Lock on `**dist\inferra.exe`**              | Run `**Stop-Service Inferra`**, confirm `**Get-Process inferra`** is empty, retry. Import `**InferraWindows.psm1**` and run `**Stop-InferraWindowsExecutionLocks**`.                                      |
-| PyInstaller Analysis pulls **torch**, huge `**pkg`**, multi-minute builds                      | Polluted global Python or `**PYTHONPATH`**  | Use `**prepare-build-venv.ps1`**; ensure no foreign paths are injected into the build shell.                                                                                                              |
-| `**inferra.exe --version` smoke failure**                                                      | Frozen metadata / broken build              | Inspect PyInstaller warnings; run staged exe manually from `**dist\_inferra_exe_stage\`**.                                                                                                                |
-| Service runs but HTTP never listens                                                            | Child `**serve`** crashed                   | See `**%ProgramData%\Inferra\logs\serve.log`** (written by the Windows service wrapper).                                                                                                                  |
+| Promotion exits `**2**` or copy errors mention **sharing violation** / **being used**          | Lock on `**dist\inferra.exe`**              | Run `**Stop-Service Inferra`**, confirm `**Get-Process inferra`** is empty, retry. Import `**InferraWindows.psm1**` and run `**Stop-InferraWindowsExecutionLocks**`.                                                                       |
+| PyInstaller Analysis pulls **torch**, huge `**pkg`**, multi-minute builds                      | Polluted global Python or `**PYTHONPATH`**  | Use `**prepare-build-venv.ps1`**; ensure no foreign paths are injected into the build shell.                                                                                                                                               |
+| `**inferra.exe --version` smoke failure**                                                      | Frozen metadata / broken build              | Inspect PyInstaller warnings; run staged exe manually from `**dist\_inferra_exe_stage\`**.                                                                                                                                                 |
+| Service runs but HTTP never listens                                                            | Child `**serve`** crashed                   | See `**%ProgramData%\Inferra\logs\serve.log`** (written by the Windows service wrapper).                                                                                                                                                   |
 
 
 ## Manual commands (advanced)
 
-If you must invoke PyInstaller yourself, use the archived flow under `**deprecated/windows-pyinstaller/**`:
+If you must invoke PyInstaller yourself, use the archived flow under `**deprecated/windows-pyinstaller/`**:
 
 ```powershell
 python -m PyInstaller --noconfirm `

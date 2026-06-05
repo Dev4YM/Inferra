@@ -15,6 +15,9 @@ RUN cargo build --manifest-path src/Cargo.toml -p inferra-cli --release
 
 FROM debian:bookworm-slim
 
+RUN apt-get update \
+    && apt-get install -y --no-install-recommends ca-certificates curl \
+    && rm -rf /var/lib/apt/lists/*
 RUN useradd --system --uid 1000 --create-home inferra
 RUN mkdir -p /data && chown inferra:inferra /data
 
@@ -30,5 +33,7 @@ WORKDIR /home/inferra
 EXPOSE 7433
 
 ENV INFERRA_CONFIG=/etc/inferra/inferra.toml
+
+HEALTHCHECK --interval=30s --timeout=3s --start-period=20s --retries=3 CMD curl -fsS http://127.0.0.1:7433/healthz || exit 1
 
 CMD ["/app/docker-entrypoint.sh"]

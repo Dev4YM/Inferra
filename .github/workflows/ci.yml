@@ -7,32 +7,35 @@ on:
     branches: [main]
 
 jobs:
-  python-support:
-    name: ${{ matrix.os }} / Python ${{ matrix.python-version }}
-    runs-on: ${{ matrix.os }}
-    strategy:
-      fail-fast: false
-      matrix:
-        os: [ubuntu-latest, windows-latest, macos-latest]
-        python-version: ["3.11", "3.12"]
-
+  python-tooling:
+    name: Python tooling and packaging contracts
+    runs-on: ubuntu-latest
     steps:
       - uses: actions/checkout@v4
       - uses: actions/setup-python@v5
         with:
-          python-version: ${{ matrix.python-version }}
+          python-version: "3.12"
       - name: Install
-        run: python -m pip install -e ".[dev,legacy]"
+        run: python -m pip install -e ".[dev]"
       - name: Compile
         run: python -m compileall tests deploy deprecated
       - name: Ruff
         run: python -m ruff check tests deploy deprecated
-      - name: Test (POSIX-like)
-        if: runner.os != 'Windows'
-        run: python -m pytest -q -m "not windows and not chaos"
-      - name: Test (Windows)
-        if: runner.os == 'Windows'
-        run: python -m pytest -q -m "not linux and not chaos"
+      - name: Rust packaging contracts
+        run: python -m pytest -q tests/unit/test_rust_packaging_contracts.py
+
+  legacy-archive:
+    name: Archived Python runtime tests
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.12"
+      - name: Install legacy archive dependencies
+        run: python -m pip install -e ".[dev,legacy]"
+      - name: Run archived runtime tests
+        run: python -m pytest -q -m "not windows and not chaos and not perf"
 
   rust:
     name: Rust checks
@@ -78,7 +81,7 @@ jobs:
         with:
           tool: cargo-llvm-cov
       - name: Generate LCOV and enforce minimum line coverage
-        run: cargo llvm-cov test --manifest-path src/Cargo.toml --workspace --lcov --output-path lcov.info --fail-under-lines 35
+        run: cargo llvm-cov test --manifest-path src/Cargo.toml --workspace --lcov --output-path lcov.info --fail-under-lines 45
       - name: Print coverage summary
         run: cargo llvm-cov report --manifest-path src/Cargo.toml --summary-only
       - uses: actions/upload-artifact@v4
@@ -114,9 +117,13 @@ jobs:
       - name: Smoke built runtime
         run: >
           python tests/scripts/rust_runtime_smoke.py
-          --binary "${{ github.workspace }}/target/release/inferra"
+          --binary "${{ github.workspace }}/src/target/release/inferra"
           --repo-root "${{ github.workspace }}"
           --ui-dist "${{ github.workspace }}/src/web/ui_dist"
+      - name: Rust API integration tests
+        run: >
+          INFERRA_BINARY="${{ github.workspace }}/src/target/release/inferra"
+          python -m pytest -q tests/integration/test_rust_api.py -m integration
 
   chaos:
     name: Chaos resilience
@@ -151,12 +158,48 @@ jobs:
           path: perf_report.json
 
   helm-template:
-    name: Helm template
+    name: Helm lint and template
     runs-on: ubuntu-latest
     steps:
       - uses: actions/checkout@v4
       - uses: azure/setup-helm@v4
         with:
           version: v3.14.4
+      - name: Lint chart
+        run: helm lint ./deploy/helm/inferra
       - name: Render chart
-        run: helm template inferra ./deploy/helm/inferra --debug >/dev/null
+        run: helm template inferra ./deploy/helm/inferra --debug > rendered.yaml
+      - name: Verify production hardening fields
+        run: >
+          python -c "from pathlib import Path;
+          rendered=Path('rendered.yaml').read_text();
+          assert 'auth_token_env = \"INFERRA_API_TOKEN\"' in rendered;
+          assert 'require_loopback = false' in rendered;
+          assert 'path: \"/healthz\"' in rendered;
+          assert 'path: \"/readyz\"' in rendered;
+          assert 'readOnlyRootFilesystem: true' in rendered;
+          assert 'seccompProfile:' in rendered"
+
+  docker-image:
+    name: Docker image smoke
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - name: Build image
+        run: docker build -t inferra:ci .
+      - name: Run image and probe health
+        run: >
+          docker run -d --name inferra-ci
+          -p 127.0.0.1:7433:7433
+          -v "${{ github.workspace }}/deploy/examples/inferra.container.toml:/etc/inferra/inferra.toml:ro"
+          inferra:ci
+          &&
+          for i in $(seq 1 30); do
+            if curl -fsS http://127.0.0.1:7433/healthz; then exit 0; fi;
+            sleep 1;
+          done;
+          docker logs inferra-ci;
+          exit 1
+      - name: Stop image
+        if: always()
+        run: docker rm -f inferra-ci || true

@@ -4,6 +4,8 @@ import pytest
 from config.model import AnomalyDetectionConfig, InferraConfig, StorageConfig
 from web import create_app
 
+pytestmark = pytest.mark.legacy_runtime
+
 
 def test_api_ingest_incident_hypothesis_and_explanation(tmp_path):
     app = create_app(InferraConfig(storage=StorageConfig(data_dir=tmp_path)))

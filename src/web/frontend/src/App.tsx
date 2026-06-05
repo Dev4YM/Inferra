@@ -1,6 +1,7 @@
 import { useCallback, useEffect, useState } from "react";
 import {
   Activity,
+  AlertTriangle,
   BrainCircuit,
   FolderKanban,
   Home,
@@ -12,11 +13,13 @@ import {
   Siren,
   Workflow,
 } from "lucide-react";
-import { Route, Routes } from "react-router-dom";
+import { Link, Route, Routes } from "react-router-dom";
 import { Toaster, toast } from "sonner";
 
-import { type ConfigResponse, type InferraConfigPayload, fetchJson, putJson } from "@/api";
+import { ApiError, type ConfigResponse, type InferraConfigPayload, fetchJson, putJson } from "@/api";
 import { AppShell, type NavItem } from "@/components/layout/app-shell";
+import { Alert, AlertDescription, AlertTitle } from "@/components/ui/alert";
+import { Button } from "@/components/ui/button";
 import { configMode, type Mode, useMode } from "@/lib/experience";
 import { formatModeLabel } from "@/lib/format";
 import { useApiQuery } from "@/lib/query";
@@ -51,6 +54,10 @@ export default function App() {
   const [theme, setTheme] = useTheme();
   const [modeStatus, setModeStatus] = useState("");
   const configState = useApiQuery<ConfigResponse>("/api/config");
+  const authError =
+    configState.error instanceof ApiError && [401, 403, 503].includes(configState.error.status)
+      ? configState.errorMessage
+      : null;
 
   useEffect(() => {
     const persisted = configMode(configState.data?.config);
@@ -102,6 +109,20 @@ export default function App() {
             Syncing config and refreshing control-plane state…
           </div>
         ) : null}
+        {authError ? (
+          <Alert variant="warning" className="mb-4">
+            <AlertTriangle className="size-4" />
+            <div className="min-w-0">
+              <AlertTitle>API access needs attention</AlertTitle>
+              <AlertDescription>{authError}</AlertDescription>
+              <div className="mt-3">
+                <Button asChild variant="outline" size="sm">
+                  <Link to="/settings">Open token settings</Link>
+                </Button>
+              </div>
+            </div>
+          </Alert>
+        ) : null}
         <Routes>
           <Route path="/" element={<OverviewPage mode={mode} />} />
           <Route path="/incidents" element={<IncidentsPage mode={mode} />} />
@@ -117,9 +138,27 @@ export default function App() {
           <Route path="/workspace/apps" element={<WorkspaceAppPage mode={mode} />} />
           <Route path="/control" element={<ControlPage mode={mode} />} />
           <Route path="/settings" element={<SettingsPage mode={mode} theme={theme} onThemeChange={setTheme} />} />
+          <Route path="*" element={<NotFoundPage mode={mode} />} />
         </Routes>
       </AppShell>
       <Toaster theme={theme} richColors position="top-right" />
     </>
+  );
+}
+
+function NotFoundPage({ mode }: { mode: Mode }) {
+  return (
+    <div className="space-y-6">
+      <div className="rounded-3xl border border-dashed border-border bg-card/70 p-8 text-center shadow-sm">
+        <p className="text-xs font-semibold uppercase tracking-[0.25em] text-muted-foreground">{formatModeLabel(mode)} mode</p>
+        <h1 className="mt-3 text-3xl font-semibold tracking-tight">Page not found</h1>
+        <p className="mx-auto mt-3 max-w-xl text-sm leading-6 text-muted-foreground">
+          This route is not part of the Inferra console. Return to the overview or use the sidebar navigation.
+        </p>
+        <Button asChild className="mt-6">
+          <Link to="/">Back to overview</Link>
+        </Button>
+      </div>
+    </div>
   );
 }

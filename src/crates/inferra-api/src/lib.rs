@@ -56,6 +56,7 @@ use tokio::sync::RwLock;
 use toml::Value as TomlValue;
 
 mod export_sink;
+mod middleware;
 
 const INVESTIGATION_MAX_AI_ATTEMPTS: usize = 3;
 const SCANNER_WORKSPACE_MIN_INTERVAL_SECONDS: u64 = 15;
@@ -213,6 +214,7 @@ pub struct AppState {
     pub collectors: CollectorRuntime,
     pub scanner_cache: Arc<RwLock<ScannerCache>>,
     pub ui_dist: PathBuf,
+    pub rate_limits: Arc<middleware::RateLimitState>,
 }
 
 #[derive(Default)]
@@ -235,6 +237,8 @@ struct ScanQuery {
 
 pub fn app_router(state: AppState) -> Router {
     Router::new()
+        .route("/healthz", get(api_healthz))
+        .route("/readyz", get(api_readyz))
         .route("/api/version", get(api_version))
         .route("/api/health", get(api_health))
         .route("/api/config", get(api_get_config).put(api_put_config))
@@ -375,12 +379,23 @@ where
         .and_then(|value| value.as_bool())
         .unwrap_or(false);
     let (host, port) = server_listen(&merged)?;
+    let chat_rate = merged
+        .get("server")
+        .and_then(|s| s.get("rate_limit_chat_tokens_per_minute"))
+        .and_then(|v| v.as_float().or_else(|| v.as_integer().map(|i| i as f64)))
+        .unwrap_or(30.0);
+    let explain_rate = merged
+        .get("server")
+        .and_then(|s| s.get("rate_limit_explain_tokens_per_minute"))
+        .and_then(|v| v.as_float().or_else(|| v.as_integer().map(|i| i as f64)))
+        .unwrap_or(15.0);
     let state = AppState {
         paths: Arc::new(paths),
         config: Arc::new(RwLock::new(merged)),
         collectors: CollectorRuntime::default(),
         scanner_cache: Arc::new(RwLock::new(ScannerCache::default())),
         ui_dist,
+        rate_limits: Arc::new(middleware::RateLimitState::new(chat_rate, explain_rate)),
     };
     if collectors_auto_start {
         state
@@ -401,14 +416,17 @@ where
             None
         }
     };
-    let app = app_router(state);
+    let app = middleware::apply_http_middleware(state.clone(), app_router(state.clone()));
 
     let addr = format!("{host}:{port}");
     let listener = tokio::net::TcpListener::bind(&addr).await?;
     tracing::info!("inferra Rust runtime listening on http://{addr}");
-    let serve_result = axum::serve(listener, app)
-        .with_graceful_shutdown(shutdown)
-        .await;
+    let serve_result = axum::serve(
+        listener,
+        app.into_make_service_with_connect_info::<std::net::SocketAddr>(),
+    )
+    .with_graceful_shutdown(shutdown)
+    .await;
     if let Some(handle) = export_handle {
         handle.abort();
     }
@@ -416,17 +434,27 @@ where
     Ok(())
 }
 
+fn workspace_scan_enabled(config: &TomlValue) -> bool {
+    config
+        .get("workspace")
+        .and_then(|value| value.get("enabled"))
+        .and_then(|value| value.as_bool())
+        .unwrap_or(true)
+}
+
 async fn scanner_service_loop(state: AppState) {
     loop {
         let cfg = state.config.read().await.clone();
         let interval_seconds = workspace_scan_interval_seconds(&cfg);
-        match refresh_workspace_scan_cache(&state, &cfg).await {
-            Ok(workspace) => tracing::debug!(
-                projects = workspace.projects.len(),
-                runtime_apps = workspace.runtime_apps.len(),
-                "workspace scanner snapshot refreshed"
-            ),
-            Err(error) => tracing::warn!(error = %error, "workspace scanner refresh failed"),
+        if workspace_scan_enabled(&cfg) {
+            match refresh_workspace_scan_cache(&state, &cfg).await {
+                Ok(workspace) => tracing::debug!(
+                    projects = workspace.projects.len(),
+                    runtime_apps = workspace.runtime_apps.len(),
+                    "workspace scanner snapshot refreshed"
+                ),
+                Err(error) => tracing::warn!(error = %error, "workspace scanner refresh failed"),
+            }
         }
         tokio::time::sleep(Duration::from_secs(interval_seconds)).await;
     }
@@ -440,16 +468,63 @@ async fn api_version() -> Json<ApiVersionResponse> {
     })
 }
 
+async fn api_healthz() -> Json<JsonValue> {
+    Json(json!({
+        "status": "ok",
+        "runtime": "rust",
+    }))
+}
+
+fn storage_degraded_reasons(paths: &Paths) -> Vec<String> {
+    let mut degraded_reasons: Vec<String> = Vec::new();
+    if !paths.data_dir.exists() {
+        degraded_reasons.push(format!("data_dir missing: {}", paths.data_dir.display()));
+    }
+    match inferra_storage::probe_database_writable(&paths.events_db) {
+        Ok(()) => {}
+        Err(reason) => degraded_reasons.push(format!("events.db: {reason}")),
+    }
+    match inferra_storage::probe_database_writable(&paths.incidents_db) {
+        Ok(()) => {}
+        Err(reason) => degraded_reasons.push(format!("incidents.db: {reason}")),
+    }
+    degraded_reasons
+}
+
+async fn api_readyz(State(state): State<AppState>) -> Response {
+    let degraded_reasons = storage_degraded_reasons(state.paths.as_ref());
+    let ready = degraded_reasons.is_empty();
+    let status = if ready {
+        StatusCode::OK
+    } else {
+        StatusCode::SERVICE_UNAVAILABLE
+    };
+    (
+        status,
+        Json(json!({
+            "status": if ready { "ready" } else { "not_ready" },
+            "runtime": "rust",
+            "storage_writes_ok": ready,
+        })),
+    )
+        .into_response()
+}
+
 async fn api_health(State(state): State<AppState>) -> Json<JsonValue> {
     let cfg = state.config.read().await;
     let paths = state.paths.as_ref();
-    let storage_ok = paths.data_dir.exists();
+    let degraded_reasons = storage_degraded_reasons(paths);
+    let storage_writes_ok = degraded_reasons.is_empty();
+    let status = if storage_writes_ok { "ok" } else { "degraded" };
     Json(json!({
-        "status": if storage_ok { "ok" } else { "degraded" },
+        "status": status,
         "runtime": "rust",
-        "storage_writes_ok": storage_ok,
+        "storage_writes_ok": storage_writes_ok,
+        "degraded_reasons": degraded_reasons,
         "config_path": paths.config_path,
         "data_dir": paths.data_dir,
+        "events_db": paths.events_db,
+        "incidents_db": paths.incidents_db,
         "ai_enabled": cfg.get("ai").and_then(|a| a.get("enabled")).and_then(|v| v.as_bool()).unwrap_or(false),
     }))
 }
@@ -526,6 +601,20 @@ async fn api_overview(
 }
 
 async fn api_metrics(State(state): State<AppState>) -> Response {
+    let expose_metrics = {
+        let cfg = state.config.read().await;
+        cfg.get("server")
+            .and_then(|server| server.get("expose_prometheus_metrics"))
+            .and_then(TomlValue::as_bool)
+            .unwrap_or(false)
+    };
+    if !expose_metrics {
+        return (
+            StatusCode::NOT_FOUND,
+            Json(json!({"detail": "metrics endpoint disabled"})),
+        )
+            .into_response();
+    }
     let event_count = EventsStore::open(&state.paths.events_db)
         .ok()
         .flatten()
@@ -3205,6 +3294,7 @@ fn is_sensitive_workspace_log_path(path: &str) -> bool {
 }
 
 async fn api_workspace_inspect(
+    State(state): State<AppState>,
     Query(params): Query<std::collections::HashMap<String, String>>,
 ) -> Result<Json<JsonValue>, (StatusCode, String)> {
     let Some(path) = params.get("path").cloned() else {
@@ -3213,7 +3303,27 @@ async fn api_workspace_inspect(
     if path.trim().is_empty() {
         return Err((StatusCode::BAD_REQUEST, "path is required".to_string()));
     }
-    Ok(Json(inspect_workspace_project(std::path::Path::new(&path))))
+    let cfg = state.config.read().await;
+    let requested = PathBuf::from(path.trim());
+    let canonical = requested
+        .canonicalize()
+        .map_err(|_| (StatusCode::NOT_FOUND, "workspace path not found".to_string()))?;
+    let roots = workspace_inspect_allowed_roots(&cfg, state.paths.as_ref());
+    if !roots.iter().any(|root| canonical.starts_with(root)) {
+        return Err((
+            StatusCode::FORBIDDEN,
+            "workspace path is outside configured workspace roots".to_string(),
+        ));
+    }
+    let redact_env_files = cfg
+        .get("workspace")
+        .and_then(|value| value.get("redact_env_files"))
+        .and_then(TomlValue::as_bool)
+        .unwrap_or(true);
+    Ok(Json(inspect_workspace_project(
+        canonical.as_path(),
+        redact_env_files,
+    )))
 }
 
 async fn api_workspace_add_mapping(
@@ -5628,7 +5738,43 @@ fn clean_display_path(path: &str) -> String {
     }
 }
 
-fn inspect_workspace_project(path: &std::path::Path) -> JsonValue {
+fn workspace_inspect_allowed_roots(config: &TomlValue, paths: &Paths) -> Vec<PathBuf> {
+    let base = paths
+        .config_path
+        .parent()
+        .unwrap_or_else(|| Path::new("."))
+        .to_path_buf();
+    let mut roots = Vec::new();
+    if let Ok(root) = base.canonicalize() {
+        roots.push(root);
+    }
+    if let Some(items) = config
+        .get("workspace")
+        .and_then(|value| value.get("roots"))
+        .and_then(TomlValue::as_array)
+    {
+        for item in items.iter().filter_map(TomlValue::as_str) {
+            let trimmed = item.trim();
+            if trimmed.is_empty() {
+                continue;
+            }
+            let candidate = PathBuf::from(trimmed);
+            let resolved = if candidate.is_absolute() {
+                candidate
+            } else {
+                base.join(candidate)
+            };
+            if let Ok(root) = resolved.canonicalize() {
+                if !roots.iter().any(|existing| existing == &root) {
+                    roots.push(root);
+                }
+            }
+        }
+    }
+    roots
+}
+
+fn inspect_workspace_project(path: &std::path::Path, redact_env_files: bool) -> JsonValue {
     let exists = path.exists();
     let is_dir = path.is_dir();
     let mut entries = Vec::new();
@@ -5660,6 +5806,9 @@ fn inspect_workspace_project(path: &std::path::Path) -> JsonValue {
         ".env.example",
         ".git",
     ] {
+        if redact_env_files && marker.starts_with(".env") {
+            continue;
+        }
         if path.join(marker).exists() {
             markers.push(marker.to_string());
         }
@@ -5668,8 +5817,12 @@ fn inspect_workspace_project(path: &std::path::Path) -> JsonValue {
         if let Ok(read_dir) = std::fs::read_dir(path) {
             for entry in read_dir.flatten().take(50) {
                 let child_path = entry.path();
+                let name = entry.file_name().to_string_lossy().to_string();
+                if redact_env_files && name.to_ascii_lowercase().starts_with(".env") {
+                    continue;
+                }
                 entries.push(json!({
-                    "name": entry.file_name().to_string_lossy().to_string(),
+                    "name": name,
                     "kind": if child_path.is_dir() { "dir" } else { "file" },
                 }));
             }
@@ -5779,9 +5932,12 @@ mod tests {
     use axum::http::Request;
     use rusqlite::Connection;
     use serde_json::Value as JsonValue;
+    use std::sync::Mutex;
     use std::time::{SystemTime, UNIX_EPOCH};
     use toml::Value as TomlValue;
     use tower::util::ServiceExt;
+
+    static ENV_LOCK: Mutex<()> = Mutex::new(());
 
     fn test_root(name: &str) -> PathBuf {
         let unique = SystemTime::now()
@@ -5854,6 +6010,7 @@ enabled = false
             collectors: CollectorRuntime::default(),
             scanner_cache: Arc::new(RwLock::new(ScannerCache::default())),
             ui_dist,
+            rate_limits: Arc::new(middleware::RateLimitState::new(30.0, 15.0)),
         }
     }
 
@@ -5998,10 +6155,10 @@ enabled = false
     fn seed_test_databases(paths: &Paths) {
         let now = time::OffsetDateTime::now_utc();
         let fmt = time::format_description::well_known::Rfc3339;
-        let ts_evt1 = (now - time::Duration::hours(2))
+        let ts_evt1 = (now - time::Duration::minutes(5))
             .format(&fmt)
             .expect("format evt1 timestamp");
-        let ts_evt2 = (now - time::Duration::hours(1))
+        let ts_evt2 = (now - time::Duration::minutes(2))
             .format(&fmt)
             .expect("format evt2 timestamp");
         let events = Connection::open(&paths.events_db).expect("open test events db");
@@ -6239,6 +6396,49 @@ enabled = false
     }
 
     #[test]
+    fn workspace_inspect_roots_and_redaction_are_enforced() {
+        let root = test_root("workspace-inspect");
+        let project = root.join("project");
+        let outside = test_root("workspace-inspect-outside");
+        std::fs::create_dir_all(&project).expect("create project");
+        std::fs::create_dir_all(&outside).expect("create outside");
+        std::fs::write(project.join("package.json"), "{}").expect("write marker");
+        std::fs::write(project.join(".env"), "SECRET=value").expect("write env");
+        std::fs::write(project.join(".env.example"), "SECRET=").expect("write env example");
+
+        let paths = Paths {
+            config_path: root.join("inferra.toml"),
+            data_dir: root.join("data"),
+            events_db: root.join("data").join("events.db"),
+            incidents_db: root.join("data").join("incidents.db"),
+        };
+        let cfg: TomlValue = r#"
+[workspace]
+roots = ["project"]
+redact_env_files = true
+"#
+        .parse()
+        .expect("parse workspace config");
+        let roots = workspace_inspect_allowed_roots(&cfg, &paths);
+        let canonical_project = project.canonicalize().expect("canonical project");
+        let canonical_outside = outside.canonicalize().expect("canonical outside");
+        assert!(roots.iter().any(|root| canonical_project.starts_with(root)));
+        assert!(!roots.iter().any(|root| canonical_outside.starts_with(root)));
+
+        let redacted = inspect_workspace_project(&project, true);
+        let markers = redacted
+            .get("markers")
+            .and_then(JsonValue::as_array)
+            .expect("markers");
+        assert!(markers.iter().any(|item| item.as_str() == Some("package.json")));
+        assert!(!markers.iter().any(|item| item.as_str() == Some(".env")));
+        assert_eq!(redacted.get("has_env_file"), Some(&JsonValue::Bool(false)));
+
+        let _ = std::fs::remove_dir_all(root);
+        let _ = std::fs::remove_dir_all(outside);
+    }
+
+    #[test]
     fn redacted_ai_bundle_keeps_workspace_raw_log_context_without_secrets() {
         let config: TomlValue = r#"
 [ai]
@@ -6298,6 +6498,44 @@ redact_raw_logs = true
         serde_json::from_slice(&body).expect("parse json")
     }
 
+    async fn request_json(
+        app: Router,
+        method: &str,
+        path: &str,
+        auth: Option<&str>,
+    ) -> (StatusCode, JsonValue) {
+        let mut builder = Request::builder().method(method).uri(path);
+        if let Some(auth) = auth {
+            builder = builder.header(header::AUTHORIZATION, auth);
+        }
+        let response = app
+            .oneshot(builder.body(Body::empty()).expect("build request"))
+            .await
+            .expect("router response");
+        let status = response.status();
+        let body = axum::body::to_bytes(response.into_body(), usize::MAX)
+            .await
+            .expect("read body");
+        let parsed = serde_json::from_slice(&body).unwrap_or_else(|_| {
+            json!({
+                "text": String::from_utf8_lossy(&body).to_string()
+            })
+        });
+        (status, parsed)
+    }
+
+    async fn require_bearer_token(state: &AppState, env_name: &str) {
+        let mut cfg = state.config.write().await;
+        let root = cfg.as_table_mut().expect("test config table");
+        let server = root
+            .entry("server".to_string())
+            .or_insert_with(|| TomlValue::Table(toml::map::Map::new()))
+            .as_table_mut()
+            .expect("server table");
+        server.insert("require_loopback".into(), TomlValue::Boolean(false));
+        server.insert("auth_token_env".into(), TomlValue::String(env_name.into()));
+    }
+
     async fn post_json(
         app: Router,
         path: &str,
@@ -6351,6 +6589,105 @@ redact_raw_logs = true
             axum::serve(listener, app).await.expect("serve mock ollama");
         });
         format!("http://{}", addr)
+    }
+
+    #[tokio::test]
+    async fn middleware_allows_config_put_without_deadlock() {
+        let state = test_state("middleware-config-put", false);
+        let app = middleware::apply_http_middleware(state.clone(), app_router(state));
+        let payload = json!({
+            "config": {
+                "experience": {
+                    "mode": "developer",
+                    "show_raw_evidence_by_default": true
+                }
+            }
+        });
+        let response = app
+            .oneshot(
+                Request::builder()
+                    .method("PUT")
+                    .uri("/api/config")
+                    .header(header::CONTENT_TYPE, "application/json")
+                    .body(Body::from(payload.to_string()))
+                    .expect("build put request"),
+            )
+            .await
+            .expect("put response");
+        assert_eq!(response.status(), StatusCode::OK);
+        let body = axum::body::to_bytes(response.into_body(), usize::MAX)
+            .await
+            .expect("read put body");
+        let parsed: JsonValue = serde_json::from_slice(&body).expect("parse put json");
+        assert_eq!(
+            parsed
+                .get("config")
+                .and_then(|value| value.get("experience"))
+                .and_then(|value| value.get("mode"))
+                .and_then(|value| value.as_str()),
+            Some("developer")
+        );
+    }
+
+    #[tokio::test]
+    async fn probe_routes_remain_minimal_when_api_auth_is_enabled() {
+        let _guard = ENV_LOCK.lock().expect("env lock");
+        let env_name = "INFERRA_TEST_PROBE_TOKEN";
+        std::env::set_var(env_name, "correct-token");
+        let state = seeded_test_state("probe-auth", false);
+        require_bearer_token(&state, env_name).await;
+        let app = middleware::apply_http_middleware(state.clone(), app_router(state));
+
+        let (healthz_status, healthz) = request_json(app.clone(), "GET", "/healthz", None).await;
+        assert_eq!(healthz_status, StatusCode::OK);
+        assert_eq!(healthz.get("runtime").and_then(JsonValue::as_str), Some("rust"));
+        assert!(healthz.get("config_path").is_none());
+
+        let (readyz_status, readyz) = request_json(app.clone(), "GET", "/readyz", None).await;
+        assert_eq!(readyz_status, StatusCode::OK);
+        assert_eq!(readyz.get("storage_writes_ok"), Some(&JsonValue::Bool(true)));
+        assert!(readyz.get("events_db").is_none());
+
+        let (api_status, api_body) = request_json(app, "GET", "/api/health", None).await;
+        assert_eq!(api_status, StatusCode::UNAUTHORIZED);
+        assert_eq!(
+            api_body.get("detail").and_then(JsonValue::as_str),
+            Some("unauthorized")
+        );
+        std::env::remove_var(env_name);
+    }
+
+    #[tokio::test]
+    async fn api_auth_fails_closed_when_env_is_unset_and_accepts_exact_bearer() {
+        let _guard = ENV_LOCK.lock().expect("env lock");
+        let env_name = "INFERRA_TEST_API_TOKEN";
+        std::env::remove_var(env_name);
+        let state = seeded_test_state("api-auth-unset", false);
+        require_bearer_token(&state, env_name).await;
+        let app = middleware::apply_http_middleware(state.clone(), app_router(state));
+
+        let (unset_status, unset_body) = request_json(app.clone(), "GET", "/api/health", None).await;
+        assert_eq!(unset_status, StatusCode::SERVICE_UNAVAILABLE);
+        assert!(unset_body
+            .get("detail")
+            .and_then(JsonValue::as_str)
+            .unwrap_or_default()
+            .contains(env_name));
+
+        std::env::set_var(env_name, "correct-token");
+        let state = seeded_test_state("api-auth-set", false);
+        require_bearer_token(&state, env_name).await;
+        let app = middleware::apply_http_middleware(state.clone(), app_router(state));
+
+        let (wrong_status, _) =
+            request_json(app.clone(), "GET", "/api/health", Some("Bearer wrong-token")).await;
+        assert_eq!(wrong_status, StatusCode::UNAUTHORIZED);
+
+        let (ok_status, ok_body) =
+            request_json(app, "GET", "/api/health", Some("Bearer correct-token")).await;
+        assert_eq!(ok_status, StatusCode::OK);
+        assert_eq!(ok_body.get("runtime").and_then(JsonValue::as_str), Some("rust"));
+        std::env::remove_var(env_name);
     }
 
     #[tokio::test]

@@ -1,9 +1,12 @@
 from __future__ import annotations
 
 from fastapi.testclient import TestClient
+import pytest
 
 from config import InferraConfig, StorageConfig, config_to_dict
 from web import create_app
+
+pytestmark = pytest.mark.legacy_runtime
 
 
 def test_config_api_persists_experience_mode_runtime_and_file(tmp_path):

@@ -24,14 +24,14 @@ Product positioning and AI boundaries are documented in [ADR 0001: Local-first g
 - Workspace intelligence: project discovery, runtime app detection, live app resources, app-specific logs, service-to-project mapping with confidence and signals, explicit user mappings persisted into `inferra.toml`, and optional app-owned `.inferra/app.toml` manifests (`/api/workspace/*`).
 - Native Rust-hosted local web dashboard/control plane.
 - Native collectors across Windows/Linux/container/Kubernetes surfaces:
-  - Windows Event Log with bookmark persistence.
-  - Windows service state-change snapshots.
-  - host and process threshold crossings with runtime status.
-  - syslog file ingestion with rotation tracking.
-  - journald ingestion via `journalctl`.
-  - file tailing with glob-style expansion and multiline grouping.
-- Docker Engine event and container log collection.
-- Kubernetes event and pod-state collection.
+  - Windows Event Log with bookmark persistence and event metadata.
+  - Windows service state-change snapshots with automatic-stopped detection.
+  - host and process threshold crossings with indexed resource attributes.
+  - syslog file ingestion with rotation tracking and JSON-line extraction.
+  - journald ingestion via `journalctl` with unit/priority attributes.
+  - file tailing with glob-style expansion, multiline grouping, and parsed JSON fields.
+- Docker Engine lifecycle event collection with label-derived service identity.
+- Kubernetes event and pod-state collection with readiness, restart, and OOM signals.
 - Application HTTP ingest as a mounted API route or standalone listener.
 - Native event-to-incident pipeline that writes incidents, clusters, hypotheses, and lifecycle state to SQLite as evidence arrives.
 - Overview/dashboard payloads include native event-rate, severity-count, dedup, and noise-filter summaries instead of placeholder nulls.
@@ -210,12 +210,20 @@ cargo test --manifest-path src/Cargo.toml --workspace
 
 The web console source is under `src/web/frontend`; `npm run build` writes the packaged bundle to `src/web/ui_dist`. **Commit `ui_dist` whenever you change the frontend** so packaged installs and CI smoke tests match the React source (CI checks that the tree is in sync).
 
-Python is used for **developer tooling, docs, and pytest** over archived modules under `deprecated/`. Third-party modules those tests import are under the **`[legacy]`** extra (not installed by default). Use:
+Python is used for **developer tooling, docs, packaging-contract tests, and Rust black-box integration harnesses**:
+
+```text
+python -m pip install -e ".[dev]"
+python -m compileall tests deploy deprecated
+python -m pytest -q tests/unit/test_rust_packaging_contracts.py
+INFERRA_BINARY=src/target/release/inferra python -m pytest -q tests/integration/test_rust_api.py -m integration
+```
+
+Archived Python runtime tests under `deprecated/` are reference coverage only and require the **`[legacy]`** extra:
 
 ```text
 python -m pip install -e ".[dev,legacy]"
-python -m compileall tests deploy deprecated
-python -m pytest -q
+python -m pytest -q -m "not chaos and not perf"
 ```
 
 ## Non-Goals
