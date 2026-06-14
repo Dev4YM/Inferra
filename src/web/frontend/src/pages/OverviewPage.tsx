@@ -21,36 +21,26 @@ import { EventRateBars, SeverityDistribution } from "@/components/inferra/charts
 import { IncidentCard } from "@/components/inferra/incident";
 import { RuntimeStatusCard, ServiceHealthBadge, riskTone } from "@/components/inferra/health";
 
-export function OverviewPage({ mode }: { mode: Mode }) {
-  const inferraRuntime = useInferraRuntime();
-  const overview = useApiQuery<OverviewResponse>("/api/overview", { staleTime: 15_000 });
-  const collectors = useApiQuery<{ collectors: CollectorRow[]; queue_depth: number }>("/api/collectors", { staleTime: 15_000 });
+export type OverviewPageContentProps = {
+  mode: Mode;
+  data: OverviewResponse;
+  collectorRows?: CollectorRow[];
+  runtimeState?: "loading" | "online" | "degraded" | "auth_required" | "offline";
+  onRefresh?: () => void;
+  isRefreshing?: boolean;
+};
+
+export function OverviewPageContent({
+  mode,
+  data,
+  collectorRows = [],
+  runtimeState = "online",
+  onRefresh,
+  isRefreshing = false,
+}: OverviewPageContentProps) {
   const [quickFilter, setQuickFilter] = useState<"all" | "active" | "degraded">("all");
 
-  if (overview.isLoading && !overview.data) {
-    return (
-      <div className="space-y-6">
-        <PageHeader title="Overview" subtitle="Current runtime situation and where to look next." mode={mode} />
-        <MetricGridSkeleton />
-        <LoadingState title="Loading snapshot" />
-      </div>
-    );
-  }
-
-  if (overview.errorMessage && !overview.data) {
-    return (
-      <div className="space-y-6">
-        <PageHeader title="Overview" subtitle="Current runtime situation and where to look next." mode={mode} />
-        <ErrorState description={overview.errorMessage} onRetry={() => void overview.reload()} />
-      </div>
-    );
-  }
-
-  if (!overview.data) {
-    return <EmptyState title="No overview available" description="Inferra has not produced a snapshot yet." />;
-  }
-
-  const { quick_analysis: quick, dashboard, workspace_projects: projects, experience, runtime: runtimeContext } = overview.data;
+  const { quick_analysis: quick, dashboard, workspace_projects: projects, experience, runtime: runtimeContext } = data;
   const health = dashboard.health ?? {};
   const incidents = dashboard.incidents ?? [];
   const services = dashboard.services ?? [];
@@ -60,15 +50,14 @@ export function OverviewPage({ mode }: { mode: Mode }) {
   const visibleServices = quickFilter === "degraded" ? riskyServices : services;
   const eventRate = normalizeEventRate(dashboard.event_rate);
   const severityCounts = normalizeSeverityCounts(dashboard.severity_counts);
-  const collectorRows = collectors.data?.collectors ?? [];
   const fleet = summarizeCollectorFleet(collectorRows);
   const activeCollectorErrors = collectorRows.filter((collector) => collector.status === "error" || (collector.error_count ?? 0) > 0);
   const collectorErrorCount = health.collector_errors ?? 0;
   const collectorsUnderpowered = fleet.enabled > 0 && fleet.running < fleet.enabled;
   const platformDegraded =
     Boolean(health.degraded) ||
-    inferraRuntime.state === "degraded" ||
-    inferraRuntime.state === "offline" ||
+    runtimeState === "degraded" ||
+    runtimeState === "offline" ||
     collectorsUnderpowered ||
     collectorErrorCount > 0;
   const platformLabel = platformDegraded
@@ -97,10 +86,12 @@ export function OverviewPage({ mode }: { mode: Mode }) {
         subtitle="Current runtime situation and where to look next."
         mode={quick.mode}
         actions={
-          <Button variant="outline" size="sm" onClick={() => void overview.reload({ silent: true })}>
-            <RefreshCcw className={`size-4 ${overview.isRefreshing ? "animate-spin" : ""}`} />
-            Refresh
-          </Button>
+          onRefresh ? (
+            <Button variant="outline" size="sm" onClick={onRefresh}>
+              <RefreshCcw className={`size-4 ${isRefreshing ? "animate-spin" : ""}`} />
+              Refresh
+            </Button>
+          ) : null
         }
       />
 
@@ -303,6 +294,46 @@ export function OverviewPage({ mode }: { mode: Mode }) {
         </section>
       ) : null}
     </div>
+  );
+}
+
+export function OverviewPage({ mode }: { mode: Mode }) {
+  const inferraRuntime = useInferraRuntime();
+  const overview = useApiQuery<OverviewResponse>("/api/overview", { staleTime: 15_000 });
+  const collectors = useApiQuery<{ collectors: CollectorRow[]; queue_depth: number }>("/api/collectors", { staleTime: 15_000 });
+
+  if (overview.isLoading && !overview.data) {
+    return (
+      <div className="space-y-6">
+        <PageHeader title="Overview" subtitle="Current runtime situation and where to look next." mode={mode} />
+        <MetricGridSkeleton />
+        <LoadingState title="Loading snapshot" />
+      </div>
+    );
+  }
+
+  if (overview.errorMessage && !overview.data) {
+    return (
+      <div className="space-y-6">
+        <PageHeader title="Overview" subtitle="Current runtime situation and where to look next." mode={mode} />
+        <ErrorState description={overview.errorMessage} onRetry={() => void overview.reload()} />
+      </div>
+    );
+  }
+
+  if (!overview.data) {
+    return <EmptyState title="No overview available" description="Inferra has not produced a snapshot yet." />;
+  }
+
+  return (
+    <OverviewPageContent
+      mode={mode}
+      data={overview.data}
+      collectorRows={collectors.data?.collectors ?? []}
+      runtimeState={inferraRuntime.state}
+      onRefresh={() => void overview.reload({ silent: true })}
+      isRefreshing={overview.isRefreshing}
+    />
   );
 }
 
