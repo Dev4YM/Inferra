@@ -18,6 +18,4 @@ Then open the URL MkDocs prints, typically [http://127.0.0.1:8000](http://127.0.
 
 Deployment-focused guides include [Install](operations/install.md), **[Windows exe - start here](operations/windows_exe_build.md)**, and [Troubleshooting](operations/troubleshooting.md).
 
-The repository root README has the shortest quick start (`pip install`, `onboard`, `guide`, `serve`) and links back here for deeper install paths.
-
-Architecture and design notes live under **Reset Dossier**, especially the [target architecture](dossier/architecture/target_architecture.md), [execution roadmap](dossier/execution/execution_roadmap.md), and [AI investigation system](dossier/ai/ai_investigation_system.md).
+The repository root README has the shortest quick start and links back here for deeper install paths.

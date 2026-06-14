@@ -30,21 +30,6 @@ nav:
       - Release signing: operations/release_signing.md
   - Security:
       - Threat model: security/threat_model.md
-  - Reset Dossier:
-      - Overview: dossier/README.md
-      - Product vision: dossier/product/product_vision.md
-      - Modes and personas: dossier/product/modes_and_personas.md
-      - Current state audit: dossier/architecture/current_state_audit.md
-      - Target architecture: dossier/architecture/target_architecture.md
-      - Repository reset plan: dossier/architecture/repository_reset_plan.md
-      - CLI control plane: dossier/control_plane/cli_control_plane.md
-      - Web control plane: dossier/control_plane/web_control_plane.md
-      - AI investigation system: dossier/ai/ai_investigation_system.md
-      - AI integration notes: dossier/ai/feature_ai_integration.md
-      - Workspace intelligence: dossier/workspace/workspace_intelligence.md
-      - Execution roadmap: dossier/execution/execution_roadmap.md
-      - Acceptance gates: dossier/execution/acceptance_gates.md
-      - Open decisions: dossier/governance/open_decisions.md
 
 markdown_extensions:
   - toc:

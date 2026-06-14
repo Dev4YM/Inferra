@@ -104,7 +104,7 @@ def test_release_readiness_detects_required_and_forbidden_paths(tmp_path) -> Non
         "README.md",
         "mkdocs.yml",
         "docs/index.md",
-        "docs/dossier/README.md",
+        "docs/security/threat_model.md",
         "src/web/frontend/package.json",
         "src/web/frontend/package-lock.json",
         "scripts/build-web.ps1",

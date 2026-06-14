@@ -121,7 +121,7 @@ Rust workspace: [`src/Cargo.toml`](src/Cargo.toml) · UI source: [`src/web/front
 ## Documentation
 
 - **Operators:** [Install](docs/operations/install.md) · [Upgrade](docs/operations/upgrade.md) · [Troubleshooting](docs/operations/troubleshooting.md) · [Collectors](docs/operations/collectors.md)
-- **Design:** [Target architecture](docs/dossier/architecture/target_architecture.md) · [AI investigation](docs/dossier/ai/ai_investigation_system.md)
+- **Security:** [Threat model](docs/security/threat_model.md)
 
 ```bash
 python -m pip install -e ".[docs]"

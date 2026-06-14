@@ -1,6 +1,6 @@
 # AI Provider Setup
 
-Inferra uses AI as a guided explanation layer only; it does not change deterministic scoring or ranking (see [AI investigation system](../dossier/ai/ai_investigation_system.md)).
+Inferra uses AI as a guided explanation layer only; it does not change deterministic scoring or ranking.
 
 ## Gemma model choice
 
