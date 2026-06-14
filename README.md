@@ -34,7 +34,7 @@
 | Deterministic scoring + auditable state, with optional AI narration | A black-box “root cause AI” that rewrites scores |
 | Rust runtime + SQLite + loopback web UI | A mandatory SaaS observability suite |
 
-The screenshot above is a **real render** of the Overview page (same React components and design tokens as the shipping UI), captured from [`src/web/frontend/readme-hero.html`](src/web/frontend/readme-hero.html).
+The screenshot above is a **real render** of the Overview page using the same React components and design tokens as the shipping UI. The committed asset lives at [`docs/assets/readme-hero.png`](docs/assets/readme-hero.png).
 
 ## Features
 
@@ -94,14 +94,7 @@ Inferra is **Apache-2.0** licensed. We welcome issues, documentation improvement
 
 **Ship a fix** — fork, branch from `main`, keep PRs focused, and ensure CI passes (`cargo test`, `npm run build`, `python scripts/version.py verify`).
 
-Regenerate the README hero image after Overview UI changes:
-
-```bash
-cd src/web/frontend
-python -m pip install playwright
-python -m playwright install chromium
-npm run capture-readme-hero
-```
+Maintainers can regenerate `docs/assets/readme-hero.png` locally with the gitignored tooling under `mock/readme-hero/` (not published in the repository).
 
 ## AI (optional)
 

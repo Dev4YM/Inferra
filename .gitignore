@@ -40,5 +40,6 @@ logs/
 *.pdb
 docs/planning/
 deprecated/
+mock/
 src/web/frontend/dist/
 src/web/ui_dist/
