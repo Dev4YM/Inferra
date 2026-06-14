@@ -41,22 +41,22 @@ import { useInferraRuntime } from "@/lib/inferra-runtime";
 import { useApiQuery } from "@/lib/query";
 import { ServiceHealthBadge } from "@/components/inferra/health";
 import { TraceSummaryInline } from "@/components/inferra/trace-summary";
+import { UnmappedServicesPanel } from "@/components/inferra/unmapped-services-panel";
+import { summarizeCollectorFleet } from "@/lib/collectors";
 
 export function SystemsPage({ mode }: { mode: Mode }) {
   const runtime = useInferraRuntime();
-  const services = useApiQuery<{ services: ServiceRow[] }>("/api/services");
+  const services = useApiQuery<{ services: ServiceRow[] }>("/api/services", { staleTime: 15_000 });
   const overview = useApiQuery<OverviewResponse>("/api/overview", { staleTime: 15_000 });
   const workspace = useApiQuery<WorkspaceMapResponse>("/api/workspace/map", { staleTime: 60_000 });
   const collectors = useApiQuery<{ collectors: CollectorRow[] }>("/api/collectors", { staleTime: 15_000 });
 
-  const loading = (services.isLoading && !services.data) || (overview.isLoading && !overview.data);
-  const error = services.errorMessage ?? overview.errorMessage;
+  const loading = services.isLoading && !services.data;
+  const error = services.errorMessage;
 
   const collectorStats = useMemo(() => {
-    const rows = collectors.data?.collectors ?? [];
-    const configured = rows.filter((row) => row.status !== "disabled").length;
-    const running = rows.filter((row) => row.is_running).length;
-    return { running, configured };
+    const fleet = summarizeCollectorFleet(collectors.data?.collectors ?? []);
+    return { running: fleet.running, configured: fleet.enabled, idleNames: fleet.idleCollectors.map((row) => row.collector_id) };
   }, [collectors.data]);
 
   const inventory = useMemo(
@@ -115,6 +115,10 @@ export function SystemsPage({ mode }: { mode: Mode }) {
 
       <InventorySummaryStrip inventory={inventory} />
       <AttentionStrip items={inventory.attention} />
+      {overview.isLoading && !overview.data ? <LoadingState title="Loading host snapshot" /> : null}
+      {workspace.data?.unmapped_services.length ? (
+        <UnmappedServicesPanel services={workspace.data.unmapped_services} />
+      ) : null}
 
       {!hasInventoryContent(inventory) ? (
         <EmptyState

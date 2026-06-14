@@ -30,12 +30,41 @@ inferra --config inferra.toml serve
 
 ## Windows desktop
 
-Typical developer workstation:
+Typical developer workstation — **recommended scripts** (elevated PowerShell from repo root):
 
-1. Install Rust and Git.
-2. `cargo build --manifest-path src/Cargo.toml -p inferra-cli --release`
-3. Run the **Local repository workflow** commands above.
-4. Optional: enable collectors with `inferra config preset windows-server` or edit `[collectors.*]` in `inferra.toml`.
+```powershell
+# Standard install: incremental build + Program Files staging + service + PATH
+.\scripts\install-inferra.ps1
+
+# Full install: npm ci, release build, stop running inferra, reinstall everything
+.\scripts\install-inferra.ps1 -Full
+
+# Remove service + Program Files install (keeps %ProgramData%\Inferra)
+.\scripts\uninstall-inferra.ps1
+
+# Full remove including config, data, and logs
+.\scripts\uninstall-inferra.ps1 -Full
+```
+
+Both install and uninstall scripts verify **Machine PATH** and whether `inferra` resolves in the current shell. Installed layout:
+
+| Location | Contents |
+|----------|----------|
+| `%ProgramFiles%\Inferra\bin\inferra.exe` | Rust CLI (core, API, collectors, service host) |
+| `%ProgramFiles%\Inferra\runtime-assets\ui_dist\` | Built web dashboard |
+| `%ProgramFiles%\Inferra\runtime-assets\defaults.toml` | Packaged defaults reference |
+| `%ProgramData%\Inferra\inferra.toml` | Live config |
+| `%ProgramData%\Inferra\data\` | SQLite events/incidents |
+| `%ProgramData%\Inferra\logs\` | Service logs |
+
+Build only (no install):
+
+```powershell
+.\scripts\build-all.ps1          # incremental
+.\scripts\build-all.ps1 -Full    # npm ci + cargo release
+```
+
+Manual workflow:
 
 For optional LAN binding, set `[server].host` / `[server].port` and keep `[server].require_loopback` consistent with your threat model.
 
@@ -57,7 +86,13 @@ Optional **`-AllowFirewall`** opens the inbound TCP port from `[server].port` in
 Quick path:
 
 ```powershell
-.\deploy\windows\build-rust-exe.ps1 -CopyUiBundle
+.\scripts\install-inferra.ps1 -Full -AllowFirewall
+```
+
+Or lower-level:
+
+```powershell
+.\scripts\build-all.ps1 -Full
 .\deploy\windows\install-service.ps1 -InferraExe (Resolve-Path .\dist\inferra-rust.exe) -AddCliToPath
 ```
 
@@ -77,7 +112,8 @@ The archived Python / pywin32 path remains available only as reference under `de
 Remove the service:
 
 ```powershell
-.\deploy\windows\uninstall-service.ps1
+.\scripts\uninstall-inferra.ps1
+.\scripts\uninstall-inferra.ps1 -Full
 ```
 
 ## Linux (systemd)
@@ -113,14 +149,14 @@ The chart runs the native `inferra init-db` init container followed by the nativ
 Build the Rust CLI first, then install the LaunchDaemon bundle. The workspace root is `src/Cargo.toml` (Rust crates live under `src/crates/`), and the installer copies the native binary plus frontend/runtime assets under `/usr/local/lib/inferra`:
 
 ```bash
-cargo build --manifest-path src/Cargo.toml -p inferra-cli --release
-sudo ./deploy/macos/install.sh
+sudo ./deploy/macos/install.sh --full
 ```
 
 Remove:
 
 ```bash
 sudo ./deploy/macos/uninstall.sh
+sudo ./deploy/macos/uninstall.sh --full
 ```
 
 ## Release artifacts and signing

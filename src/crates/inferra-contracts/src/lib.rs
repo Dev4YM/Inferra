@@ -393,6 +393,8 @@ pub struct CollectorRow {
     pub log_query: Option<String>,
     #[serde(skip_serializing_if = "Option::is_none")]
     pub lag_seconds: Option<f64>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub idle_hint: Option<String>,
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize)]

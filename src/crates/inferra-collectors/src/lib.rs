@@ -134,6 +134,7 @@ enum CollectorSpec {
         include_stopped: bool,
         include_automatic_stopped: bool,
         names: HashSet<String>,
+        exclude_names: HashSet<String>,
     },
     Docker {
         poll_interval: Duration,
@@ -628,6 +629,7 @@ impl CollectorRuntime {
                     include_stopped,
                     include_automatic_stopped,
                     names,
+                    exclude_names,
                 } => {
                     self.upsert_status(CollectorRuntimeRow {
                         collector_id: "windows_service".into(),
@@ -653,6 +655,7 @@ impl CollectorRuntime {
                             include_stopped,
                             include_automatic_stopped,
                             names,
+                            exclude_names,
                         )
                         .await;
                     }));
@@ -1444,6 +1447,10 @@ fn collector_specs(config: &TomlValue) -> Vec<CollectorSpec> {
                         .into_iter()
                         .map(|value| value.to_ascii_lowercase())
                         .collect(),
+                    exclude_names: string_array(table.get("exclude_names"))
+                        .into_iter()
+                        .map(|value| value.to_ascii_lowercase())
+                        .collect(),
                 });
             }
         }
@@ -2042,6 +2049,7 @@ async fn run_windows_service(
     include_stopped: bool,
     include_automatic_stopped: bool,
     names: HashSet<String>,
+    exclude_names: HashSet<String>,
 ) {
     let collector_id = "windows_service";
     let source_type = "service";
@@ -2054,12 +2062,14 @@ async fn run_windows_service(
         let include_stopped = include_stopped;
         let include_automatic_stopped = include_automatic_stopped;
         let names = names.clone();
+        let exclude_names = exclude_names.clone();
         let collect_result = tokio::task::spawn_blocking(move || {
             collect_windows_service_events(
                 &events_db_for_collect,
                 include_stopped,
                 include_automatic_stopped,
                 &names,
+                &exclude_names,
             )
         })
         .await;
@@ -3475,6 +3485,7 @@ fn collect_windows_service_events(
     include_stopped: bool,
     include_automatic_stopped: bool,
     names: &HashSet<String>,
+    exclude_names: &HashSet<String>,
 ) -> Result<Vec<NewEventRecord>> {
     if !cfg!(target_os = "windows") {
         return Ok(vec![]);
@@ -3492,7 +3503,7 @@ fn collect_windows_service_events(
         );
     }
     let mut snapshot = parse_windows_service_snapshot(&String::from_utf8_lossy(&output.stdout));
-    enrich_windows_service_snapshots(&mut snapshot);
+    enrich_windows_service_snapshots(&mut snapshot, exclude_names);
     let current_json =
         serde_json::to_string(&snapshot).context("serialize windows service snapshot")?;
     let previous = store
@@ -3504,7 +3515,7 @@ fn collect_windows_service_events(
     let mut events = Vec::new();
     for (service, current) in snapshot {
         let service_key = service.to_ascii_lowercase();
-        if !names.is_empty() && !names.contains(&service_key) {
+        if windows_service_excluded(&service_key, names, exclude_names) {
             continue;
         }
         let previous_snapshot = previous.as_ref().and_then(|items| items.get(&service));
@@ -3512,11 +3523,21 @@ fn collect_windows_service_events(
             .map(|item| item.state.clone())
             .unwrap_or_else(|| "unknown".into());
         let state = current.state.clone();
+        if previous_state == state {
+            continue;
+        }
         let automatic_stopped = current.is_automatic() && !current.is_healthy_running();
         if previous_snapshot.is_some_and(|previous| previous == &current) && !automatic_stopped {
             continue;
         }
         if previous_snapshot.is_none() && !automatic_stopped {
+            continue;
+        }
+        if automatic_stopped
+            && previous_snapshot.is_some_and(|previous| {
+                previous.is_automatic() && !previous.is_healthy_running()
+            })
+        {
             continue;
         }
         if !include_stopped
@@ -3526,7 +3547,11 @@ fn collect_windows_service_events(
             continue;
         }
         let severity = if automatic_stopped {
-            3
+            if is_benign_windows_updater(&service_key) {
+                1
+            } else {
+                2
+            }
         } else if matches!(
             state.as_str(),
             "stopped" | "stop_pending" | "paused" | "pause_pending"
@@ -4300,6 +4325,45 @@ fn wildcard_match(pattern: &str, text: &str) -> bool {
     wildcard_match_bytes(pattern.as_bytes(), text.as_bytes())
 }
 
+fn windows_service_excluded(
+    service_key: &str,
+    names: &HashSet<String>,
+    exclude_names: &HashSet<String>,
+) -> bool {
+    if !names.is_empty() && !names.contains(service_key) {
+        return true;
+    }
+    exclude_names
+        .iter()
+        .any(|pattern| wildcard_match(pattern, service_key))
+}
+
+fn is_benign_windows_updater(service_key: &str) -> bool {
+    service_key.contains("updater")
+        || service_key.starts_with("edgeupdate")
+        || service_key == "sppsvc"
+        || service_key.starts_with("gupdate")
+}
+
+pub fn active_collector_ids(config: &TomlValue) -> HashSet<String> {
+    collector_specs(config)
+        .into_iter()
+        .map(|spec| match spec {
+            CollectorSpec::HostMetrics { .. } => "host_metrics",
+            CollectorSpec::Process { .. } => "process",
+            CollectorSpec::File { .. } => "file",
+            CollectorSpec::LinuxSyslog { .. } => "linux_syslog",
+            CollectorSpec::Journald { .. } => "journald",
+            CollectorSpec::WindowsEventLog { .. } => "windows_eventlog",
+            CollectorSpec::WindowsService { .. } => "windows_service",
+            CollectorSpec::Docker { .. } => "docker",
+            CollectorSpec::Kubernetes { .. } => "kubernetes",
+            CollectorSpec::AppIngest | CollectorSpec::AppStandalone { .. } => "app",
+        })
+        .map(str::to_string)
+        .collect()
+}
+
 fn wildcard_match_bytes(pattern: &[u8], text: &[u8]) -> bool {
     if pattern.is_empty() {
         return text.is_empty();
@@ -4388,8 +4452,15 @@ fn parse_windows_service_snapshot(text: &str) -> HashMap<String, WindowsServiceS
     out
 }
 
-fn enrich_windows_service_snapshots(snapshot: &mut HashMap<String, WindowsServiceSnapshot>) {
+fn enrich_windows_service_snapshots(
+    snapshot: &mut HashMap<String, WindowsServiceSnapshot>,
+    exclude_names: &HashSet<String>,
+) {
     for service in snapshot.values_mut() {
+        let service_key = service.name.to_ascii_lowercase();
+        if windows_service_excluded(&service_key, &HashSet::new(), exclude_names) {
+            continue;
+        }
         let output = Command::new("sc.exe").args(["qc", &service.name]).output();
         let Ok(output) = output else {
             continue;

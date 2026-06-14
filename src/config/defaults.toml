@@ -119,6 +119,15 @@ poll_interval_seconds = 30.0
 include_stopped = false
 include_automatic_stopped = true
 names = []
+exclude_names = [
+  "edgeupdate",
+  "edgeupdatem",
+  "googleupdater*",
+  "dropboxupdater*",
+  "sppsvc",
+  "gupdate",
+  "gupdatem",
+]
 
 [collectors.linux_syslog]
 enabled = true
@@ -187,6 +196,24 @@ pattern = "health check passed"
 service_id = ""
 severity_max = "INFO"
 reason = "routine health signal"
+
+[[noise_filter.blocklist]]
+pattern = "windows service *updater* transitioned"
+service_id = ""
+severity_max = "INFO"
+reason = "benign windows updater lifecycle"
+
+[[noise_filter.blocklist]]
+pattern = "windows service sppsvc transitioned stopped -> stopped"
+service_id = ""
+severity_max = "INFO"
+reason = "software protection idle state"
+
+[[noise_filter.blocklist]]
+pattern = "windows service edgeupdate* transitioned"
+service_id = ""
+severity_max = "INFO"
+reason = "edge update helper idle state"
 
 [[noise_filter.allowlist]]
 pattern = "out of memory"

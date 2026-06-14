@@ -4,7 +4,7 @@ build-backend = "setuptools.build_meta"
 
 [project]
 name = "inferra"
-version = "0.2.0"
+version = "0.3.0"
 description = """Local-first AI-integrated runtime intelligence control plane.
 
 The shipping runtime is the Rust workspace at src/Cargo.toml. This Python project

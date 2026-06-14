@@ -118,11 +118,26 @@ export function errorMessage(error: unknown): string {
   return String(error);
 }
 
+const DEFAULT_FETCH_TIMEOUT_MS = 30_000;
+
 export async function fetchJson<T>(path: string, init?: RequestInit): Promise<T> {
+  const controller = new AbortController();
+  const timeoutId = window.setTimeout(() => {
+    controller.abort(new DOMException(`Request timed out after ${DEFAULT_FETCH_TIMEOUT_MS}ms`, "TimeoutError"));
+  }, DEFAULT_FETCH_TIMEOUT_MS);
+  if (init?.signal) {
+    if (init.signal.aborted) {
+      controller.abort(init.signal.reason);
+    } else {
+      init.signal.addEventListener("abort", () => controller.abort(init.signal?.reason), { once: true });
+    }
+  }
+
   let response: Response;
   try {
     response = await fetch(path, {
       ...init,
+      signal: controller.signal,
       headers: {
         Accept: "application/json",
         ...apiAuthHeaders(path, init),
@@ -130,6 +145,8 @@ export async function fetchJson<T>(path: string, init?: RequestInit): Promise<T>
     });
   } catch (error) {
     throw new ApiError(networkErrorDetail(error, path), path, 0, "");
+  } finally {
+    window.clearTimeout(timeoutId);
   }
   if (!response.ok) {
     const text = await response.text();
@@ -794,6 +811,7 @@ export type CollectorRow = {
   error_hint?: string | null;
   log_query?: string | null;
   lag_seconds?: number;
+  idle_hint?: string | null;
 };
 
 export type ScannerStatusResponse = {

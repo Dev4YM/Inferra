@@ -154,12 +154,12 @@ export function ServerInventoryCard({ inventory }: { inventory: SystemsInventory
 export function ApplicationInventoryRow({ entry }: { entry: InventoryApplication }) {
   const { app, service, mappedServiceId } = entry;
   const title = app.display_name ?? app.name;
-  const detailHref = mappedServiceId
-    ? `/systems/${encodeURIComponent(mappedServiceId)}`
+  const detailHref = service
+    ? `/systems/${encodeURIComponent(service.service_id)}`
     : `/workspace/apps?name=${encodeURIComponent(app.name)}`;
 
   const logsQuery = useApiQuery<{ logs: EventRow[] }>(
-    mappedServiceId ? `/api/logs?service=${encodeURIComponent(mappedServiceId)}&limit=64` : null,
+    service ? `/api/logs?service=${encodeURIComponent(service.service_id)}&limit=64` : null,
     { staleTime: 30_000, refetchInterval: 30_000 },
   );
   const activityPoints = bucketLogsToTimeline(logsQuery.data?.logs ?? []);

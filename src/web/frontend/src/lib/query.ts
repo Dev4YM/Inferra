@@ -1,17 +1,26 @@
 import { useCallback, useMemo, useState } from "react";
-import { useMutation, useQuery, useQueryClient } from "@tanstack/react-query";
+import { keepPreviousData, useMutation, useQuery, useQueryClient } from "@tanstack/react-query";
 
 import { type ApiError, errorMessage, fetchJson } from "@/api";
 
-type QueryOptions = {
+type QueryOptions<T> = {
   deps?: readonly unknown[];
   enabled?: boolean;
   staleTime?: number;
   refetchInterval?: number | false;
+  refetchIntervalInBackground?: boolean;
+  initialData?: T | (() => T | undefined);
 };
 
-export function useApiQuery<T>(path: string | null, options: QueryOptions = {}) {
-  const { deps = [], enabled = true, staleTime, refetchInterval } = options;
+export function useApiQuery<T>(path: string | null, options: QueryOptions<T> = {}) {
+  const {
+    deps = [],
+    enabled = true,
+    staleTime,
+    refetchInterval,
+    refetchIntervalInBackground,
+    initialData,
+  } = options;
   const queryClient = useQueryClient();
   const [silentReloads, setSilentReloads] = useState(0);
   const queryKey = useMemo(() => ["api", path, ...deps], [deps, path]);
@@ -20,6 +29,12 @@ export function useApiQuery<T>(path: string | null, options: QueryOptions = {}) 
     enabled: Boolean(path && enabled),
     staleTime,
     refetchInterval,
+    refetchIntervalInBackground,
+    initialData:
+      typeof initialData === "function"
+        ? (initialData as () => T | undefined)()
+        : initialData,
+    placeholderData: keepPreviousData,
     queryFn: ({ signal }) => fetchJson<T>(path as string, { signal }),
   });
 

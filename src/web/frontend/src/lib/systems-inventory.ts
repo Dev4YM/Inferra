@@ -38,6 +38,7 @@ export type SystemsInventory = {
   unmappedServices: string[];
   collectorsRunning: number;
   collectorsConfigured: number;
+  idleCollectorNames: string[];
 };
 
 const DATABASE_HINTS = [
@@ -202,7 +203,9 @@ function buildAttentionItems(
       id: "collectors-partial",
       tone: "info",
       title: "Some collectors are idle",
-      detail: `${inventory.collectorsRunning} of ${inventory.collectorsConfigured} collectors running. Check Control for errors.`,
+      detail: `${inventory.collectorsRunning} of ${inventory.collectorsConfigured} collectors running${
+        inventory.idleCollectorNames.length ? ` (${inventory.idleCollectorNames.join(", ")})` : ""
+      }. Check Control for why.`,
       href: "/control",
     });
   }
@@ -278,7 +281,7 @@ export function buildSystemsInventory(
   overview: OverviewResponse | null | undefined,
   workspace: WorkspaceMapResponse | null | undefined,
   inferraHealth?: HealthResponse | null,
-  collectors?: { running: number; configured: number },
+  collectors?: { running: number; configured: number; idleNames?: string[] },
 ): SystemsInventory {
   const hostname = overview?.runtime?.hostname ?? "This host";
   const processes = overview?.runtime?.processes ?? [];
@@ -325,6 +328,7 @@ export function buildSystemsInventory(
     unmappedServices,
     collectorsRunning: collectors?.running ?? 0,
     collectorsConfigured: collectors?.configured ?? 0,
+    idleCollectorNames: collectors?.idleNames ?? [],
   };
 
   return {

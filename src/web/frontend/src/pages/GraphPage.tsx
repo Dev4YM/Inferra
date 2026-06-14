@@ -13,10 +13,10 @@ import { cn } from "@/lib/utils";
 
 export function GraphPage({ mode }: { mode: Mode }) {
   const [selection, setSelection] = useState<GraphSelection>(null);
-  const services = useApiQuery<{ services: ServiceRow[] }>("/api/services");
-  const incidents = useApiQuery<{ incidents: IncidentRow[] }>("/api/incidents");
-  const topology = useApiQuery<{ edges: TopologyEdge[] }>("/api/topology");
-  const workspace = useApiQuery<WorkspaceMapResponse>("/api/workspace/map");
+  const services = useApiQuery<{ services: ServiceRow[] }>("/api/services", { staleTime: 15_000 });
+  const incidents = useApiQuery<{ incidents: IncidentRow[] }>("/api/incidents", { staleTime: 15_000 });
+  const topology = useApiQuery<{ edges: TopologyEdge[] }>("/api/topology", { staleTime: 30_000 });
+  const workspace = useApiQuery<WorkspaceMapResponse>("/api/workspace/map", { staleTime: 60_000 });
   const loading =
     (services.isLoading && !services.data) ||
     (incidents.isLoading && !incidents.data) ||
@@ -27,6 +27,7 @@ export function GraphPage({ mode }: { mode: Mode }) {
   const edges = topology.data?.edges ?? [];
   const runtimeApps = workspace.data?.runtime_apps ?? [];
   const serviceMappings = workspace.data?.service_mappings ?? [];
+  const unmappedServices = workspace.data?.unmapped_services ?? [];
   const refreshing = services.isRefreshing || incidents.isRefreshing || topology.isRefreshing || workspace.isRefreshing;
 
   const reloadAll = () => {
@@ -79,6 +80,7 @@ export function GraphPage({ mode }: { mode: Mode }) {
                 edges={edges}
                 runtimeApps={runtimeApps}
                 serviceMappings={serviceMappings}
+                unmappedServices={unmappedServices}
                 selection={selection}
                 onSelect={setSelection}
               />

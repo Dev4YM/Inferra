@@ -13,6 +13,8 @@ import { PageHeader } from "@/components/layout/page-header";
 import { ErrorState, LoadingState } from "@/components/feedback/states";
 import type { Mode } from "@/lib/experience";
 import { formatDisplayValue } from "@/lib/format";
+import { WindowsUpdaterNoiseControl } from "@/components/inferra/noise-controls";
+import { summarizeCollectorFleet } from "@/lib/collectors";
 import { useInferraRuntime } from "@/lib/inferra-runtime";
 import { useApiMutation, useApiQuery } from "@/lib/query";
 import { TimelineView } from "@/components/inferra/timeline";
@@ -29,6 +31,7 @@ export function ControlPage({ mode }: { mode: Mode }) {
   const aiMetric = ai.data?.enabled ? (ai.data.available ? "ready" : "degraded") : "disabled";
   const aiMetricNote = ai.data?.enabled ? (ai.data?.resolved_model ?? ai.data?.model ?? "No model") : "AI is disabled in config";
   const collectorRows = collectors.data?.collectors ?? [];
+  const fleet = summarizeCollectorFleet(collectorRows);
   const problemCollectors = collectorRows.filter((collector) => (collector.error_count ?? 0) > 0 || Boolean(collector.last_error));
   const activeProblemCollectors = problemCollectors.filter((collector) => collector.status === "error");
   const collectorLogRows = collectorLogs.data?.logs ?? [];
@@ -114,10 +117,13 @@ export function ControlPage({ mode }: { mode: Mode }) {
       ) : null}
 
       <div className="dashboard-grid">
-        <Metric title="Collectors" value={String(collectors.data?.collectors.length ?? 0)} note={`queue depth ${collectors.data?.queue_depth ?? 0}`} />
+        <Metric title="Collectors" value={String(collectors.data?.collectors.length ?? 0)} note={`${fleet.running}/${fleet.enabled} running · queue ${collectors.data?.queue_depth ?? 0}`} />
         <Metric title="Collector errors" value={String(activeProblemCollectors.reduce((sum, row) => sum + (row.error_count ?? 0), 0))} note={`${problemCollectors.length} collectors have error history`} />
+        <Metric title="Idle collectors" value={String(fleet.idle)} note={fleet.idleCollectors.slice(0, 4).map((row) => row.collector_id).join(", ") || "All active collectors running"} />
         <Metric title="AI provider" value={aiMetric} note={aiMetricNote} />
       </div>
+
+      <WindowsUpdaterNoiseControl />
 
       <div className="grid gap-4 xl:grid-cols-[minmax(0,1.2fr)_minmax(360px,1fr)]">
         <Card>
@@ -175,6 +181,14 @@ export function ControlPage({ mode }: { mode: Mode }) {
                     <p>Last error: {collector.last_error_at ?? "none"}</p>
                     <p>Log route: {collector.log_query ?? `/api/logs?search=${collector.collector_id}&limit=100`}</p>
                   </div>
+                  {collector.idle_hint ? (
+                    <Alert className="mt-3">
+                      <div className="min-w-0">
+                        <AlertTitle>Why idle</AlertTitle>
+                        <AlertDescription>{collector.idle_hint}</AlertDescription>
+                      </div>
+                    </Alert>
+                  ) : null}
                   {collector.last_error ? (
                     <Alert className="mt-3" variant="warning">
                       <div className="min-w-0">

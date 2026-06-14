@@ -8346,6 +8346,24 @@ fn enrich_service_rows(
         .collect()
 }
 
+pub fn service_row_for_id(
+    service_id: &str,
+    paths: &Paths,
+    incidents: &[IncidentRow],
+) -> Result<Option<ServiceRow>> {
+    let events_db = match EventsStore::open(&paths.events_db)? {
+        Some(db) => db,
+        None => return Ok(None),
+    };
+    let stats = match events_db.service_stats_for_id(service_id)? {
+        Some(stats) => stats,
+        None => return Ok(None),
+    };
+    Ok(enrich_service_rows(&[stats], incidents, Some(&events_db))?
+        .into_iter()
+        .next())
+}
+
 const WORKSPACE_PROJECT_MARKERS: &[(&str, &str)] = &[
     ("pnpm-workspace.yaml", "pnpm_workspace"),
     ("package.json", "node"),

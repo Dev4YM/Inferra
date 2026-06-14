@@ -8,10 +8,14 @@ param(
     [string]$PreferredHost = "127.0.0.1",
     [switch]$AllowFirewall,
     [switch]$AddCliToPath,
-    [switch]$KillInferraProcessesBeforeInstall
+    [switch]$KillInferraProcessesBeforeInstall,
+    [bool]$RegisterService = $true
 )
 
 $ErrorActionPreference = "Stop"
+
+Import-Module -Name (Join-Path $PSScriptRoot "InferraInstall.psm1") -Force
+Assert-InferraAdministrator
 
 $projectRoot = (Resolve-Path (Join-Path $PSScriptRoot "..\..")).Path
 if (-not $InstallRoot) {
@@ -40,26 +44,6 @@ if ($KillInferraProcessesBeforeInstall) {
     $wm = Join-Path $PSScriptRoot "InferraWindows.psm1"
     Import-Module -Name $wm -Force
     Stop-InferraWindowsExecutionLocks -ServiceStopTimeoutSec 120
-}
-
-function Add-InferraBinToMachinePath {
-    param([Parameter(Mandatory = $true)][string]$BinDir)
-    $BinDir = [System.IO.Path]::GetFullPath($BinDir.TrimEnd('\', '/'))
-    $machinePath = [Environment]::GetEnvironmentVariable("Path", "Machine")
-    $parts = @()
-    if ($machinePath) {
-        $parts = $machinePath.Split(';') | Where-Object { $_ }
-    }
-    foreach ($p in $parts) {
-        $norm = [System.IO.Path]::GetFullPath($p.TrimEnd('\', '/'))
-        if ($norm -ieq $BinDir) {
-            Write-Host "PATH already contains: $BinDir"
-            return
-        }
-    }
-    $newPath = if ($machinePath) { "$machinePath;$BinDir" } else { $BinDir }
-    [Environment]::SetEnvironmentVariable("Path", $newPath, "Machine")
-    Write-Host "Added to Machine PATH: $BinDir (open a new terminal for inferra)."
 }
 
 function Read-InferraConfigPort {
@@ -349,32 +333,35 @@ function Sync-InferraRuntimeAssets {
 if (-not $ConfigPath) { $ConfigPath = Join-Path $ProgramDataRoot "inferra.toml" }
 if (-not $DataDir) { $DataDir = Join-Path $ProgramDataRoot "data" }
 
-$installBinDir = Join-Path $InstallRoot "bin"
-$installRuntimeAssets = Join-Path $InstallRoot "runtime-assets"
-$installedExe = Join-Path $installBinDir "inferra.exe"
-$installedUiDist = Join-Path $installRuntimeAssets "ui_dist"
+$layout = Get-InferraInstallLayout -InstallRoot $InstallRoot -ProgramDataRoot $ProgramDataRoot
+$installBinDir = $layout.BinDir
+$installRuntimeAssets = $layout.RuntimeAssets
+$installedExe = $layout.ExePath
+$installedUiDist = $layout.UiDist
 $sourceRuntimeAssets = Resolve-InferraRuntimeAssetsSource -SourceExe $InferraExe -ProjectRoot $projectRoot
-
-New-Item -ItemType Directory -Force -Path $ProgramDataRoot | Out-Null
-New-Item -ItemType Directory -Force -Path $DataDir | Out-Null
-New-Item -ItemType Directory -Force -Path $InstallRoot | Out-Null
-New-Item -ItemType Directory -Force -Path $installBinDir | Out-Null
-
-$inheritanceOff = "/inheritance:r"
-$grantSystem = 'SYSTEM:(OI)(CI)F'
-$grantAdmins = 'Administrators:(OI)(CI)F'
-icacls $ProgramDataRoot $inheritanceOff /grant:r $grantSystem /grant:r $grantAdmins | Out-Null
-icacls $DataDir $inheritanceOff /grant:r $grantSystem /grant:r $grantAdmins | Out-Null
+$sourceUiDist = Join-Path $projectRoot "src\web\ui_dist"
+$sourceDefaultsToml = Join-Path $projectRoot "src\config\defaults.toml"
+$versionText = ""
+try {
+    $versionText = (& $InferraExe --version 2>&1 | Out-String).Trim()
+} catch {
+    # optional
+}
 
 $existing = Get-Service -Name "Inferra" -ErrorAction SilentlyContinue
-if ($existing) {
+if ($existing -and $RegisterService) {
     Stop-Service Inferra -ErrorAction SilentlyContinue
     Invoke-InferraCommand $InferraExe @("service", "remove")
     Start-Sleep -Seconds 2
 }
 
-Copy-Item -Path $InferraExe -Destination $installedExe -Force
-Sync-InferraRuntimeAssets -SourceRoot $sourceRuntimeAssets -DestinationRoot $installRuntimeAssets
+Install-InferraRuntimePayload `
+    -Layout $layout `
+    -SourceExe $InferraExe `
+    -SourceUiDist $(if (Test-Path $sourceUiDist) { $sourceUiDist } else { (Join-Path $sourceRuntimeAssets "ui_dist") }) `
+    -SourceRuntimeAssets $sourceRuntimeAssets `
+    -SourceDefaultsToml $(if (Test-Path $sourceDefaultsToml) { $sourceDefaultsToml } else { "" }) `
+    -VersionText $versionText
 
 if (-not (Test-Path $ConfigPath)) {
     try {
@@ -407,45 +394,49 @@ $dashPort = $resolved.Port
 $healthUrl = $resolved.HealthUrl
 $clientHost = Get-InferraClientHost -BindHost $bindHost
 
-$installArgs = @(
-    "--config", $ConfigPath,
-    "--ui-dist", $installedUiDist,
-    "service",
-    "install",
-    "--startup", "auto"
-)
+$serveLog = $layout.ServeLog
+if ($RegisterService) {
+    $installArgs = @(
+        "--config", $ConfigPath,
+        "--ui-dist", $installedUiDist,
+        "service",
+        "install",
+        "--startup", "auto"
+    )
 
-Invoke-InferraCommand $installedExe $installArgs
+    Invoke-InferraCommand $installedExe $installArgs
 
-$registered = Get-Service -Name "Inferra" -ErrorAction Stop
-Start-Service -Name $registered.Name -ErrorAction Stop
+    $registered = Get-Service -Name "Inferra" -ErrorAction Stop
+    Start-Service -Name $registered.Name -ErrorAction Stop
 
-Start-Sleep -Seconds 2
-$reachable = $false
-# Short per-attempt timeout: hung probes are often corporate proxy interference with localhost.
-for ($attempt = 0; $attempt -lt 20; $attempt++) {
-    if (Test-InferraHealthEndpoint -Url $healthUrl -TimeoutSec 5) {
-        $reachable = $true
-        break
+    Start-Sleep -Seconds 2
+    $reachable = $false
+    for ($attempt = 0; $attempt -lt 20; $attempt++) {
+        if (Test-InferraHealthEndpoint -Url $healthUrl -TimeoutSec 5) {
+            $reachable = $true
+            break
+        }
+        if ($attempt -lt 19) {
+            Start-Sleep -Seconds 2
+        }
     }
-    if ($attempt -lt 19) {
-        Start-Sleep -Seconds 2
+    if ($reachable) {
+        Write-Host "Runtime health: $healthUrl"
+        Write-Host "Dashboard: http://${clientHost}:${dashPort}/"
+        Write-Host ""
+        Write-Host "Control commands (new terminal after -AddCliToPath):"
+        Write-Host "  inferra runtime status"
+        Write-Host "  inferra runtime open"
+        Write-Host "  inferra runtime restart"
     }
-}
-$serveLog = Join-Path $ProgramDataRoot "logs\serve.log"
-if ($reachable) {
-    Write-Host "Runtime health: $healthUrl"
-    Write-Host "Dashboard: http://${clientHost}:${dashPort}/"
-    Write-Host ""
-    Write-Host "Control commands (new terminal after -AddCliToPath):"
-    Write-Host "  inferra runtime status"
-    Write-Host "  inferra runtime open"
-    Write-Host "  inferra runtime restart"
+    else {
+        Write-Warning "Runtime health not reachable at $healthUrl (service may still be starting). If this step was very slow, check Windows proxy settings for localhost; see $serveLog for service host errors."
+        Write-Host "Serve log (Windows service lifecycle + HTTP errors): $serveLog"
+        Write-Host "Try: Restart-Service Inferra"
+    }
 }
 else {
-    Write-Warning "Runtime health not reachable at $healthUrl (service may still be starting). If this step was very slow, check Windows proxy settings for localhost; see $serveLog for service host errors."
-    Write-Host "Serve log (Windows service lifecycle + HTTP errors): $serveLog"
-    Write-Host "Try: Restart-Service Inferra"
+    Write-Host "Skipped Windows service registration (RegisterService=`$false)."
 }
 Write-Host "Serve log: $serveLog"
 
@@ -460,11 +451,16 @@ if ($AllowFirewall) {
 
 if ($AddCliToPath) {
     Add-InferraBinToMachinePath -BinDir $installBinDir
-    [Environment]::SetEnvironmentVariable("INFERRA_CONFIG", $ConfigPath, "Machine")
-    Write-Host "Set machine INFERRA_CONFIG=$ConfigPath"
+    Set-InferraMachineConfigEnv -ConfigPath $ConfigPath
+    Write-InferraPathReport -BinDir $installBinDir
 }
 
-Write-Host "Installed runtime root: $InstallRoot"
+Write-Host "Installed runtime root: $($layout.InstallRoot)"
 Write-Host "Installed executable: $installedExe"
 Write-Host "Installed UI bundle: $installedUiDist"
-Write-Host "Inferra service installed and started (config=$ConfigPath data=$DataDir)."
+Write-Host "Installed defaults reference: $($layout.DefaultsToml)"
+if ($RegisterService) {
+    Write-Host "Inferra service installed and started (config=$ConfigPath data=$DataDir)."
+} else {
+    Write-Host "Inferra files installed without service (config=$ConfigPath data=$DataDir)."
+}

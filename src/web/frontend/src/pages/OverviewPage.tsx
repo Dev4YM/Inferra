@@ -14,13 +14,16 @@ import { EmptyState, ErrorState, LoadingState, MetricGridSkeleton } from "@/comp
 import { formatDisplayValue, formatRiskTone, formatRelativeDate } from "@/lib/format";
 import { shortTraceId } from "@/lib/observability";
 import { isAdvancedMode } from "@/lib/experience";
+import { useInferraRuntime } from "@/lib/inferra-runtime";
+import { summarizeCollectorFleet } from "@/lib/collectors";
 import { useApiQuery } from "@/lib/query";
 import { EventRateBars, SeverityDistribution } from "@/components/inferra/charts";
 import { IncidentCard } from "@/components/inferra/incident";
 import { RuntimeStatusCard, ServiceHealthBadge, riskTone } from "@/components/inferra/health";
 
 export function OverviewPage({ mode }: { mode: Mode }) {
-  const overview = useApiQuery<OverviewResponse>("/api/overview");
+  const inferraRuntime = useInferraRuntime();
+  const overview = useApiQuery<OverviewResponse>("/api/overview", { staleTime: 15_000 });
   const collectors = useApiQuery<{ collectors: CollectorRow[]; queue_depth: number }>("/api/collectors", { staleTime: 15_000 });
   const [quickFilter, setQuickFilter] = useState<"all" | "active" | "degraded">("all");
 
@@ -47,7 +50,7 @@ export function OverviewPage({ mode }: { mode: Mode }) {
     return <EmptyState title="No overview available" description="Inferra has not produced a snapshot yet." />;
   }
 
-  const { quick_analysis: quick, dashboard, workspace_projects: projects, experience, runtime } = overview.data;
+  const { quick_analysis: quick, dashboard, workspace_projects: projects, experience, runtime: runtimeContext } = overview.data;
   const health = dashboard.health ?? {};
   const incidents = dashboard.incidents ?? [];
   const services = dashboard.services ?? [];
@@ -58,8 +61,29 @@ export function OverviewPage({ mode }: { mode: Mode }) {
   const eventRate = normalizeEventRate(dashboard.event_rate);
   const severityCounts = normalizeSeverityCounts(dashboard.severity_counts);
   const collectorRows = collectors.data?.collectors ?? [];
+  const fleet = summarizeCollectorFleet(collectorRows);
   const activeCollectorErrors = collectorRows.filter((collector) => collector.status === "error" || (collector.error_count ?? 0) > 0);
   const collectorErrorCount = health.collector_errors ?? 0;
+  const collectorsUnderpowered = fleet.enabled > 0 && fleet.running < fleet.enabled;
+  const platformDegraded =
+    Boolean(health.degraded) ||
+    inferraRuntime.state === "degraded" ||
+    inferraRuntime.state === "offline" ||
+    collectorsUnderpowered ||
+    collectorErrorCount > 0;
+  const platformLabel = platformDegraded
+    ? collectorsUnderpowered
+      ? "degraded"
+      : health.status ?? "degraded"
+    : health.status ?? quick.risk_level;
+  const platformDetail = collectorsUnderpowered
+    ? `${fleet.idle} of ${fleet.enabled} collectors idle — ${fleet.idleCollectors
+        .slice(0, 3)
+        .map((collector) => collector.collector_id)
+        .join(", ")}`
+    : collectorErrorCount
+      ? `${collectorErrorCount} collector errors`
+      : "Collectors nominal";
   const aiState = health.ai_enabled
     ? health.ai_available
       ? { label: "Ready", variant: "success" as const }
@@ -86,12 +110,13 @@ export function OverviewPage({ mode }: { mode: Mode }) {
             <Badge variant={formatRiskTone(quick.risk_level)}>Risk {formatDisplayValue(quick.risk_level)}</Badge>
             <Badge variant={aiState.variant}>{aiState.label}</Badge>
             <Badge variant="outline">{formatDisplayValue(experience.ai_role)}</Badge>
-            {health.degraded ? <Badge variant="warning">Platform degraded</Badge> : null}
+            {health.degraded || platformDegraded ? <Badge variant="warning">Platform degraded</Badge> : null}
+            {collectorsUnderpowered ? <Badge variant="warning">{fleet.idle} collectors idle</Badge> : null}
           </div>
           <h2 className="text-xl font-semibold tracking-tight">{quick.headline}</h2>
           <div className="flex flex-wrap gap-x-4 gap-y-1 font-data text-xs text-muted-foreground">
             <span>{projects.length} projects</span>
-            <span>{runtime.containers?.length ?? 0} containers</span>
+            <span>{runtimeContext.containers?.length ?? 0} containers</span>
             <span>{quick.process_sample_size} processes sampled</span>
             <span>queue {health.queue_depth ?? 0}</span>
           </div>
@@ -102,9 +127,9 @@ export function OverviewPage({ mode }: { mode: Mode }) {
         <RuntimeStatusCard
           icon={Activity}
           label="Platform"
-          value={health.status ?? quick.risk_level}
-          tone={riskTone(health.status ?? quick.risk_level)}
-          detail={collectorErrorCount ? `${collectorErrorCount} collector errors` : "Collectors nominal"}
+          value={platformLabel}
+          tone={platformDegraded ? "warning" : riskTone(health.status ?? quick.risk_level)}
+          detail={platformDetail}
         />
         <RuntimeStatusCard
           icon={AlertTriangle}

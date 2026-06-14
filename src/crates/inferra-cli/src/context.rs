@@ -163,7 +163,7 @@ fn ui_dist_candidates_from_working_dir() -> Result<Vec<PathBuf>> {
 
 #[cfg(test)]
 mod tests {
-    use std::path::{Path, PathBuf};
+    use std::path::Path;
 
     use super::{client_host, local_base_url, ui_dist_candidates_from_executable};
 
@@ -175,16 +175,25 @@ mod tests {
 
     #[test]
     fn ui_dist_candidates_cover_bin_and_sibling_layouts() {
-        let candidates = ui_dist_candidates_from_executable(Path::new(
-            r"C:\Program Files\Inferra\bin\inferra.exe",
-        ));
+        let exe = Path::new("opt")
+            .join("inferra")
+            .join("bin")
+            .join("inferra");
+        let candidates = ui_dist_candidates_from_executable(&exe);
         assert_eq!(
             candidates[0],
-            PathBuf::from(r"C:\Program Files\Inferra\bin\runtime-assets\ui_dist")
+            Path::new("opt")
+                .join("inferra")
+                .join("bin")
+                .join("runtime-assets")
+                .join("ui_dist")
         );
         assert_eq!(
             candidates[1],
-            PathBuf::from(r"C:\Program Files\Inferra\runtime-assets\ui_dist")
+            Path::new("opt")
+                .join("inferra")
+                .join("runtime-assets")
+                .join("ui_dist")
         );
     }
 }

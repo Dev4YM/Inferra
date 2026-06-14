@@ -164,7 +164,6 @@ def test_rust_investigate_fallback_without_ai(rust_runtime: dict) -> None:
 def test_rust_config_put_persists_experience(rust_runtime: dict) -> None:
     base_url = str(rust_runtime["base_url"])
     config_path = rust_runtime["config_path"]
-    fetch_json = rust_runtime["fetch_json"]
     put_json = rust_runtime["put_json"]
 
     status, updated = put_json(
@@ -188,7 +187,6 @@ def test_rust_config_put_persists_experience(rust_runtime: dict) -> None:
 
 def test_rust_ingest_requires_shared_token(rust_runtime: dict) -> None:
     base_url = str(rust_runtime["base_url"])
-    fetch_json = rust_runtime["fetch_json"]
     put_json = rust_runtime["put_json"]
     post_json = rust_runtime["post_json"]
 

@@ -563,7 +563,7 @@ mod tests {
     use inferra_collectors::CollectorRuntime;
     use inferra_config::Paths;
     use inferra_storage::{initialize_databases, NewEventRecord};
-    use tokio::sync::RwLock;
+    use tokio::sync::{Mutex as AsyncMutex, RwLock};
     use toml::Value as TomlValue;
 
     use crate::ScannerCache;
@@ -873,6 +873,7 @@ bearer_token = ""
             config: Arc::new(RwLock::new(config)),
             collectors: CollectorRuntime::default(),
             scanner_cache: Arc::new(RwLock::new(ScannerCache::default())),
+            workspace_refresh: Arc::new(AsyncMutex::new(())),
             ui_dist,
             rate_limits: Arc::new(crate::middleware::RateLimitState::new(30.0, 15.0)),
         };

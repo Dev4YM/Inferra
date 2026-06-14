@@ -32,6 +32,15 @@ export function saveGraphLayout(layout: SavedGraphLayout): void {
   }
 }
 
+export function clearGraphLayout(): void {
+  if (typeof window === "undefined") return;
+  try {
+    window.localStorage.removeItem(STORAGE_KEY);
+  } catch {
+    // Ignore storage failures.
+  }
+}
+
 export function mergeNodePositions<T extends { id: string; position: { x: number; y: number } }>(
   nodes: T[],
   saved: SavedGraphLayout | null,

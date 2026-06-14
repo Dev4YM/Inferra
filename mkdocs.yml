@@ -26,6 +26,7 @@ nav:
       - Troubleshooting: operations/troubleshooting.md
       - CI: operations/ci.md
       - Release checklist: operations/release.md
+      - Versioning: operations/versioning.md
       - Release signing: operations/release_signing.md
   - Security:
       - Threat model: security/threat_model.md

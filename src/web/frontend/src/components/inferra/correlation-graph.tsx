@@ -1,4 +1,4 @@
-import { useCallback, useEffect, useMemo, useRef } from "react";
+import { useCallback, useEffect, useMemo, useRef, useState } from "react";
 import {
   Background,
   BaseEdge,
@@ -21,9 +21,11 @@ import "@xyflow/react/dist/style.css";
 
 import type { IncidentRow, ServiceRow, TopologyEdge, WorkspaceMapping, WorkspaceRuntimeApp } from "@/api";
 import { ServiceHealthBadge, SeverityIndicator } from "@/components/inferra/health";
-import { loadGraphLayout, mergeNodePositions, saveGraphLayout } from "@/lib/graph-layout-storage";
+import { loadGraphLayout, mergeNodePositions, saveGraphLayout, clearGraphLayout } from "@/lib/graph-layout-storage";
 import { cn } from "@/lib/utils";
-import { CircleDot } from "lucide-react";
+import { CircleDot, RotateCcw, Search } from "lucide-react";
+import { Button } from "@/components/ui/button";
+import { Input } from "@/components/ui/input";
 
 export type GraphNodeKind = "service" | "incident" | "app";
 
@@ -66,6 +68,7 @@ type CorrelationGraphProps = {
   edges: TopologyEdge[];
   runtimeApps?: WorkspaceRuntimeApp[];
   serviceMappings?: WorkspaceMapping[];
+  unmappedServices?: string[];
   selection?: GraphSelection;
   onSelect?: (selection: GraphSelection) => void;
   className?: string;
@@ -149,13 +152,29 @@ function CorrelationGraphCanvas({
   edges,
   runtimeApps = [],
   serviceMappings = [],
+  unmappedServices = [],
   selection,
   onSelect,
   className,
 }: CorrelationGraphProps) {
+  const [searchQuery, setSearchQuery] = useState("");
+  const [hideUnmapped, setHideUnmapped] = useState(true);
   const graph = useMemo(
-    () => buildFlowGraph(services, incidents, edges, runtimeApps, serviceMappings, selection?.id ?? null),
-    [edges, incidents, runtimeApps, selection?.id, serviceMappings, services],
+    () =>
+      buildFlowGraph(
+        services,
+        incidents,
+        edges,
+        runtimeApps,
+        serviceMappings,
+        selection?.id ?? null,
+        {
+          searchQuery,
+          hideUnmapped,
+          unmappedServices,
+        },
+      ),
+    [edges, hideUnmapped, incidents, runtimeApps, searchQuery, selection?.id, serviceMappings, services, unmappedServices],
   );
   const savedLayoutRef = useRef(loadGraphLayout());
   const [nodes, setNodes, onNodesChange] = useNodesState(graph.nodes);
@@ -188,6 +207,14 @@ function CorrelationGraphCanvas({
   const handleMoveEnd = useCallback(() => {
     persistLayout();
   }, [persistLayout]);
+
+  const resetLayout = useCallback(() => {
+    clearGraphLayout();
+    savedLayoutRef.current = null;
+    setNodes(graph.nodes);
+    setEdges(graph.edges);
+    void fitView({ padding: 0.12, duration: 350, maxZoom: 1.1 });
+  }, [fitView, graph.edges, graph.nodes, setEdges, setNodes]);
 
   useEffect(() => {
     if (!graph.nodes.length) return;
@@ -222,16 +249,36 @@ function CorrelationGraphCanvas({
   return (
     <div className={cn("flex min-h-0 flex-col", className)}>
       <div className="flex shrink-0 flex-wrap items-center justify-between gap-3 border-b border-border px-4 py-2.5">
-        <div className="flex flex-wrap gap-4 font-data text-[10px] uppercase tracking-wide text-muted-foreground">
-          <span>Apps</span>
-          <span className="ml-[220px]">Services</span>
-          <span className="ml-[220px]">Incidents</span>
+        <div className="flex min-w-[220px] flex-1 items-center gap-2">
+          <Search className="size-4 text-muted-foreground" />
+          <Input
+            aria-label="Search graph nodes"
+            className="h-8 max-w-xs"
+            placeholder="Filter nodes…"
+            value={searchQuery}
+            onChange={(event) => setSearchQuery(event.target.value)}
+          />
+        </div>
+        <div className="flex flex-wrap items-center gap-2">
+          <Button
+            type="button"
+            size="sm"
+            variant={hideUnmapped ? "default" : "outline"}
+            onClick={() => setHideUnmapped((value) => !value)}
+          >
+            {hideUnmapped ? "Hiding unmapped" : "Show unmapped"}
+          </Button>
+          <Button type="button" size="sm" variant="outline" onClick={resetLayout}>
+            <RotateCcw className="size-4" />
+            Reset layout
+          </Button>
         </div>
         <div className="flex flex-wrap gap-3 font-data text-xs text-muted-foreground">
           <span>{stats.services} services</span>
           <span>{stats.apps} apps</span>
           <span>{stats.incidents} incidents</span>
           <span>{stats.links} pipes</span>
+          {hideUnmapped && unmappedServices.length ? <span>{unmappedServices.length} unmapped hidden</span> : null}
         </div>
         <GraphLegend />
       </div>
@@ -335,9 +382,25 @@ function buildFlowGraph(
   runtimeApps: WorkspaceRuntimeApp[],
   serviceMappings: WorkspaceMapping[],
   selectedId?: string | null,
+  options?: {
+    searchQuery?: string;
+    hideUnmapped?: boolean;
+    unmappedServices?: string[];
+  },
 ) {
-  const serviceNodes: Array<{ id: string; kind: "service"; anchor?: string; data: GraphNodeData }> = services
-    .slice(0, 32)
+  const searchQuery = options?.searchQuery?.trim().toLowerCase() ?? "";
+  const hideUnmapped = options?.hideUnmapped ?? false;
+  const unmappedSet = new Set((options?.unmappedServices ?? []).map((service) => service.toLowerCase()));
+
+  const filteredServices = services
+    .filter((service) => {
+      if (hideUnmapped && unmappedSet.has(service.service_id.toLowerCase())) return false;
+      if (!searchQuery) return true;
+      return service.service_id.toLowerCase().includes(searchQuery);
+    })
+    .slice(0, 32);
+
+  const serviceNodes: Array<{ id: string; kind: "service"; anchor?: string; data: GraphNodeData }> = filteredServices
     .map((service) => ({
       id: service.service_id,
       kind: "service" as const,
@@ -355,6 +418,10 @@ function buildFlowGraph(
 
   const mappedApps = runtimeApps
     .filter((app) => {
+      const label = (app.display_name || app.name).toLowerCase();
+      if (searchQuery && !label.includes(searchQuery) && !app.name.toLowerCase().includes(searchQuery)) {
+        return false;
+      }
       const mappedService = resolveMappedService(app, serviceMappings);
       return !mappedService || serviceIds.has(mappedService);
     })
@@ -374,17 +441,24 @@ function buildFlowGraph(
     };
   });
 
-  const incidentNodes = incidents.slice(0, 14).map((incident) => ({
-    id: incident.incident_id,
-    kind: "incident" as const,
-    anchor: incident.primary_service || undefined,
-    data: {
-      label: incident.primary_service || incident.incident_id,
+  const incidentNodes = incidents
+    .filter((incident) => {
+      if (!searchQuery) return true;
+      const haystack = `${incident.incident_id} ${incident.primary_service ?? ""}`.toLowerCase();
+      return haystack.includes(searchQuery);
+    })
+    .slice(0, 14)
+    .map((incident) => ({
+      id: incident.incident_id,
       kind: "incident" as const,
-      severity: incident.severity,
-      subtitle: `${incident.event_count ?? 0} events`,
-    },
-  }));
+      anchor: incident.primary_service || undefined,
+      data: {
+        label: incident.primary_service || incident.incident_id,
+        kind: "incident" as const,
+        severity: incident.severity,
+        subtitle: `${incident.event_count ?? 0} events`,
+      },
+    }));
 
   const layoutNodes = [
     ...serviceNodes.map((node) => ({ id: node.id, kind: node.kind, anchor: node.anchor })),

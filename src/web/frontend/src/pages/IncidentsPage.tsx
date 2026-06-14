@@ -13,6 +13,7 @@ import type {
   AiGenerationsResponse,
   IncidentDetailResponse,
   IncidentRow,
+  EventRow,
   InvestigationResponse,
 } from "@/api";
 import { reviewAdaptiveArtifact, setAdaptiveArtifactState } from "@/api";
@@ -199,6 +200,19 @@ export function IncidentDetailPage({ mode }: { mode: Mode }) {
     [detail.data?.learning_provenance?.artifacts, adaptive.data],
   );
   const busy = reviewMutation.isPending || stateMutation.isPending;
+  const incidentEvents = useMemo(
+    () => dedupeIncidentEvents(detail.data?.events ?? []),
+    [detail.data?.events],
+  );
+  const displayedInvestigation = investigation.data ?? savedInvestigation;
+  const investigationRunning =
+    shouldRunInvestigation && !displayedInvestigation && (investigation.isLoading || !savedLookupDone);
+  const suggestedChecks = useMemo(() => {
+    const fromInvestigation = displayedInvestigation?.output.next_steps ?? [];
+    if (fromInvestigation.length) return fromInvestigation;
+    const fromHypotheses = detail.data?.hypotheses.flatMap((hypothesis) => hypothesis.suggested_checks ?? []) ?? [];
+    return [...new Set(fromHypotheses)].map((check) => ({ title: check, reason: check }));
+  }, [detail.data?.hypotheses, displayedInvestigation]);
 
   if (!incidentId) return <EmptyState title="Missing incident id" description="Select an incident from the list first." />;
   if (detail.isLoading && !detail.data) return <LoadingState title="Loading incident" />;
@@ -206,9 +220,7 @@ export function IncidentDetailPage({ mode }: { mode: Mode }) {
   if (!detail.data) return <EmptyState title="No incident data" description="Inferra could not load the incident details." />;
 
   const incident = detail.data.incident;
-  const incidentEvents = detail.data.events;
   const investigationMissing = investigation.error?.status === 404;
-  const displayedInvestigation = investigation.data ?? savedInvestigation;
 
   const runArtifactReview = async (artifact: IncidentAdaptiveArtifact, decision: AdaptiveReviewDecision) => {
     if (!artifact.actionKind) return;
@@ -266,10 +278,18 @@ export function IncidentDetailPage({ mode }: { mode: Mode }) {
         subtitle={`${incident.primary_service || "Unknown"} · Severity ${incident.severity} · ${formatDisplayValue(incident.state)}`}
         mode={mode}
         actions={
-          <Button variant="outline" size="sm" onClick={() => { void detail.reload({ silent: true }); setForceInvestigationRun((value) => value + 1); }}>
-            <RefreshCcw className={`size-4 ${detail.isRefreshing || investigation.isRefreshing ? "animate-spin" : ""}`} />
-            Refresh
-          </Button>
+          <div className="flex flex-wrap gap-2">
+            <Button variant="outline" size="sm" asChild>
+              <Link to={`/ai?incident=${encodeURIComponent(incident.incident_id)}`}>
+                <Sparkles className="size-4" />
+                AI scope
+              </Link>
+            </Button>
+            <Button variant="outline" size="sm" onClick={() => { void detail.reload({ silent: true }); setForceInvestigationRun((value) => value + 1); }}>
+              <RefreshCcw className={`size-4 ${detail.isRefreshing || investigation.isRefreshing ? "animate-spin" : ""}`} />
+              Refresh
+            </Button>
+          </div>
         }
       />
 
@@ -284,8 +304,8 @@ export function IncidentDetailPage({ mode }: { mode: Mode }) {
         <RuntimeStatusCard
           icon={Activity}
           label="Correlated events"
-          value={String(detail.data.events.length)}
-          tone={detail.data.events.length ? "info" : "secondary"}
+          value={String(incidentEvents.length)}
+          tone={incidentEvents.length ? "info" : "secondary"}
           detail="Evidence currently attached to this incident."
         />
         <RuntimeStatusCard
@@ -347,8 +367,21 @@ export function IncidentDetailPage({ mode }: { mode: Mode }) {
             <ErrorState description={`Saved investigation unavailable: ${savedGenerations.errorMessage}`} onRetry={() => void savedGenerations.reload()} />
           ) : savedGenerations.isLoading ? (
             <LoadingState title="Loading saved investigation" />
+          ) : investigationRunning ? (
+            <LoadingState
+              title="Running investigation"
+              description="Inferra is correlating evidence and asking the AI investigator for a structured summary. Saved runs load automatically when available."
+            />
           ) : (
-            <LoadingState title="Running investigation" description="Inferra is collecting evidence and asking the AI investigator for a structured summary." />
+            <EmptyState
+              title="Investigation not started"
+              description="Refresh to run an investigation for this incident, or open AI Investigator with this scope prefilled."
+              action={
+                <Button asChild>
+                  <Link to={`/ai?incident=${encodeURIComponent(incident.incident_id)}`}>Open AI Investigator</Link>
+                </Button>
+              }
+            />
           )}
         </div>
 
@@ -358,7 +391,7 @@ export function IncidentDetailPage({ mode }: { mode: Mode }) {
               <CardTitle>Suggested checks</CardTitle>
             </CardHeader>
             <CardContent>
-              <SuggestedChecks checks={investigation.data?.output.next_steps ?? []} />
+              <SuggestedChecks checks={suggestedChecks} />
             </CardContent>
           </Card>
 
@@ -601,8 +634,8 @@ export function IncidentDetailPage({ mode }: { mode: Mode }) {
               <CardTitle>Correlated events</CardTitle>
             </CardHeader>
             <CardContent className="space-y-3">
-              {detail.data.events.length ? (
-                detail.data.events.slice(0, 12).map((event) => (
+              {incidentEvents.length ? (
+                incidentEvents.slice(0, 12).map((event) => (
                   <div key={event.event_id} className="rounded-md border border-border bg-panel-inset p-4">
                     <div className="flex flex-wrap items-center justify-between gap-2">
                       <div className="flex flex-wrap items-center gap-2">
@@ -879,4 +912,16 @@ function severityRailColor(severity: number): string {
 function shortTraceId(traceId: string): string {
   if (traceId.length <= 16) return traceId;
   return `${traceId.slice(0, 8)}...${traceId.slice(-8)}`;
+}
+
+function dedupeIncidentEvents(events: EventRow[]): EventRow[] {
+  const seen = new Set<string>();
+  return events.filter((event) => {
+    const key =
+      event.event_id ??
+      `${event.timestamp ?? ""}:${event.service_id ?? ""}:${event.message ?? summarizeEvent(event)}`;
+    if (seen.has(key)) return false;
+    seen.add(key);
+    return true;
+  });
 }

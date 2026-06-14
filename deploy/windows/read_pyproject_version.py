@@ -1,23 +1,17 @@
-"""Compatibility shim for the deprecated PyInstaller version helper."""
+"""Read the canonical Inferra release version for Windows packaging scripts."""
 
 from __future__ import annotations
 
-import importlib.util
+import sys
 from pathlib import Path
 
-_IMPL_PATH = (
-    Path(__file__).resolve().parents[2]
-    / "deprecated"
-    / "windows-pyinstaller"
-    / "read_pyproject_version.py"
-)
-_SPEC = importlib.util.spec_from_file_location("inferra_deprecated_read_version", _IMPL_PATH)
-if _SPEC is None or _SPEC.loader is None:
-    raise RuntimeError(f"Could not load deprecated version helper: {_IMPL_PATH}")
-_MODULE = importlib.util.module_from_spec(_SPEC)
-_SPEC.loader.exec_module(_MODULE)
 
-main = _MODULE.main
+def main() -> None:
+    repo = Path(sys.argv[1]).resolve() if len(sys.argv) > 1 else Path(__file__).resolve().parents[2]
+    version_file = repo / "VERSION"
+    if not version_file.is_file():
+        raise SystemExit(f"Missing VERSION file: {version_file}")
+    print(version_file.read_text(encoding="utf-8").strip())
 
 
 if __name__ == "__main__":

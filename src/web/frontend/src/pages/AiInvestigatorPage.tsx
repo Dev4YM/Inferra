@@ -1,5 +1,6 @@
 import { Activity, Bot, RotateCcw, Send, Square } from "lucide-react";
 import { useCallback, useEffect, useRef, useState } from "react";
+import { useSearchParams } from "react-router-dom";
 import { toast } from "sonner";
 
 import type { AiDoctorResponse, AiGeneration, AiGenerationsResponse, IncidentRow, InvestigationResponse, ServiceRow } from "@/api";
@@ -19,8 +20,12 @@ import { formatDisplayValue } from "@/lib/format";
 import { useApiMutation, useApiQuery } from "@/lib/query";
 
 export function AiInvestigatorPage({ mode }: { mode: Mode }) {
+  const [searchParams] = useSearchParams();
   const [question, setQuestion] = useState("What should I inspect first?");
-  const [scope, setScope] = useState("overview");
+  const [scope, setScope] = useState(() => {
+    const incident = searchParams.get("incident");
+    return incident ? `incident:${incident}` : "overview";
+  });
   const [monitorSeconds, setMonitorSeconds] = useState(5);
   const [result, setResult] = useState<InvestigationResponse | null>(null);
   const [streamTranscript, setStreamTranscript] = useState("");
@@ -128,6 +133,14 @@ export function AiInvestigatorPage({ mode }: { mode: Mode }) {
     }
     void ask();
   }, [ask, askStream, runReport, scope]);
+
+  useEffect(() => {
+    const incident = searchParams.get("incident");
+    if (incident) {
+      setScope(`incident:${incident}`);
+      setQuestion(`What caused incident ${incident} and what should I check first?`);
+    }
+  }, [searchParams]);
 
   useEffect(() => {
     setResult(null);

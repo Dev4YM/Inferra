@@ -619,6 +619,29 @@ impl EventsStore {
         Ok(Some(Self { conn }))
     }
 
+    pub fn service_stats_for_id(&self, service_id: &str) -> Result<Option<ServiceStats>> {
+        let result = self.conn.query_row(
+            "SELECT service_id, COUNT(*) as c, \
+             SUM(CASE WHEN severity >= 3 THEN 1 ELSE 0 END) as err, \
+             MAX(timestamp) as last_ts \
+             FROM events WHERE service_id = ?1 GROUP BY service_id",
+            rusqlite::params![service_id],
+            |r| {
+                Ok(ServiceStats {
+                    service_id: r.get(0)?,
+                    event_count: r.get(1)?,
+                    error_count: r.get::<_, Option<i64>>(2)?.unwrap_or(0),
+                    last_event_at: r.get(3)?,
+                })
+            },
+        );
+        match result {
+            Ok(stats) => Ok(Some(stats)),
+            Err(rusqlite::Error::QueryReturnedNoRows) => Ok(None),
+            Err(error) => Err(error).context("query service stats for id"),
+        }
+    }
+
     pub fn service_aggregates(&self, limit: usize) -> Result<Vec<ServiceStats>> {
         let mut stmt = self
             .conn
@@ -950,7 +973,7 @@ impl EventsStore {
         {
             sql.push_str(" AND trace_id IS NOT NULL AND lower(trace_id) = lower(?");
             sql.push_str(&(params.len() + 1).to_string());
-            sql.push_str(")");
+            sql.push(')');
             params.push(tid.to_string().into());
         }
 
@@ -992,7 +1015,7 @@ impl EventsStore {
                         " AND event_id IN (SELECT event_id FROM events_fts WHERE events_fts MATCH ?",
                     );
                     sql.push_str(&(params.len() + 1).to_string());
-                    sql.push_str(")");
+                    sql.push(')');
                     params.push(m.into());
                 } else {
                     sql.push_str(" AND message LIKE '%' || ?");
@@ -1039,7 +1062,7 @@ impl EventsStore {
                     sql.push_str(" AND ea.attr_value_text = ?");
                     sql.push_str(&(params.len() + 1).to_string());
                     params.push(val.to_string().into());
-                    sql.push_str(")");
+                    sql.push(')');
                 }
             }
         }

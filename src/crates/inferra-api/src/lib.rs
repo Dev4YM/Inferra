@@ -12,7 +12,8 @@ use axum::{
 };
 use futures_util::Stream;
 use inferra_collectors::{
-    configured_collectors, normalize_otlp_logs_protobuf_request, CollectorRuntime,
+    active_collector_ids, configured_collectors, normalize_otlp_logs_protobuf_request,
+    CollectorRuntime,
 };
 use inferra_config::{
     apply_config_put, config_to_json, experience_from_config, load_merged_config,
@@ -35,7 +36,8 @@ use inferra_core::{
     adaptive_learning_summary, adaptive_learning_touch_review_view, ai_status_from_config,
     build_overview, build_overview_with_runtime_signals, build_workspace_map,
     collect_host_resources_snapshot, collect_runtime_monitor_window,
-    enrich_incident_rows_with_latest_traces, refresh_incident_reasoning, try_collect_gpu_summary,
+    enrich_incident_rows_with_latest_traces, refresh_incident_reasoning, service_row_for_id,
+    try_collect_gpu_summary,
     workspace_app_live_resources, AdaptiveArtifactSelection, AdaptiveSavedReviewViewDraft,
     OverviewRuntimeSignals,
 };
@@ -54,7 +56,7 @@ use std::process::Command;
 use std::sync::Arc;
 use std::time::{Duration, Instant};
 use time::OffsetDateTime;
-use tokio::sync::RwLock;
+use tokio::sync::{Mutex, RwLock};
 use toml::Value as TomlValue;
 
 mod export_sink;
@@ -215,6 +217,7 @@ pub struct AppState {
     pub config: Arc<RwLock<TomlValue>>,
     pub collectors: CollectorRuntime,
     pub scanner_cache: Arc<RwLock<ScannerCache>>,
+    pub workspace_refresh: Arc<Mutex<()>>,
     pub ui_dist: PathBuf,
     pub rate_limits: Arc<middleware::RateLimitState>,
 }
@@ -348,6 +351,10 @@ pub fn app_router(state: AppState) -> Router {
         .route("/api/workspace/map", get(api_workspace_map))
         .route("/api/workspace/services", get(api_workspace_services))
         .route(
+            "/api/workspace/apps/{app_name}",
+            get(api_workspace_app_detail),
+        )
+        .route(
             "/api/workspace/apps/{app_name}/logs",
             get(api_workspace_app_logs),
         )
@@ -393,6 +400,7 @@ where
         config: Arc::new(RwLock::new(merged)),
         collectors: CollectorRuntime::default(),
         scanner_cache: Arc::new(RwLock::new(ScannerCache::default())),
+        workspace_refresh: Arc::new(Mutex::new(())),
         ui_dist,
         rate_limits: Arc::new(middleware::RateLimitState::new(chat_rate, explain_rate)),
     };
@@ -609,13 +617,20 @@ async fn api_overview(
     .await
     .map_err(|error| (StatusCode::INTERNAL_SERVER_ERROR, error.to_string()))?
     .map_err(|error| (StatusCode::INTERNAL_SERVER_ERROR, error.to_string()))?;
-    let _ = persist_ui_snapshot(
-        state.paths.as_ref(),
-        SNAPSHOT_OVERVIEW,
-        &serde_json::to_value(&overview).unwrap_or_else(|_| json!({})),
-        UI_SNAPSHOT_SOURCE_CORE,
-        None,
-    );
+    let paths_for_snapshot = state.paths.clone();
+    let overview_json = serde_json::to_value(&overview).unwrap_or_else(|_| json!({}));
+    tokio::spawn(async move {
+        let _ = tokio::task::spawn_blocking(move || {
+            persist_ui_snapshot(
+                paths_for_snapshot.as_ref(),
+                SNAPSHOT_OVERVIEW,
+                &overview_json,
+                UI_SNAPSHOT_SOURCE_CORE,
+                None,
+            )
+        })
+        .await;
+    });
     Ok(Json(overview))
 }
 
@@ -917,23 +932,24 @@ async fn api_trace_timeline(
 async fn api_incidents(
     State(state): State<AppState>,
 ) -> Result<Json<JsonValue>, (StatusCode, String)> {
-    let incidents_store = IncidentsStore::open(&state.paths.incidents_db)
-        .map_err(|e| (StatusCode::INTERNAL_SERVER_ERROR, e.to_string()))?;
-    let events_store = EventsStore::open(&state.paths.events_db)
-        .map_err(|e| (StatusCode::INTERNAL_SERVER_ERROR, e.to_string()))?;
-    let incidents = if let Some(ref store) = incidents_store {
-        let rows = store
-            .active_incidents(100)
-            .map_err(|e| (StatusCode::INTERNAL_SERVER_ERROR, e.to_string()))?;
-        enrich_incident_rows_with_latest_traces(
-            rows,
-            incidents_store.as_ref(),
-            events_store.as_ref(),
-        )
-        .map_err(|e| (StatusCode::INTERNAL_SERVER_ERROR, e.to_string()))?
-    } else {
-        vec![]
-    };
+    let paths = state.paths.clone();
+    let incidents = tokio::task::spawn_blocking(move || -> Result<Vec<IncidentRow>> {
+        let incidents_store = IncidentsStore::open(&paths.incidents_db)?;
+        let events_store = EventsStore::open(&paths.events_db)?;
+        if let Some(ref store) = incidents_store {
+            let rows = store.active_incidents(100)?;
+            enrich_incident_rows_with_latest_traces(
+                rows,
+                incidents_store.as_ref(),
+                events_store.as_ref(),
+            )
+        } else {
+            Ok(vec![])
+        }
+    })
+    .await
+    .map_err(|error| (StatusCode::INTERNAL_SERVER_ERROR, error.to_string()))?
+    .map_err(|error| (StatusCode::INTERNAL_SERVER_ERROR, error.to_string()))?;
     Ok(Json(json!({ "incidents": incidents })))
 }
 
@@ -941,59 +957,49 @@ async fn api_incident_detail(
     State(state): State<AppState>,
     AxumPath(incident_id): AxumPath<String>,
 ) -> Result<Json<IncidentDetailResponse>, (StatusCode, String)> {
-    initialize_databases(&state.paths.events_db, &state.paths.incidents_db)
-        .map_err(|e| (StatusCode::INTERNAL_SERVER_ERROR, e.to_string()))?;
-    let incidents = IncidentsStore::open(&state.paths.incidents_db)
-        .map_err(|e| (StatusCode::INTERNAL_SERVER_ERROR, e.to_string()))?
-        .ok_or_else(|| {
-            (
-                StatusCode::NOT_FOUND,
-                "Incident store not found".to_string(),
-            )
-        })?;
-    let events = EventsStore::open(&state.paths.events_db)
-        .map_err(|e| (StatusCode::INTERNAL_SERVER_ERROR, e.to_string()))?
-        .ok_or_else(|| (StatusCode::NOT_FOUND, "Event store not found".to_string()))?;
-    let incident = incidents
-        .get_incident(&incident_id)
-        .map_err(|e| (StatusCode::INTERNAL_SERVER_ERROR, e.to_string()))?
-        .ok_or_else(|| (StatusCode::NOT_FOUND, "Incident not found".to_string()))?;
-    let event_ids = incidents
-        .incident_event_ids(&incident_id)
-        .map_err(|e| (StatusCode::INTERNAL_SERVER_ERROR, e.to_string()))?;
-    let event_rows = events
-        .get_events(&event_ids)
-        .map_err(|e| (StatusCode::INTERNAL_SERVER_ERROR, e.to_string()))?;
-    let hypotheses = incidents
-        .hypotheses(&incident_id)
-        .map_err(|e| (StatusCode::INTERNAL_SERVER_ERROR, e.to_string()))?;
-    let clusters = incidents
-        .clusters(&incident_id)
-        .map_err(|e| (StatusCode::INTERNAL_SERVER_ERROR, e.to_string()))?;
-    let explanation = incidents
-        .latest_explanation(&incident_id)
-        .map_err(|e| (StatusCode::INTERNAL_SERVER_ERROR, e.to_string()))?;
-    let latest_trace = incidents
-        .latest_ai_trace(&incident_id)
-        .map_err(|e| (StatusCode::INTERNAL_SERVER_ERROR, e.to_string()))?;
-    let state_log = incidents
-        .list_state_log(&incident_id)
-        .map_err(|e| (StatusCode::INTERNAL_SERVER_ERROR, e.to_string()))?;
-    let feedback = incidents
-        .list_feedback(&incident_id)
-        .map_err(|e| (StatusCode::INTERNAL_SERVER_ERROR, e.to_string()))?;
-    let learning_provenance = aggregate_hypothesis_provenance(&hypotheses);
-    Ok(Json(IncidentDetailResponse {
-        incident,
-        events: event_rows,
-        hypotheses,
-        clusters,
-        explanation,
-        latest_trace,
-        state_log,
-        feedback,
-        learning_provenance,
-    }))
+    let paths = state.paths.clone();
+    let incident_id_for_task = incident_id.clone();
+    let response = tokio::task::spawn_blocking(move || -> Result<IncidentDetailResponse> {
+        initialize_databases(&paths.events_db, &paths.incidents_db)?;
+        let incidents = IncidentsStore::open(&paths.incidents_db)?
+            .ok_or_else(|| anyhow::anyhow!("Incident store not found"))?;
+        let events = EventsStore::open(&paths.events_db)?
+            .ok_or_else(|| anyhow::anyhow!("Event store not found"))?;
+        let incident = incidents
+            .get_incident(&incident_id_for_task)?
+            .ok_or_else(|| anyhow::anyhow!("Incident not found"))?;
+        let event_ids = incidents.incident_event_ids(&incident_id_for_task)?;
+        let event_rows = events.get_events(&event_ids)?;
+        let hypotheses = incidents.hypotheses(&incident_id_for_task)?;
+        let clusters = incidents.clusters(&incident_id_for_task)?;
+        let explanation = incidents.latest_explanation(&incident_id_for_task)?;
+        let latest_trace = incidents.latest_ai_trace(&incident_id_for_task)?;
+        let state_log = incidents.list_state_log(&incident_id_for_task)?;
+        let feedback = incidents.list_feedback(&incident_id_for_task)?;
+        let learning_provenance = aggregate_hypothesis_provenance(&hypotheses);
+        Ok(IncidentDetailResponse {
+            incident,
+            events: event_rows,
+            hypotheses,
+            clusters,
+            explanation,
+            latest_trace,
+            state_log,
+            feedback,
+            learning_provenance,
+        })
+    })
+    .await
+    .map_err(|error| (StatusCode::INTERNAL_SERVER_ERROR, error.to_string()))?
+    .map_err(|error| {
+        let message = error.to_string();
+        if message.contains("not found") {
+            (StatusCode::NOT_FOUND, message)
+        } else {
+            (StatusCode::INTERNAL_SERVER_ERROR, message)
+        }
+    })?;
+    Ok(Json(response))
 }
 
 async fn api_incident_events(
@@ -1705,18 +1711,24 @@ async fn api_services(
     State(state): State<AppState>,
 ) -> Result<Json<JsonValue>, (StatusCode, String)> {
     let cfg = state.config.read().await.clone();
-    let overview = build_overview(&cfg, state.paths.as_ref())
-        .map_err(|e| (StatusCode::INTERNAL_SERVER_ERROR, e.to_string()))?;
-    let payload = json!({
-        "services": overview.dashboard.services.unwrap_or_default(),
-    });
-    let _ = persist_ui_snapshot(
-        state.paths.as_ref(),
-        SNAPSHOT_SYSTEMS,
-        &payload,
-        UI_SNAPSHOT_SOURCE_CORE,
-        None,
-    );
+    let paths = state.paths.clone();
+    let payload = tokio::task::spawn_blocking(move || -> Result<JsonValue> {
+        let overview = build_overview(&cfg, paths.as_ref())?;
+        let payload = json!({
+            "services": overview.dashboard.services.unwrap_or_default(),
+        });
+        persist_ui_snapshot(
+            paths.as_ref(),
+            SNAPSHOT_SYSTEMS,
+            &payload,
+            UI_SNAPSHOT_SOURCE_CORE,
+            None,
+        )?;
+        Ok(payload)
+    })
+    .await
+    .map_err(|error| (StatusCode::INTERNAL_SERVER_ERROR, error.to_string()))?
+    .map_err(|error| (StatusCode::INTERNAL_SERVER_ERROR, error.to_string()))?;
     Ok(Json(payload))
 }
 
@@ -1727,11 +1739,22 @@ async fn api_service_detail(
     let cfg = state.config.read().await.clone();
     let overview = build_overview(&cfg, state.paths.as_ref())
         .map_err(|e| (StatusCode::INTERNAL_SERVER_ERROR, e.to_string()))?;
+    let overview_incidents: Vec<IncidentRow> = overview
+        .dashboard
+        .incidents
+        .clone()
+        .unwrap_or_default();
     let services = overview.dashboard.services.unwrap_or_default();
-    let service = services
-        .into_iter()
+    let service = if let Some(service) = services
+        .iter()
         .find(|item| item.service_id == service_id)
-        .ok_or_else(|| (StatusCode::NOT_FOUND, "Service not found".to_string()))?;
+    {
+        service.clone()
+    } else {
+        service_row_for_id(&service_id, state.paths.as_ref(), &overview_incidents)
+            .map_err(|e| (StatusCode::INTERNAL_SERVER_ERROR, e.to_string()))?
+            .ok_or_else(|| (StatusCode::NOT_FOUND, "Service not found".to_string()))?
+    };
     let events = if let Some(store) = EventsStore::open(&state.paths.events_db)
         .map_err(|e| (StatusCode::INTERNAL_SERVER_ERROR, e.to_string()))?
     {
@@ -1741,10 +1764,7 @@ async fn api_service_detail(
     } else {
         vec![]
     };
-    let incidents: Vec<IncidentRow> = overview
-        .dashboard
-        .incidents
-        .unwrap_or_default()
+    let incidents: Vec<IncidentRow> = overview_incidents
         .into_iter()
         .filter(|incident| {
             incident.primary_service == service_id
@@ -2419,6 +2439,7 @@ async fn api_ai_investigate_stream(
 
 async fn api_collectors(State(state): State<AppState>) -> Json<CollectorsResponse> {
     let cfg = state.config.read().await.clone();
+    let active_ids = active_collector_ids(&cfg);
     let runtime_rows = state.collectors.collector_rows(&cfg).await;
     let runtime_by_id: std::collections::HashMap<_, _> = runtime_rows
         .into_iter()
@@ -2428,16 +2449,18 @@ async fn api_collectors(State(state): State<AppState>) -> Json<CollectorsRespons
         collectors: configured_collectors(&cfg)
             .into_iter()
             .map(|c| {
+                let configured_status = c.status.clone();
                 let runtime = runtime_by_id.get(&c.collector_id);
                 let source_type = runtime
                     .map(|row| row.source_type.clone())
                     .unwrap_or_else(|| c.source_type.clone());
                 let last_error = runtime.and_then(|row| row.last_error.clone());
+                let is_running = runtime.map(|row| row.is_running);
                 CollectorRow {
                     collector_id: c.collector_id.clone(),
-                    status: runtime.map(|row| row.status.clone()).or(Some(c.status)),
+                    status: runtime.map(|row| row.status.clone()).or(Some(configured_status.clone())),
                     source_type: Some(source_type.clone()),
-                    is_running: runtime.map(|row| row.is_running),
+                    is_running,
                     events_emitted: runtime.map(|row| row.events_emitted),
                     events_per_second: runtime.map(|row| row.events_per_second),
                     last_event_at: runtime.and_then(|row| row.last_event_at.clone()),
@@ -2450,6 +2473,12 @@ async fn api_collectors(State(state): State<AppState>) -> Json<CollectorsRespons
                         Some(source_type.as_str()),
                         last_error.as_deref(),
                     ),
+                    idle_hint: collector_idle_hint(
+                        &c.collector_id,
+                        configured_status.as_str(),
+                        is_running,
+                        active_ids.contains(&c.collector_id),
+                    ),
                     log_query: Some(format!("/api/logs?search={}&limit=100", c.collector_id)),
                     lag_seconds: runtime.and_then(|row| row.lag_seconds),
                 }
@@ -2457,14 +2486,52 @@ async fn api_collectors(State(state): State<AppState>) -> Json<CollectorsRespons
             .collect(),
         queue_depth: state.collectors.queue_depth(),
     };
-    let _ = persist_ui_snapshot(
-        state.paths.as_ref(),
-        SNAPSHOT_CONTROL,
-        &serde_json::to_value(&response).unwrap_or_else(|_| json!({})),
-        UI_SNAPSHOT_SOURCE_CORE,
-        None,
-    );
+    let paths_for_snapshot = state.paths.clone();
+    let snapshot_json = serde_json::to_value(&response).unwrap_or_else(|_| json!({}));
+    tokio::spawn(async move {
+        let _ = tokio::task::spawn_blocking(move || {
+            persist_ui_snapshot(
+                paths_for_snapshot.as_ref(),
+                SNAPSHOT_CONTROL,
+                &snapshot_json,
+                UI_SNAPSHOT_SOURCE_CORE,
+                None,
+            )
+        })
+        .await;
+    });
     Json(response)
+}
+
+fn collector_idle_hint(
+    collector_id: &str,
+    configured_status: &str,
+    is_running: Option<bool>,
+    active_on_host: bool,
+) -> Option<String> {
+    if configured_status == "disabled" {
+        return Some("Disabled in inferra.toml (`collectors.*.enabled = false`).".into());
+    }
+    if is_running == Some(true) {
+        return None;
+    }
+    if !active_on_host {
+        return Some(match collector_id {
+            "journald" | "linux_syslog" => {
+                "Linux-only collector — not started on this host OS.".into()
+            }
+            "windows_eventlog" | "windows_service" => {
+                "Windows-only collector — not started on this host OS.".into()
+            }
+            _ => format!(
+                "Configured but inactive on this host — {collector_id} is not spawned for the current platform."
+            ),
+        });
+    }
+    Some(
+        "Configured for this host but not running — start collectors from Control or set `collectors.auto_start = true`."
+            .into(),
+    )
 }
 
 fn collector_error_hint(
@@ -2647,7 +2714,7 @@ async fn api_scanner_run(
     State(state): State<AppState>,
 ) -> Result<Json<JsonValue>, (StatusCode, String)> {
     let cfg = state.config.read().await.clone();
-    let workspace = refresh_workspace_scan_cache(&state, &cfg)
+    let workspace = refresh_workspace_scan_cache_shared(&state, &cfg)
         .await
         .map_err(|e| (StatusCode::INTERNAL_SERVER_ERROR, e.to_string()))?;
     Ok(Json(json!({
@@ -2796,37 +2863,151 @@ async fn cached_workspace_map(
     force: bool,
 ) -> Result<WorkspaceMapResponse> {
     let interval_seconds = workspace_scan_interval_seconds(config);
-    if !force {
+    if force {
+        return refresh_workspace_scan_cache_shared(state, config).await;
+    }
+
+    let stale_memory = {
         let cache = state.scanner_cache.read().await;
-        if let Some(cached) = cache.workspace.as_ref() {
-            if cached.cached_at.elapsed() < Duration::from_secs(interval_seconds) {
-                let mut value = cached.value.clone();
-                hydrate_workspace_runtime_app_traces(state.paths.as_ref(), &mut value)?;
-                return Ok(value);
+        cache.workspace.as_ref().cloned()
+    };
+    if let Some(cached) = stale_memory {
+        if workspace_cache_is_fresh(&cached) {
+            return Ok(cached.value);
+        }
+        spawn_workspace_refresh_if_needed(state, config);
+        return Ok(cached.value);
+    }
+
+    if let Some(value) = workspace_snapshot_from_disk(state, interval_seconds).await? {
+        spawn_workspace_refresh_if_needed(state, config);
+        return Ok(value);
+    }
+
+    refresh_workspace_scan_cache_shared(state, config).await
+}
+
+fn workspace_cache_is_fresh(cached: &CachedWorkspaceMap) -> bool {
+    cached.cached_at.elapsed() < Duration::from_secs(cached.interval_seconds)
+}
+
+async fn workspace_snapshot_from_disk(
+    state: &AppState,
+    interval_seconds: u64,
+) -> Result<Option<WorkspaceMapResponse>> {
+    let snapshot = match read_ui_snapshot(state.paths.as_ref(), SNAPSHOT_WORKSPACE)? {
+        Some(snapshot) => snapshot,
+        None => return Ok(None),
+    };
+    let value: WorkspaceMapResponse = serde_json::from_value(snapshot.payload.clone())
+        .context("deserialize workspace snapshot")?;
+    let snapshot_age = ui_snapshot_age_seconds(&snapshot.updated_at).unwrap_or(u64::MAX);
+    state.scanner_cache.write().await.workspace = Some(CachedWorkspaceMap {
+        value: value.clone(),
+        scanned_at: parse_offset_datetime(&snapshot.updated_at)
+            .unwrap_or_else(OffsetDateTime::now_utc),
+        cached_at: Instant::now()
+            .checked_sub(Duration::from_secs(snapshot_age))
+            .unwrap_or_else(Instant::now),
+        interval_seconds,
+    });
+    Ok(Some(value))
+}
+
+fn spawn_workspace_refresh_if_needed(state: &AppState, config: &TomlValue) {
+    let state = state.clone();
+    let config = config.clone();
+    tokio::spawn(async move {
+        let guard = state.workspace_refresh.lock().await;
+        {
+            let cache = state.scanner_cache.read().await;
+            if let Some(cached) = cache.workspace.as_ref() {
+                if workspace_cache_is_fresh(cached) {
+                    return;
+                }
             }
         }
-        drop(cache);
-        if let Some(snapshot) = read_ui_snapshot(state.paths.as_ref(), SNAPSHOT_WORKSPACE)? {
-            let snapshot_age = ui_snapshot_age_seconds(&snapshot.updated_at).unwrap_or(u64::MAX);
-            if snapshot_age < interval_seconds {
-                let mut value: WorkspaceMapResponse =
-                    serde_json::from_value(snapshot.payload.clone())
-                        .context("deserialize workspace snapshot")?;
-                hydrate_workspace_runtime_app_traces(state.paths.as_ref(), &mut value)?;
-                state.scanner_cache.write().await.workspace = Some(CachedWorkspaceMap {
-                    value: value.clone(),
-                    scanned_at: parse_offset_datetime(&snapshot.updated_at)
-                        .unwrap_or_else(OffsetDateTime::now_utc),
-                    cached_at: Instant::now()
-                        .checked_sub(Duration::from_secs(snapshot_age))
-                        .unwrap_or_else(Instant::now),
-                    interval_seconds,
-                });
-                return Ok(value);
+        let _ = refresh_workspace_scan_cache(&state, &config).await;
+        drop(guard);
+    });
+}
+
+async fn refresh_workspace_scan_cache_shared(
+    state: &AppState,
+    config: &TomlValue,
+) -> Result<WorkspaceMapResponse> {
+    let _guard = state.workspace_refresh.lock().await;
+    {
+        let cache = state.scanner_cache.read().await;
+        if let Some(cached) = cache.workspace.as_ref() {
+            if workspace_cache_is_fresh(cached) {
+                return Ok(cached.value.clone());
             }
         }
     }
     refresh_workspace_scan_cache(state, config).await
+}
+
+async fn hydrate_workspace_runtime_app_traces_async(
+    paths: Arc<Paths>,
+    mut workspace: WorkspaceMapResponse,
+) -> Result<WorkspaceMapResponse> {
+    tokio::task::spawn_blocking(move || {
+        hydrate_workspace_runtime_app_traces(paths.as_ref(), &mut workspace)?;
+        Ok(workspace)
+    })
+    .await
+    .context("workspace trace hydration task failed")?
+}
+
+fn workspace_runtime_app_matches(app: &WorkspaceRuntimeApp, app_name: &str) -> bool {
+    let needle = app_name.trim();
+    if needle.is_empty() {
+        return false;
+    }
+    if app.name == needle {
+        return true;
+    }
+    if app.name.eq_ignore_ascii_case(needle) {
+        return true;
+    }
+    if let Some(display_name) = app.display_name.as_deref() {
+        if display_name == needle || display_name.eq_ignore_ascii_case(needle) {
+            return true;
+        }
+    }
+    false
+}
+
+async fn workspace_runtime_app_lookup(
+    state: &AppState,
+    app_name: &str,
+) -> Result<Option<WorkspaceRuntimeApp>> {
+    {
+        let cache = state.scanner_cache.read().await;
+        if let Some(cached) = cache.workspace.as_ref() {
+            if let Some(app) = cached
+                .value
+                .runtime_apps
+                .iter()
+                .find(|app| workspace_runtime_app_matches(app, app_name))
+            {
+                return Ok(Some(app.clone()));
+            }
+        }
+    }
+    if let Some(snapshot) = read_ui_snapshot(state.paths.as_ref(), SNAPSHOT_WORKSPACE)? {
+        let value: WorkspaceMapResponse = serde_json::from_value(snapshot.payload.clone())
+            .context("deserialize workspace snapshot")?;
+        if let Some(app) = value
+            .runtime_apps
+            .iter()
+            .find(|app| workspace_runtime_app_matches(app, app_name))
+        {
+            return Ok(Some(app.clone()));
+        }
+    }
+    Ok(None)
 }
 
 fn workspace_app_service_candidates(
@@ -2963,11 +3144,11 @@ async fn refresh_workspace_scan_cache(
     let interval_seconds = workspace_scan_interval_seconds(config);
     let paths = state.paths.clone();
     let config_for_scan = config.clone();
-    let mut value =
+    let value =
         tokio::task::spawn_blocking(move || build_workspace_map(&config_for_scan, paths.as_ref()))
             .await
             .context("workspace scan task failed")??;
-    hydrate_workspace_runtime_app_traces(state.paths.as_ref(), &mut value)?;
+    let value = hydrate_workspace_runtime_app_traces_async(state.paths.clone(), value).await?;
     let cached = CachedWorkspaceMap {
         value: value.clone(),
         scanned_at: OffsetDateTime::now_utc(),
@@ -3058,31 +3239,48 @@ async fn api_workspace_services(
     })))
 }
 
+async fn api_workspace_app_detail(
+    State(state): State<AppState>,
+    AxumPath(app_name): AxumPath<String>,
+) -> Result<Json<JsonValue>, (StatusCode, String)> {
+    let app = workspace_runtime_app_lookup(&state, &app_name)
+        .await
+        .map_err(|e| (StatusCode::INTERNAL_SERVER_ERROR, e.to_string()))?
+        .ok_or_else(|| (StatusCode::NOT_FOUND, "workspace app not found".to_string()))?;
+    Ok(Json(json!({ "app": app })))
+}
+
 async fn api_workspace_app_resources(
     State(state): State<AppState>,
     AxumPath(app_name): AxumPath<String>,
     Query(params): Query<std::collections::HashMap<String, String>>,
 ) -> Result<Json<JsonValue>, (StatusCode, String)> {
-    let cfg = state.config.read().await.clone();
-    let workspace = cached_workspace_map(&state, &cfg, false)
+    let app = workspace_runtime_app_lookup(&state, &app_name)
         .await
         .map_err(|e| (StatusCode::INTERNAL_SERVER_ERROR, e.to_string()))?;
-    let app = workspace
-        .runtime_apps
-        .iter()
-        .find(|item| {
-            item.name == app_name || item.display_name.as_deref() == Some(app_name.as_str())
-        })
-        .ok_or_else(|| (StatusCode::NOT_FOUND, "workspace app not found".to_string()))?;
     let pid = params
         .get("pid")
         .and_then(|value| value.parse::<u32>().ok())
-        .or(app.pid);
-    let live_resources = workspace_app_live_resources(pid, Some(&app.name));
+        .or_else(|| app.as_ref().and_then(|item| item.pid));
+    let lookup_name = app
+        .as_ref()
+        .map(|item| item.name.clone())
+        .unwrap_or_else(|| app_name.clone());
+    if app.is_none() && pid.is_none() {
+        return Err((
+            StatusCode::NOT_FOUND,
+            "workspace app not found".to_string(),
+        ));
+    }
+    let live_resources = tokio::task::spawn_blocking(move || {
+        workspace_app_live_resources(pid, Some(lookup_name.as_str()))
+    })
+    .await
+    .map_err(|e| (StatusCode::INTERNAL_SERVER_ERROR, e.to_string()))?;
     let live = live_resources.is_some();
-    let resources = live_resources.or_else(|| app.resources.clone());
+    let resources = live_resources.or_else(|| app.as_ref().and_then(|item| item.resources.clone()));
     Ok(Json(json!({
-        "app_name": app.name,
+        "app_name": app.as_ref().map(|item| item.name.as_str()).unwrap_or(app_name.as_str()),
         "pid": pid,
         "sampled_at": now_iso(),
         "live": live,
@@ -3101,26 +3299,36 @@ async fn api_workspace_app_logs(
         .and_then(|value| value.parse::<usize>().ok())
         .unwrap_or(80)
         .clamp(1, 300);
-    let workspace = cached_workspace_map(&state, &cfg, false)
+    let app = workspace_runtime_app_lookup(&state, &app_name)
         .await
-        .map_err(|e| (StatusCode::INTERNAL_SERVER_ERROR, e.to_string()))?;
-    let app = workspace
-        .runtime_apps
-        .iter()
-        .find(|item| {
-            item.name == app_name || item.display_name.as_deref() == Some(app_name.as_str())
-        })
+        .map_err(|e| (StatusCode::INTERNAL_SERVER_ERROR, e.to_string()))?
         .ok_or_else(|| (StatusCode::NOT_FOUND, "workspace app not found".to_string()))?;
+    let service_mappings = {
+        let cache = state.scanner_cache.read().await;
+        cache
+            .workspace
+            .as_ref()
+            .map(|cached| cached.value.service_mappings.clone())
+            .unwrap_or_default()
+    };
+    let service_mappings = if service_mappings.is_empty() {
+        cached_workspace_map(&state, &cfg, false)
+            .await
+            .map_err(|e| (StatusCode::INTERNAL_SERVER_ERROR, e.to_string()))?
+            .service_mappings
+    } else {
+        service_mappings
+    };
     let retention = storage_retention_hours(&cfg);
     let events = if let Some(store) = EventsStore::open(&state.paths.events_db)
         .map_err(|e| (StatusCode::INTERNAL_SERVER_ERROR, e.to_string()))?
     {
-        workspace_app_events(&store, app, &workspace.service_mappings, retention, limit)
+        workspace_app_events(&store, &app, &service_mappings, retention, limit)
             .map_err(|e| (StatusCode::INTERNAL_SERVER_ERROR, e.to_string()))?
     } else {
         Vec::new()
     };
-    let raw_logs = workspace_app_raw_logs(app, limit);
+    let raw_logs = workspace_app_raw_logs(&app, limit);
     Ok(Json(json!({
         "app_name": app.name,
         "events": events,
@@ -3437,13 +3645,20 @@ async fn api_workspace_add_mapping(
 async fn api_topology(State(state): State<AppState>) -> Json<JsonValue> {
     let cfg = state.config.read().await.clone();
     let payload = json!({ "edges": topology_edges(&cfg) });
-    let _ = persist_ui_snapshot(
-        state.paths.as_ref(),
-        SNAPSHOT_GRAPH,
-        &payload,
-        UI_SNAPSHOT_SOURCE_CORE,
-        None,
-    );
+    let paths_for_snapshot = state.paths.clone();
+    let snapshot_payload = payload.clone();
+    tokio::spawn(async move {
+        let _ = tokio::task::spawn_blocking(move || {
+            persist_ui_snapshot(
+                paths_for_snapshot.as_ref(),
+                SNAPSHOT_GRAPH,
+                &snapshot_payload,
+                UI_SNAPSHOT_SOURCE_CORE,
+                None,
+            )
+        })
+        .await;
+    });
     Json(payload)
 }
 
@@ -6044,6 +6259,7 @@ enabled = false
             config: Arc::new(RwLock::new(config)),
             collectors: CollectorRuntime::default(),
             scanner_cache: Arc::new(RwLock::new(ScannerCache::default())),
+            workspace_refresh: Arc::new(tokio::sync::Mutex::new(())),
             ui_dist,
             rate_limits: Arc::new(middleware::RateLimitState::new(30.0, 15.0)),
         }

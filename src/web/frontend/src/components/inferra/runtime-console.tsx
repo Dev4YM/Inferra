@@ -73,9 +73,9 @@ export function InferraRuntimeBanner({ runtime }: { runtime: InferraRuntimeSnaps
         <AlertDescription>{description}</AlertDescription>
         {runtime.state === "offline" ? (
           <p className="mt-2 text-xs text-muted-foreground">
-            Dev tip: Vite proxies to <code className="font-data">INFERRA_API_URL</code> (default from{" "}
-            <code className="font-data">inferra.dev.toml</code>). A zombie listener on 7433 while the live API is on 7434
-            causes partial timeouts.
+            Installed service default port is <code className="font-data">7433</code>. If install picked a fallback port
+            (for example <code className="font-data">49681</code>), open that URL or reinstall after freeing 7433. Dev UI
+            proxies via <code className="font-data">INFERRA_API_URL</code> from <code className="font-data">inferra.dev.toml</code>.
           </p>
         ) : null}
         <div className="mt-3 flex flex-wrap gap-2">

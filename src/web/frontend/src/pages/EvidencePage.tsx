@@ -117,7 +117,11 @@ export function EvidencePage({ mode }: { mode: Mode }) {
           label="Loaded rows"
           value={String(rows.length)}
           tone="info"
-          detail={`Retention ${logs.data?.retention_hours ?? "?"}h · page size ${logs.data?.limit ?? parseLimit(applied.limit)}`}
+          detail={
+            logs.isLoading && !logs.data
+              ? "Loading retention policy…"
+              : `Retention ${logs.data?.retention_hours ?? "—"}h · page size ${logs.data?.limit ?? parseLimit(applied.limit)}`
+          }
         />
         <RuntimeStatusCard
           icon={AlertTriangle}
@@ -213,6 +217,28 @@ export function EvidencePage({ mode }: { mode: Mode }) {
           </div>
 
           <div className="flex flex-wrap gap-2">
+            <Button
+              variant={applied.sourceType === "windows_service" ? "default" : "outline"}
+              size="sm"
+              onClick={() => {
+                const next = { ...filters, sourceType: filters.sourceType === "windows_service" ? "" : "windows_service" };
+                setFilters(next);
+                setApplied(next);
+              }}
+            >
+              windows_service
+            </Button>
+            <Button
+              variant={applied.severity === "3" ? "default" : "outline"}
+              size="sm"
+              onClick={() => {
+                const next = { ...filters, severity: filters.severity === "3" ? "" : "3" };
+                setFilters(next);
+                setApplied(next);
+              }}
+            >
+              error+
+            </Button>
             <Button onClick={applyFilters}>Apply filters</Button>
             {logs.data?.next_cursor ? (
               <Button
@@ -416,7 +442,7 @@ type EvidenceFilters = {
 function emptyFilters(): EvidenceFilters {
   return {
     service: "",
-    severity: "",
+    severity: "3",
     sourceType: "",
     query: "",
     traceId: "",
@@ -432,7 +458,7 @@ function initialFiltersFromSearch(searchParams: URLSearchParams): EvidenceFilter
   const defaults = emptyFilters();
   return {
     service: searchParams.get("service") ?? defaults.service,
-    severity: searchParams.get("severity") ?? defaults.severity,
+    severity: searchParams.has("severity") ? (searchParams.get("severity") ?? "") : "3",
     sourceType: searchParams.get("source_type") ?? defaults.sourceType,
     query: searchParams.get("q") ?? searchParams.get("search") ?? defaults.query,
     traceId: normalizeTraceId(searchParams.get("trace_id") ?? defaults.traceId),

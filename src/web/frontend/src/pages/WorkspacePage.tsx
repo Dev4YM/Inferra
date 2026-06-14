@@ -29,7 +29,25 @@ import type { Mode } from "@/lib/experience";
 import { isAdvancedMode } from "@/lib/experience";
 import { formatDisplayValue, formatSeverityLabel } from "@/lib/format";
 import { buildTracePath, hasValidTraceId, shortTraceId } from "@/lib/observability";
+import { useQueryClient } from "@tanstack/react-query";
 import { useApiMutation, useApiQuery } from "@/lib/query";
+
+type WorkspaceAppDetailResponse = { app: WorkspaceRuntimeApp };
+
+function findWorkspaceAppInMap(
+  map: WorkspaceMapResponse | null | undefined,
+  appName: string,
+): WorkspaceRuntimeApp | null {
+  const needle = appName.trim().toLowerCase();
+  if (!needle) return null;
+  return (
+    (map?.runtime_apps ?? []).find(
+      (item) =>
+        item.name.toLowerCase() === needle ||
+        item.display_name?.trim().toLowerCase() === needle,
+    ) ?? null
+  );
+}
 
 export function WorkspacePage({ mode }: { mode: Mode }) {
   const workspace = useApiQuery<WorkspaceMapResponse>("/api/workspace/map", { staleTime: 60_000 });
@@ -117,6 +135,26 @@ export function WorkspacePage({ mode }: { mode: Mode }) {
         <SummaryCard label="Mappings" value={String(workspace.data.service_mappings.length)} />
         <SummaryCard label="Unmapped services" value={String(workspace.data.unmapped_services.length)} />
       </div>
+
+      {!workspace.data.projects.length ? (
+        <Card className="border-dashed">
+          <CardHeader>
+            <CardTitle>No workspace projects detected</CardTitle>
+          </CardHeader>
+          <CardContent className="space-y-3 text-sm text-muted-foreground">
+            <p>Inferra maps services to projects so incidents and graphs have an owner. Try these steps:</p>
+            <ol className="list-decimal space-y-2 pl-5">
+              <li>Point <code className="font-data">workspace.scan_roots</code> at your code folders in inferra.toml.</li>
+              <li>Run <strong>Force scan</strong> above or start your dev apps so runtime detection can see them.</li>
+              <li>Add manual mappings from Systems or map noisy unmapped services first.</li>
+              <li>Confirm collectors are running from Control so service ids appear in evidence.</li>
+            </ol>
+            <Button asChild variant="outline" size="sm">
+              <Link to="/control">Open Control</Link>
+            </Button>
+          </CardContent>
+        </Card>
+      ) : null}
 
       {workspace.data.support_layers?.length ? (
         <Card>
@@ -285,29 +323,40 @@ export function WorkspacePage({ mode }: { mode: Mode }) {
 
 export function WorkspaceAppPage({ mode }: { mode: Mode }) {
   const [params] = useSearchParams();
-  const appName = params.get("name") ?? "";
-  const workspace = useApiQuery<WorkspaceMapResponse>("/api/workspace/map", { deps: [appName] });
-  const app = useMemo(
-    () => (workspace.data?.runtime_apps ?? []).find((item) => item.name === appName) ?? null,
-    [appName, workspace.data],
+  const appName = params.get("name")?.trim() ?? "";
+  const queryClient = useQueryClient();
+  const appPath = appName ? `/api/workspace/apps/${encodeURIComponent(appName)}` : null;
+  const cachedApp = useMemo(
+    () =>
+      findWorkspaceAppInMap(
+        queryClient.getQueryData<WorkspaceMapResponse>(["api", "/api/workspace/map"]),
+        appName,
+      ),
+    [appName, queryClient],
   );
+  const appQuery = useApiQuery<WorkspaceAppDetailResponse>(appPath, {
+    deps: [appName],
+    staleTime: 30_000,
+    initialData: cachedApp ? { app: cachedApp } : undefined,
+  });
+  const app = appQuery.data?.app ?? cachedApp;
   const appLogsPath = app ? `/api/workspace/apps/${encodeURIComponent(app.name)}/logs?limit=80` : null;
   const appLogs = useApiQuery<WorkspaceAppLogsResponse>(appLogsPath, { deps: [app?.name], staleTime: 5_000 });
 
-  if (workspace.isLoading && !workspace.data) {
+  if (!app && appQuery.isLoading) {
     return (
       <div className="space-y-6">
         <PageHeader title="Workspace app" subtitle="Loading app details, logs, and monitor state." mode={mode} />
-        <LoadingState title="Loading workspace app" />
+        <LoadingState title="Loading workspace app" description="Reading cached app metadata…" />
       </div>
     );
   }
 
-  if (workspace.errorMessage && !workspace.data) {
+  if (!app && appQuery.errorMessage) {
     return (
       <div className="space-y-6">
         <PageHeader title="Workspace app" subtitle="Loading app details, logs, and monitor state." mode={mode} />
-        <ErrorState description={workspace.errorMessage} onRetry={() => void workspace.reload()} />
+        <ErrorState description={appQuery.errorMessage} onRetry={() => void appQuery.reload()} />
       </div>
     );
   }
@@ -392,7 +441,12 @@ function WorkspaceAppDetails({
   );
   const liveResources = useApiQuery<WorkspaceAppResourcesResponse>(
     `/api/workspace/apps/${encodeURIComponent(app.name)}/resources${app.pid ? `?pid=${app.pid}` : ""}`,
-    { deps: [app.name, app.pid], refetchInterval: 2_000, staleTime: 1_000 },
+    {
+      deps: [app.name, app.pid],
+      refetchInterval: 5_000,
+      refetchIntervalInBackground: false,
+      staleTime: 2_000,
+    },
   );
   const resources = liveResources.data?.resources ?? app.resources ?? null;
   const aiMonitor = useApiMutation(

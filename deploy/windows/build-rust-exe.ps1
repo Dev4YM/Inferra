@@ -76,6 +76,11 @@ New-Item -ItemType Directory -Force -Path $uiTarget | Out-Null
 Remove-Item (Join-Path $uiTarget "*") -Recurse -Force -ErrorAction SilentlyContinue
 Copy-Item (Join-Path $uiDist "*") $uiTarget -Recurse -Force
 
+$defaultsToml = Join-Path $repoRoot "src\config\defaults.toml"
+if (Test-Path $defaultsToml) {
+    Copy-Item $defaultsToml (Join-Path $runtimeAssets "defaults.toml") -Force
+}
+
 if ($CopyPythonWorker) {
     Write-Warning "CopyPythonWorker is ignored. The Rust build is self-contained and does not bundle the source tree or legacy Python runtime."
 }

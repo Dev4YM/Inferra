@@ -10,6 +10,28 @@ def read(rel: str) -> str:
     return (ROOT / rel).read_text(encoding="utf-8")
 
 
+def test_release_version_manifests_match_canonical_version() -> None:
+    import subprocess
+    import sys
+
+    result = subprocess.run(
+        [sys.executable, str(ROOT / "scripts" / "version.py"), "verify"],
+        cwd=ROOT,
+        capture_output=True,
+        text=True,
+        check=False,
+    )
+    assert result.returncode == 0, result.stderr or result.stdout
+
+
+def test_canonical_version_file_exists() -> None:
+    version = (ROOT / "VERSION").read_text(encoding="utf-8").strip()
+    assert version
+    parts = version.split(".")
+    assert len(parts) == 3
+    assert all(part.isdigit() for part in parts)
+
+
 def test_windows_rust_build_copies_flat_runtime_assets() -> None:
     script = read("deploy/windows/build-rust-exe.ps1")
     assert '$rustRoot = Join-Path $repoRoot "src"' in script
