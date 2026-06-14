@@ -4,7 +4,7 @@ This document lists **operator-visible features** and how **optional AI** (Ollam
 
 ## Global rules (all AI)
 
-- **Deterministic core**: collectors, SQLite, incidents, hypotheses, scores, and lifecycle state are **not** mutated by model output ([ADR 0001](../../adr/0001-local-first-guided-ai.md), [ADR 0005](../../adr/0005-ai-presentation-only.md)).
+- **Deterministic core**: collectors, SQLite, incidents, hypotheses, scores, and lifecycle state are **not** mutated by model output (see [AI investigation system](ai_investigation_system.md) and [product vision](../product/product_vision.md)).
 - **Evidence bundles** sent to the model are **redacted** when `ai.redact_raw_logs` is true (event bodies become summaries).
 - **Grounding**: server-side validation strips `evidence[]` and `citations[]` entries whose IDs are not present in the bundle; results appear under `grounding` in the JSON response.
 - **Runtime context for AI**: investigations include **`host_resources`** (CPU count, global CPU %, memory, swap, load average, disk mounts, process count, optional **GPU** via `nvidia-smi` when available) and **`runtime_monitor`** (time series over `monitor_seconds`, configurable interval).

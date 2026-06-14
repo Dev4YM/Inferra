@@ -9,10 +9,10 @@ use anyhow::Context;
 use base64::{engine::general_purpose::STANDARD, Engine};
 use inferra_config::{
     observability_export_backfill_on_start, observability_export_batch_size,
-    observability_export_bearer_token, observability_export_enabled, observability_export_interval_seconds,
-    observability_export_max_retries, observability_export_retry_initial_seconds,
-    observability_export_retry_max_seconds, observability_export_timeout_seconds,
-    observability_export_url,
+    observability_export_bearer_token, observability_export_enabled,
+    observability_export_interval_seconds, observability_export_max_retries,
+    observability_export_retry_initial_seconds, observability_export_retry_max_seconds,
+    observability_export_timeout_seconds, observability_export_url,
 };
 use inferra_contracts::{EventRow, SeverityValue};
 use inferra_storage::{initialize_databases, EventsStore};
@@ -197,7 +197,10 @@ async fn forward_events(
         let batch = &events[start..end];
         match send_batch_with_retries(client, http_cfg, batch).await {
             BatchSendOutcome::Delivered => {
-                write_cursor(cursor_path, &cursor_for_event(batch.last().expect("non-empty batch")))?;
+                write_cursor(
+                    cursor_path,
+                    &cursor_for_event(batch.last().expect("non-empty batch")),
+                )?;
                 EXPORT_EVENTS_FORWARDED.fetch_add(batch.len() as u64, Ordering::Relaxed);
                 progress.forwarded += batch.len() as u64;
             }
@@ -510,7 +513,11 @@ fn log_record_json(ev: &EventRow) -> Value {
         if let Some(s) = span_id_otlp_field(ev.span_id.as_deref()) {
             obj.insert("spanId".into(), json!(s));
         }
-        if let Some(env) = ev.deployment_environment.as_deref().filter(|e| !e.is_empty()) {
+        if let Some(env) = ev
+            .deployment_environment
+            .as_deref()
+            .filter(|e| !e.is_empty())
+        {
             if let Some(arr) = obj.get_mut("attributes").and_then(|a| a.as_array_mut()) {
                 arr.push(json!({"key": "deployment.environment", "value": {"stringValue": env}}));
             }
@@ -555,7 +562,7 @@ mod tests {
     use axum::{Json, Router};
     use inferra_collectors::CollectorRuntime;
     use inferra_config::Paths;
-    use inferra_storage::{NewEventRecord, initialize_databases};
+    use inferra_storage::{initialize_databases, NewEventRecord};
     use tokio::sync::RwLock;
     use toml::Value as TomlValue;
 
@@ -693,11 +700,7 @@ mod tests {
                             );
                         }
                         drop(attempts);
-                        state
-                            .accepted_batches
-                            .lock()
-                            .expect("accepted")
-                            .push(ids);
+                        state.accepted_batches.lock().expect("accepted").push(ids);
                         (StatusCode::OK, Json(json!({})))
                     },
                 ),
@@ -878,13 +881,7 @@ bearer_token = ""
 
     fn minimal_event(event_id: &str, timestamp: &str, message: &str) -> NewEventRecord {
         let mut event = NewEventRecord::minimal(
-            event_id,
-            timestamp,
-            "svc",
-            3,
-            message,
-            "app_http",
-            timestamp,
+            event_id, timestamp, "svc", 3, message, "app_http", timestamp,
         );
         event.severity_text = Some("ERROR".into());
         event.signal_kind = "log".into();

@@ -552,7 +552,10 @@ fn docker_service_identity_prefers_labels() {
 
 #[test]
 fn kubernetes_helpers_extract_workload_health() {
-    assert_eq!(kubernetes_workload_name("checkout-7d998f9c9d-x4abc"), "checkout");
+    assert_eq!(
+        kubernetes_workload_name("checkout-7d998f9c9d-x4abc"),
+        "checkout"
+    );
     let pod = serde_json::json!({
         "status": {
             "phase": "Running",

@@ -162,14 +162,14 @@ fn insert_event_indexed_attributes(
         if text.is_none() && num.is_none() && intv.is_none() {
             continue;
         }
-        stmt
-            .execute(rusqlite::params![event_id, key, text, num, intv])
+        stmt.execute(rusqlite::params![event_id, key, text, num, intv])
             .context("insert event_attributes row")?;
     }
     Ok(())
 }
 
-const EVENT_ROW_SELECT: &str = "event_id, timestamp, severity, service_id, message, source_type, tags, \
+const EVENT_ROW_SELECT: &str =
+    "event_id, timestamp, severity, service_id, message, source_type, tags, \
      trace_id, span_id, signal_kind, deployment_environment, severity_text";
 
 #[derive(Debug, Clone)]
@@ -794,7 +794,10 @@ impl EventsStore {
         Ok(out)
     }
 
-    pub fn latest_trace_summary_for_service(&self, service_id: &str) -> Result<Option<TraceSummary>> {
+    pub fn latest_trace_summary_for_service(
+        &self,
+        service_id: &str,
+    ) -> Result<Option<TraceSummary>> {
         let latest = self
             .conn
             .query_row(
@@ -882,7 +885,9 @@ impl EventsStore {
         params.push(summary.trace_id.clone().into());
         summary.event_count = self
             .conn
-            .query_row(&count_sql, rusqlite::params_from_iter(params), |row| row.get(0))
+            .query_row(&count_sql, rusqlite::params_from_iter(params), |row| {
+                row.get(0)
+            })
             .context("count latest trace summary incident events")?;
         Ok(Some(summary))
     }
@@ -937,7 +942,12 @@ impl EventsStore {
             }
         }
 
-        if let Some(tid) = query.trace_id.as_deref().map(str::trim).filter(|t| !t.is_empty()) {
+        if let Some(tid) = query
+            .trace_id
+            .as_deref()
+            .map(str::trim)
+            .filter(|t| !t.is_empty())
+        {
             sql.push_str(" AND trace_id IS NOT NULL AND lower(trace_id) = lower(?");
             sql.push_str(&(params.len() + 1).to_string());
             sql.push_str(")");
@@ -1092,7 +1102,8 @@ impl EventsStore {
             "SELECT {EVENT_ROW_SELECT} FROM events WHERE event_id IN ({placeholders}) ",
             placeholders = placeholders
         );
-        let mut params: Vec<rusqlite::types::Value> = unique.into_iter().map(|s| s.into()).collect();
+        let mut params: Vec<rusqlite::types::Value> =
+            unique.into_iter().map(|s| s.into()).collect();
         Self::push_log_query_filters(&mut sql, &mut params, query, None);
         sql.push_str(" ORDER BY timestamp DESC, event_id DESC LIMIT ?");
         sql.push_str(&(params.len() + 1).to_string());
@@ -1165,7 +1176,10 @@ impl EventsStore {
             .prepare(&sql)
             .context("prepare trace timeline query")?;
         let rows = stmt
-            .query_map(rusqlite::params_from_iter(params.iter()), event_row_from_row)
+            .query_map(
+                rusqlite::params_from_iter(params.iter()),
+                event_row_from_row,
+            )
             .context("query trace timeline")?;
         let mut out = Vec::new();
         for row in rows {
@@ -5084,11 +5098,17 @@ mod tests {
             .expect("trace summary present");
         assert_eq!(summary.trace_id, "bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb");
         assert_eq!(summary.event_count, 2);
-        assert_eq!(summary.last_seen_at.as_deref(), Some("2026-05-14T12:06:00Z"));
+        assert_eq!(
+            summary.last_seen_at.as_deref(),
+            Some("2026-05-14T12:06:00Z")
+        );
         assert_eq!(summary.service_id.as_deref(), Some("api"));
         assert_eq!(summary.source_type.as_deref(), Some("otlp_json"));
         assert_eq!(summary.deployment_environment.as_deref(), None);
-        assert_eq!(summary.sample_message.as_deref(), Some("latest trace second"));
+        assert_eq!(
+            summary.sample_message.as_deref(),
+            Some("latest trace second")
+        );
     }
 
     #[test]
@@ -5138,8 +5158,14 @@ mod tests {
             .expect("trace summary present");
         assert_eq!(summary.trace_id, "22222222222222222222222222222222");
         assert_eq!(summary.event_count, 1);
-        assert_eq!(summary.last_seen_at.as_deref(), Some("2026-05-14T13:05:00Z"));
-        assert_eq!(summary.sample_message.as_deref(), Some("latest scoped trace"));
+        assert_eq!(
+            summary.last_seen_at.as_deref(),
+            Some("2026-05-14T13:05:00Z")
+        );
+        assert_eq!(
+            summary.sample_message.as_deref(),
+            Some("latest scoped trace")
+        );
     }
 
     #[test]
@@ -5248,26 +5274,23 @@ mod tests {
             ])
             .expect("insert events");
 
-        let max = store.max_event_cursor().expect("max cursor").expect("has rows");
+        let max = store
+            .max_event_cursor()
+            .expect("max cursor")
+            .expect("has rows");
         assert_eq!(max.0, "2026-05-07T10:00:01Z");
         assert_eq!(max.1, "evt-c");
 
         let after_a = store
             .events_after_cursor("2026-05-07T10:00:00Z", "evt-a", 10)
             .expect("after evt-a");
-        let ids: Vec<_> = after_a
-            .iter()
-            .filter_map(|e| e.event_id.clone())
-            .collect();
+        let ids: Vec<_> = after_a.iter().filter_map(|e| e.event_id.clone()).collect();
         assert_eq!(ids, vec!["evt-b".to_string(), "evt-c".to_string()]);
 
         let after_b = store
             .events_after_cursor("2026-05-07T10:00:00Z", "evt-b", 10)
             .expect("after evt-b");
-        let ids2: Vec<_> = after_b
-            .iter()
-            .filter_map(|e| e.event_id.clone())
-            .collect();
+        let ids2: Vec<_> = after_b.iter().filter_map(|e| e.event_id.clone()).collect();
         assert_eq!(ids2, vec!["evt-c".to_string()]);
     }
 

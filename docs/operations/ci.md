@@ -11,39 +11,9 @@ Reference runners (documented 2026-06): GitHub Actions `ubuntu-latest`, Python 3
 - Native runtime smoke: build the release CLI binary, run `tests/scripts/rust_runtime_smoke.py`, then run `tests/integration/test_rust_api.py` against the built executable.
 - Helm: `helm lint`, render the chart, and assert rendered auth/probe/security fields.
 - Docker: build the image, run it with the container config, and probe `/healthz`.
-- Coverage: Rust coverage is measured by `cargo llvm-cov`; Python archive coverage is not the product coverage signal.
+- Coverage: Rust coverage is measured by `cargo llvm-cov`.
 
-## Archived Python Runtime
-
-The `legacy-archive` job installs `.[dev,legacy]` and runs the deprecated Python runtime tests under an explicitly named job. These tests protect archived reference behavior only; shipping runtime confidence comes from Rust workspace tests and Rust black-box integration.
-
-## Chaos (`pytest.mark.chaos`)
-
-Linux CI job (or local on macOS/Linux):
-
-```bash
-python -m pytest -q -m chaos --tb=short
-```
-
-Covers SQLite SIGKILL mid-transaction, Ollama mid-stream failure, disk-full degradation, and clock-skew normalization flags.
-
-## Performance budgets (`pytest.mark.perf`)
-
-Job or optional workflow step:
-
-```bash
-python -m pytest -q -m perf --tb=short
-```
-
-Budgets are asserted in `tests/perf/test_budgets.py` (same thresholds as product targets):
-
-| Area | Metric | Budget |
-|------|--------|--------|
-| Normalization | p99 time per `NormalizationPipeline.normalize` sample | <= 2 ms |
-| Analysis | Wall time for `aggregate_events_into_bucket_rows` over 500 normalized events | <= 50 ms |
-| Scoring | p99 time for `compute_score_breakdown` per hypothesis | <= 5 ms |
-
-Artifact: set `PERF_REPORT_PATH` to write JSON (defaults to `./perf_report.json` in the working directory). CI should upload that path as a workflow artifact.
+Archived Python runtime, chaos, and performance-budget pytest jobs were removed from CI. The Rust workspace tests and Rust black-box integration are the shipping runtime signal.
 
 ## Determinism
 

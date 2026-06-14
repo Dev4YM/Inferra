@@ -63,10 +63,7 @@ pub async fn run_serve_command(ctx: &AppContext) -> Result<()> {
     }
 }
 
-pub async fn run_runtime_command(
-    ctx: &AppContext,
-    action: Option<RuntimeAction>,
-) -> Result<()> {
+pub async fn run_runtime_command(ctx: &AppContext, action: Option<RuntimeAction>) -> Result<()> {
     match action {
         Some(RuntimeAction::Status) => emit_runtime_status(ctx).await,
         Some(RuntimeAction::Start) => runtime_start(ctx).await,
@@ -83,13 +80,17 @@ async fn emit_runtime_status(ctx: &AppContext) -> Result<()> {
         ctx.ui.print_json(&payload);
         return Ok(());
     }
-    ctx.ui.banner("Inferra runtime", "API and web dashboard status");
+    ctx.ui
+        .banner("Inferra runtime", "API and web dashboard status");
     let mode = payload["mode"].as_str().unwrap_or("unknown");
     let dashboard = payload["dashboard_url"].as_str().unwrap_or_default();
     if payload["reachable"].as_bool().unwrap_or(false) {
-        ctx.ui.success(&format!("API and dashboard are running ({mode}) at {dashboard}"));
+        ctx.ui.success(&format!(
+            "API and dashboard are running ({mode}) at {dashboard}"
+        ));
     } else {
-        ctx.ui.warning("API and dashboard are not responding on the configured address.");
+        ctx.ui
+            .warning("API and dashboard are not responding on the configured address.");
     }
     ctx.ui.kv_table([
         ("Mode", mode.to_string()),
@@ -137,12 +138,8 @@ async fn runtime_start(ctx: &AppContext) -> Result<()> {
         );
     }
     if status.state.as_deref() == Some("Running") && runtime_health_ok(ctx).await? {
-        return finish_runtime_action(
-            ctx,
-            "start",
-            "Runtime already running (API + dashboard)",
-        )
-        .await;
+        return finish_runtime_action(ctx, "start", "Runtime already running (API + dashboard)")
+            .await;
     }
     inferra_windows_service::start_service()?;
     wait_for_runtime_health(ctx, 45).await?;
@@ -184,7 +181,12 @@ async fn runtime_restart(ctx: &AppContext) -> Result<()> {
     }
     inferra_windows_service::restart_service()?;
     wait_for_runtime_health(ctx, 45).await?;
-    finish_runtime_action(ctx, "restart", "Restarted Inferra runtime (API + dashboard)").await
+    finish_runtime_action(
+        ctx,
+        "restart",
+        "Restarted Inferra runtime (API + dashboard)",
+    )
+    .await
 }
 
 async fn runtime_open(ctx: &AppContext) -> Result<()> {
@@ -241,7 +243,10 @@ async fn collect_runtime_payload(ctx: &AppContext) -> Result<JsonValue> {
     } else {
         None
     };
-    let service_installed = service.as_ref().map(|status| status.installed).unwrap_or(false);
+    let service_installed = service
+        .as_ref()
+        .map(|status| status.installed)
+        .unwrap_or(false);
     let service_state = service
         .as_ref()
         .and_then(|status| status.state.clone())

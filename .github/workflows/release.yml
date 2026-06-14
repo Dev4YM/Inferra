@@ -27,13 +27,13 @@ jobs:
         with:
           python-version: "3.12"
       - name: Install
-        run: python -m pip install -e ".[dev,legacy]"
+        run: python -m pip install -e ".[dev]"
       - name: Compile
-        run: python -m compileall tests deploy deprecated
+        run: python -m compileall tests deploy
       - name: Ruff
-        run: python -m ruff check tests deploy deprecated
+        run: python -m ruff check tests deploy
       - name: Test
-        run: python -m pytest -q
+        run: python -m pytest -q tests/unit/test_rust_packaging_contracts.py
 
   docs:
     needs: verify-python-support

@@ -15,10 +15,11 @@ use inferra_collectors::{
     configured_collectors, normalize_otlp_logs_protobuf_request, CollectorRuntime,
 };
 use inferra_config::{
-    apply_config_put, config_to_json, experience_from_config, load_merged_config, resolve_data_dir,
+    apply_config_put, config_to_json, experience_from_config, load_merged_config,
     observability_export_enabled, observability_export_url, observability_logs_fts_enabled,
     observability_otlp_logs_enabled, observability_otlp_max_logs_per_request,
-    observability_otlp_max_payload_bytes, server_listen, storage_retention_hours, Paths,
+    observability_otlp_max_payload_bytes, resolve_data_dir, server_listen, storage_retention_hours,
+    Paths,
 };
 use inferra_contracts::{
     AiDoctorResponse, AiStatusResponse, ApiVersionResponse, CollectorRow, CollectorsResponse,
@@ -33,14 +34,15 @@ use inferra_core::{
     adaptive_learning_save_review_view, adaptive_learning_set_artifact_state,
     adaptive_learning_summary, adaptive_learning_touch_review_view, ai_status_from_config,
     build_overview, build_overview_with_runtime_signals, build_workspace_map,
-    collect_host_resources_snapshot, collect_runtime_monitor_window, refresh_incident_reasoning,
-    try_collect_gpu_summary, workspace_app_live_resources, AdaptiveArtifactSelection,
-    AdaptiveSavedReviewViewDraft, OverviewRuntimeSignals, enrich_incident_rows_with_latest_traces,
+    collect_host_resources_snapshot, collect_runtime_monitor_window,
+    enrich_incident_rows_with_latest_traces, refresh_incident_reasoning, try_collect_gpu_summary,
+    workspace_app_live_resources, AdaptiveArtifactSelection, AdaptiveSavedReviewViewDraft,
+    OverviewRuntimeSignals,
 };
 use inferra_storage::{
     initialize_databases, AdaptiveLearningAuditQuery, AdaptiveLearningHistoryQuery, EventsStore,
-    IncidentsStore, LogsQuery, StoredAiGeneration, StoredAiTrace, StoredExplanation, StoredFeedback,
-    StoredUiSnapshot,
+    IncidentsStore, LogsQuery, StoredAiGeneration, StoredAiTrace, StoredExplanation,
+    StoredFeedback, StoredUiSnapshot,
 };
 use serde_json::{json, Value as JsonValue};
 use std::collections::{HashMap, HashSet};
@@ -256,10 +258,7 @@ pub fn app_router(state: AppState) -> Router {
             "/api/incidents/{incident_id}/events",
             get(api_incident_events),
         )
-        .route(
-            "/api/incidents/{incident_id}/logs",
-            get(api_incident_logs),
-        )
+        .route("/api/incidents/{incident_id}/logs", get(api_incident_logs))
         .route(
             "/api/incidents/{incident_id}/hypotheses",
             get(api_incident_hypotheses),
@@ -566,8 +565,7 @@ async fn api_put_config(
     let config_json = config_to_json(&new_cfg);
     let snapshot_json = config_json.clone();
     tokio::task::spawn_blocking(move || {
-        inferra_config::write_config(&config_path, &cfg_for_disk)
-            .map_err(|e| e.to_string())?;
+        inferra_config::write_config(&config_path, &cfg_for_disk).map_err(|e| e.to_string())?;
         persist_ui_snapshot(
             paths.as_ref(),
             SNAPSHOT_SETTINGS,
@@ -602,7 +600,11 @@ async fn api_overview(
     let cfg_for_overview = cfg.clone();
     let signals_for_overview = signals.clone();
     let overview = tokio::task::spawn_blocking(move || {
-        build_overview_with_runtime_signals(&cfg_for_overview, paths.as_ref(), Some(&signals_for_overview))
+        build_overview_with_runtime_signals(
+            &cfg_for_overview,
+            paths.as_ref(),
+            Some(&signals_for_overview),
+        )
     })
     .await
     .map_err(|error| (StatusCode::INTERNAL_SERVER_ERROR, error.to_string()))?
@@ -649,7 +651,8 @@ async fn api_metrics(State(state): State<AppState>) -> Response {
     let ex_dropped = export_sink::EXPORT_EVENTS_DROPPED.load(std::sync::atomic::Ordering::Relaxed);
     let ex_retries = export_sink::EXPORT_RETRIES_TOTAL.load(std::sync::atomic::Ordering::Relaxed);
     let ex_split = export_sink::EXPORT_BATCHES_SPLIT.load(std::sync::atomic::Ordering::Relaxed);
-    let ex_partial = export_sink::EXPORT_PARTIAL_REJECTIONS.load(std::sync::atomic::Ordering::Relaxed);
+    let ex_partial =
+        export_sink::EXPORT_PARTIAL_REJECTIONS.load(std::sync::atomic::Ordering::Relaxed);
     let ex_busy = export_sink::EXPORT_TICKS_SKIPPED_BUSY.load(std::sync::atomic::Ordering::Relaxed);
     let payload = format!(
         "# HELP inferra_events_total Approximate stored normalized events.\n# TYPE inferra_events_total counter\ninferra_events_total {event_count}\n# HELP inferra_active_incidents Active incidents (open, investigating, explained).\n# TYPE inferra_active_incidents gauge\ninferra_active_incidents {active_incidents}\n# HELP inferra_raw_queue_depth In-flight ingestion operations.\n# TYPE inferra_raw_queue_depth gauge\ninferra_raw_queue_depth {queue_depth}\n# HELP inferra_observability_export_batches_success_total OTLP export HTTP batches accepted by sink.\n# TYPE inferra_observability_export_batches_success_total counter\ninferra_observability_export_batches_success_total {ex_ok}\n# HELP inferra_observability_export_batches_failed_total OTLP export HTTP batches that failed or were rejected.\n# TYPE inferra_observability_export_batches_failed_total counter\ninferra_observability_export_batches_failed_total {ex_fail}\n# HELP inferra_observability_export_events_forwarded_total Event rows included in successful export batches.\n# TYPE inferra_observability_export_events_forwarded_total counter\ninferra_observability_export_events_forwarded_total {ex_events}\n# HELP inferra_observability_export_events_dropped_total Event rows skipped after sink rejection was isolated to a single poison record.\n# TYPE inferra_observability_export_events_dropped_total counter\ninferra_observability_export_events_dropped_total {ex_dropped}\n# HELP inferra_observability_export_retries_total Additional export attempts made after retryable sink failures.\n# TYPE inferra_observability_export_retries_total counter\ninferra_observability_export_retries_total {ex_retries}\n# HELP inferra_observability_export_batches_split_total Export batches recursively split after sink-side validation or partial rejection.\n# TYPE inferra_observability_export_batches_split_total counter\ninferra_observability_export_batches_split_total {ex_split}\n# HELP inferra_observability_export_partial_rejections_total Downstream OTLP partialSuccess rejected log record count observed by the exporter.\n# TYPE inferra_observability_export_partial_rejections_total counter\ninferra_observability_export_partial_rejections_total {ex_partial}\n# HELP inferra_observability_export_ticks_skipped_busy_total Export ticks skipped because a previous export was still running (backpressure).\n# TYPE inferra_observability_export_ticks_skipped_busy_total counter\ninferra_observability_export_ticks_skipped_busy_total {ex_busy}\n"
@@ -779,10 +782,7 @@ async fn api_logs(
                 retention_hours: retention,
                 service_id: params.get("service").cloned(),
                 min_severity: severity,
-                search: params
-                    .get("search")
-                    .or_else(|| params.get("q"))
-                    .cloned(),
+                search: params.get("search").or_else(|| params.get("q")).cloned(),
                 source_type: params.get("source_type").cloned(),
                 trace_id: params.get("trace_id").cloned(),
                 attr_key: params.get("attr_key").cloned(),
@@ -2552,8 +2552,10 @@ async fn api_collectors_start(
     if let Ok(next) = apply_config_put(current, &json!({ "collectors": { "auto_start": true } })) {
         let config_path = state.paths.config_path.clone();
         let next_for_write = next.clone();
-        let _ = tokio::task::spawn_blocking(move || inferra_config::write_config(&config_path, &next_for_write))
-            .await;
+        let _ = tokio::task::spawn_blocking(move || {
+            inferra_config::write_config(&config_path, &next_for_write)
+        })
+        .await;
         *state.config.write().await = next;
     }
     let cfg = state.config.read().await.clone();
@@ -2576,8 +2578,10 @@ async fn api_collectors_stop(
     if let Ok(next) = apply_config_put(current, &json!({ "collectors": { "auto_start": false } })) {
         let config_path = state.paths.config_path.clone();
         let next_for_write = next.clone();
-        let _ = tokio::task::spawn_blocking(move || inferra_config::write_config(&config_path, &next_for_write))
-            .await;
+        let _ = tokio::task::spawn_blocking(move || {
+            inferra_config::write_config(&config_path, &next_for_write)
+        })
+        .await;
         *state.config.write().await = next;
     }
     state
@@ -2692,8 +2696,7 @@ async fn api_otlp_logs(
         .and_then(|value| value.to_str().ok())
         .unwrap_or("")
         .to_ascii_lowercase();
-    let is_protobuf =
-        ct.contains("application/x-protobuf") || ct.contains("application/protobuf");
+    let is_protobuf = ct.contains("application/x-protobuf") || ct.contains("application/protobuf");
     if ct.contains("application/grpc") {
         return (
             StatusCode::UNSUPPORTED_MEDIA_TYPE,
@@ -2749,14 +2752,8 @@ async fn api_otlp_logs(
             }
         }
     };
-    if let Err(error) =
-        initialize_databases(&state.paths.events_db, &state.paths.incidents_db)
-    {
-        return (
-            StatusCode::INTERNAL_SERVER_ERROR,
-            error.to_string(),
-        )
-            .into_response();
+    if let Err(error) = initialize_databases(&state.paths.events_db, &state.paths.incidents_db) {
+        return (StatusCode::INTERNAL_SERVER_ERROR, error.to_string()).into_response();
     }
     let ingest_result = match state
         .collectors
@@ -2771,11 +2768,7 @@ async fn api_otlp_logs(
     {
         Ok(result) => result,
         Err(error) => {
-            return (
-                StatusCode::INTERNAL_SERVER_ERROR,
-                error.to_string(),
-            )
-                .into_response();
+            return (StatusCode::INTERNAL_SERVER_ERROR, error.to_string()).into_response();
         }
     };
     let msg = if ingest_result.inserted == 0 && ingest_result.rejected_log_records > 0 {
@@ -2816,8 +2809,9 @@ async fn cached_workspace_map(
         if let Some(snapshot) = read_ui_snapshot(state.paths.as_ref(), SNAPSHOT_WORKSPACE)? {
             let snapshot_age = ui_snapshot_age_seconds(&snapshot.updated_at).unwrap_or(u64::MAX);
             if snapshot_age < interval_seconds {
-                let mut value: WorkspaceMapResponse = serde_json::from_value(snapshot.payload.clone())
-                    .context("deserialize workspace snapshot")?;
+                let mut value: WorkspaceMapResponse =
+                    serde_json::from_value(snapshot.payload.clone())
+                        .context("deserialize workspace snapshot")?;
                 hydrate_workspace_runtime_app_traces(state.paths.as_ref(), &mut value)?;
                 state.scanner_cache.write().await.workspace = Some(CachedWorkspaceMap {
                     value: value.clone(),
@@ -2926,7 +2920,8 @@ fn workspace_app_latest_trace_summary(
                 let candidate_seen = candidate.last_seen_at.as_deref().unwrap_or("");
                 let current_seen = current.last_seen_at.as_deref().unwrap_or("");
                 candidate_seen > current_seen
-                    || (candidate_seen == current_seen && candidate.event_count > current.event_count)
+                    || (candidate_seen == current_seen
+                        && candidate.event_count > current.event_count)
             }
         };
         if replace {
@@ -2968,9 +2963,10 @@ async fn refresh_workspace_scan_cache(
     let interval_seconds = workspace_scan_interval_seconds(config);
     let paths = state.paths.clone();
     let config_for_scan = config.clone();
-    let mut value = tokio::task::spawn_blocking(move || build_workspace_map(&config_for_scan, paths.as_ref()))
-        .await
-        .context("workspace scan task failed")??;
+    let mut value =
+        tokio::task::spawn_blocking(move || build_workspace_map(&config_for_scan, paths.as_ref()))
+            .await
+            .context("workspace scan task failed")??;
     hydrate_workspace_runtime_app_traces(state.paths.as_ref(), &mut value)?;
     let cached = CachedWorkspaceMap {
         value: value.clone(),
@@ -3338,9 +3334,12 @@ async fn api_workspace_inspect(
     }
     let cfg = state.config.read().await;
     let requested = PathBuf::from(path.trim());
-    let canonical = requested
-        .canonicalize()
-        .map_err(|_| (StatusCode::NOT_FOUND, "workspace path not found".to_string()))?;
+    let canonical = requested.canonicalize().map_err(|_| {
+        (
+            StatusCode::NOT_FOUND,
+            "workspace path not found".to_string(),
+        )
+    })?;
     let roots = workspace_inspect_allowed_roots(&cfg, state.paths.as_ref());
     if !roots.iter().any(|root| canonical.starts_with(root)) {
         return Err((
@@ -5993,6 +5992,9 @@ mod tests {
             load_merged_config(&config_path).expect("load default config")
         } else {
             r#"
+[server]
+expose_prometheus_metrics = true
+
 [storage]
 data_dir = "data"
 
@@ -6463,7 +6465,9 @@ redact_env_files = true
             .get("markers")
             .and_then(JsonValue::as_array)
             .expect("markers");
-        assert!(markers.iter().any(|item| item.as_str() == Some("package.json")));
+        assert!(markers
+            .iter()
+            .any(|item| item.as_str() == Some("package.json")));
         assert!(!markers.iter().any(|item| item.as_str() == Some(".env")));
         assert_eq!(redacted.get("has_env_file"), Some(&JsonValue::Bool(false)));
 
@@ -6673,12 +6677,18 @@ redact_raw_logs = true
 
         let (healthz_status, healthz) = request_json(app.clone(), "GET", "/healthz", None).await;
         assert_eq!(healthz_status, StatusCode::OK);
-        assert_eq!(healthz.get("runtime").and_then(JsonValue::as_str), Some("rust"));
+        assert_eq!(
+            healthz.get("runtime").and_then(JsonValue::as_str),
+            Some("rust")
+        );
         assert!(healthz.get("config_path").is_none());
 
         let (readyz_status, readyz) = request_json(app.clone(), "GET", "/readyz", None).await;
         assert_eq!(readyz_status, StatusCode::OK);
-        assert_eq!(readyz.get("storage_writes_ok"), Some(&JsonValue::Bool(true)));
+        assert_eq!(
+            readyz.get("storage_writes_ok"),
+            Some(&JsonValue::Bool(true))
+        );
         assert!(readyz.get("events_db").is_none());
 
         let (api_status, api_body) = request_json(app, "GET", "/api/health", None).await;
@@ -6699,7 +6709,8 @@ redact_raw_logs = true
         require_bearer_token(&state, env_name).await;
         let app = middleware::apply_http_middleware(state.clone(), app_router(state));
 
-        let (unset_status, unset_body) = request_json(app.clone(), "GET", "/api/health", None).await;
+        let (unset_status, unset_body) =
+            request_json(app.clone(), "GET", "/api/health", None).await;
         assert_eq!(unset_status, StatusCode::SERVICE_UNAVAILABLE);
         assert!(unset_body
             .get("detail")
@@ -6712,14 +6723,22 @@ redact_raw_logs = true
         require_bearer_token(&state, env_name).await;
         let app = middleware::apply_http_middleware(state.clone(), app_router(state));
 
-        let (wrong_status, _) =
-            request_json(app.clone(), "GET", "/api/health", Some("Bearer wrong-token")).await;
+        let (wrong_status, _) = request_json(
+            app.clone(),
+            "GET",
+            "/api/health",
+            Some("Bearer wrong-token"),
+        )
+        .await;
         assert_eq!(wrong_status, StatusCode::UNAUTHORIZED);
 
         let (ok_status, ok_body) =
             request_json(app, "GET", "/api/health", Some("Bearer correct-token")).await;
         assert_eq!(ok_status, StatusCode::OK);
-        assert_eq!(ok_body.get("runtime").and_then(JsonValue::as_str), Some("rust"));
+        assert_eq!(
+            ok_body.get("runtime").and_then(JsonValue::as_str),
+            Some("rust")
+        );
         std::env::remove_var(env_name);
     }
 
@@ -6889,8 +6908,8 @@ redact_raw_logs = true
             .expect("open events db")
             .expect("events store");
 
-        let rows = workspace_app_events(&store, &app, &mappings, 72, 10)
-            .expect("workspace app events");
+        let rows =
+            workspace_app_events(&store, &app, &mappings, 72, 10).expect("workspace app events");
 
         assert_eq!(rows.len(), 2);
         assert_eq!(
@@ -6898,7 +6917,9 @@ redact_raw_logs = true
             Some("evt-2"),
             "newest api event should be reused for the mapped workspace app"
         );
-        assert!(rows.iter().all(|row| row.service_id.as_deref() == Some("api")));
+        assert!(rows
+            .iter()
+            .all(|row| row.service_id.as_deref() == Some("api")));
     }
 
     #[tokio::test]
@@ -6923,16 +6944,18 @@ redact_raw_logs = true
 
         let incident_logs = get_json(app.clone(), "/api/incidents/inc-1/logs").await;
         assert_eq!(
-            incident_logs["logs"]
-                .as_array()
-                .map(|items| items.len()),
+            incident_logs["logs"].as_array().map(|items| items.len()),
             Some(2)
         );
         let log_ids: std::collections::HashSet<String> = incident_logs["logs"]
             .as_array()
             .expect("logs")
             .iter()
-            .filter_map(|row| row.get("event_id").and_then(|v| v.as_str()).map(str::to_owned))
+            .filter_map(|row| {
+                row.get("event_id")
+                    .and_then(|v| v.as_str())
+                    .map(str::to_owned)
+            })
             .collect();
         assert!(log_ids.contains("evt-1"));
         assert!(log_ids.contains("evt-2"));
@@ -7498,11 +7521,7 @@ roots = ["{}"]
     #[tokio::test]
     async fn logs_v2_q_uses_fts_when_enabled() {
         let app = app_router(seeded_test_state("logs-v2-fts", false));
-        let payload = get_json(
-            app,
-            "/api/v2/logs?service=api&q=refused&limit=10",
-        )
-        .await;
+        let payload = get_json(app, "/api/v2/logs?service=api&q=refused&limit=10").await;
         assert_eq!(
             payload.get("log_fts_enabled").and_then(JsonValue::as_bool),
             Some(true)
@@ -7518,11 +7537,7 @@ roots = ["{}"]
     #[tokio::test]
     async fn trace_timeline_returns_chronological_items() {
         let app = app_router(seeded_test_state("trace-timeline", false));
-        let payload = get_json(
-            app,
-            "/api/traces/AABBCCDD0011223344556677889900AA?limit=20",
-        )
-        .await;
+        let payload = get_json(app, "/api/traces/AABBCCDD0011223344556677889900AA?limit=20").await;
         assert_eq!(payload.get("count"), Some(&JsonValue::Number(2.into())));
         let items = payload["items"].as_array().expect("items");
         assert_eq!(items.len(), 2);

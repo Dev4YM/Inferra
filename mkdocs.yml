@@ -20,6 +20,7 @@ nav:
       - Windows exe - start here: operations/windows_exe_build.md
       - AI provider: operations/ai_provider.md
       - Collectors: operations/collectors.md
+      - Workspace integration: operations/workspace_integration.md
       - Tuning: operations/tuning.md
       - Upgrade: operations/upgrade.md
       - Troubleshooting: operations/troubleshooting.md
@@ -38,49 +39,11 @@ nav:
       - CLI control plane: dossier/control_plane/cli_control_plane.md
       - Web control plane: dossier/control_plane/web_control_plane.md
       - AI investigation system: dossier/ai/ai_investigation_system.md
+      - AI integration notes: dossier/ai/feature_ai_integration.md
       - Workspace intelligence: dossier/workspace/workspace_intelligence.md
       - Execution roadmap: dossier/execution/execution_roadmap.md
       - Acceptance gates: dossier/execution/acceptance_gates.md
       - Open decisions: dossier/governance/open_decisions.md
-  - Architecture Decision Records:
-      - ADR 0001 - Local-first guided AI: adr/0001-local-first-guided-ai.md
-      - ADR 0002 - Flat src layout: adr/0002-flat-src-layout.md
-      - ADR 0003 - Storage protocols: adr/0003-storage-protocols.md
-      - ADR 0004 - Windows-first collectors: adr/0004-windows-first-collectors.md
-      - ADR 0005 - AI presentation-only: adr/0005-ai-presentation-only.md
-      - ADR 0006 - Ollama Gemma default: adr/0006-ollama-gemma-default.md
-  - Planning:
-      - Implementation roadmap: implementation_roadmap.md
-      - Architecture overview: planning/architecture_overview.md
-      - Full build architecture plan: planning/full_build_architecture_plan.md
-      - Data flow contracts: planning/data_flow_contracts.md
-      - Implementation index: planning/implementation_index.md
-      - Collectors and runtime:
-          - Collector architecture: planning/collector_architecture.md
-          - Runtime context builder: planning/runtime_context_builder.md
-          - Log normalization pipeline: planning/log_normalization_pipeline.md
-          - Event model: planning/event_model.md
-          - Event deduplication: planning/event_deduplication.md
-          - Noise filtering: planning/noise_filtering.md
-      - Analysis and reasoning:
-          - Anomaly detection: planning/anomaly_detection.md
-          - Correlation engine: planning/correlation_engine.md
-          - Incident lifecycle: planning/incident_lifecycle.md
-          - Causal graph engine: planning/causal_graph_engine.md
-          - Hypothesis engine: planning/hypothesis_engine.md
-          - Hypothesis validation: planning/hypothesis_validation.md
-          - Scoring engine: planning/scoring_engine.md
-          - Contradiction handling: planning/contradiction_handling.md
-          - Confidence calibration: planning/confidence_calibration.md
-      - Product contracts:
-          - Failure model: planning/failure_model.md
-          - Failure taxonomy: planning/failure_taxonomy.md
-          - Explanation layer: planning/explanation_layer.md
-          - Storage architecture: planning/storage_architecture.md
-          - UI spec: planning/ui_spec.md
-          - System limitations: planning/system_limitations.md
-          - Constraints: planning/constraints.md
-          - Testing strategy: planning/testing_strategy.md
 
 markdown_extensions:
   - toc:

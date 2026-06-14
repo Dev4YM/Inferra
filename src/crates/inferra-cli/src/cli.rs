@@ -43,7 +43,9 @@ pub enum Command {
         #[command(subcommand)]
         action: Option<RuntimeAction>,
     },
-    #[command(about = "Manage the Windows service install (API + dashboard run inside the service)")]
+    #[command(
+        about = "Manage the Windows service install (API + dashboard run inside the service)"
+    )]
     Service {
         #[command(subcommand)]
         action: Option<ServiceAction>,

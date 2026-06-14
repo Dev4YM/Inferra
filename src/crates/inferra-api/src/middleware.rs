@@ -99,7 +99,9 @@ fn bearer_matches(request: &Request<Body>, expected: &str) -> bool {
         .get(axum::http::header::AUTHORIZATION)
         .and_then(|value| value.to_str().ok())
         .unwrap_or_default();
-    let Some(token) = header.strip_prefix("Bearer ").or_else(|| header.strip_prefix("bearer "))
+    let Some(token) = header
+        .strip_prefix("Bearer ")
+        .or_else(|| header.strip_prefix("bearer "))
     else {
         return false;
     };
@@ -387,14 +389,8 @@ mod tests {
     #[test]
     fn rate_limit_routes_classified() {
         assert_eq!(rate_limit_bucket("/api/ai/ask"), Some("chat"));
-        assert_eq!(
-            rate_limit_bucket("/api/investigate/now"),
-            Some("chat")
-        );
-        assert_eq!(
-            rate_limit_bucket("/api/ai/report/inc-1"),
-            Some("explain")
-        );
+        assert_eq!(rate_limit_bucket("/api/investigate/now"), Some("chat"));
+        assert_eq!(rate_limit_bucket("/api/ai/report/inc-1"), Some("explain"));
         assert_eq!(rate_limit_bucket("/api/overview"), None);
     }
 

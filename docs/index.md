@@ -20,4 +20,4 @@ Deployment-focused guides include [Install](operations/install.md), **[Windows e
 
 The repository root README has the shortest quick start (`pip install`, `onboard`, `guide`, `serve`) and links back here for deeper install paths.
 
-Architecture decisions are under **Architecture Decision Records**. Design notes live under **Planning**, especially [Architecture overview](planning/architecture_overview.md), the [implementation index](planning/implementation_index.md), and the [full build architecture plan](planning/full_build_architecture_plan.md).
+Architecture and design notes live under **Reset Dossier**, especially the [target architecture](dossier/architecture/target_architecture.md), [execution roadmap](dossier/execution/execution_roadmap.md), and [AI investigation system](dossier/ai/ai_investigation_system.md).

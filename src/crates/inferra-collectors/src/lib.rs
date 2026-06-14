@@ -355,8 +355,12 @@ fn parse_collector_log_line(raw: &str) -> ParsedCollectorLog {
         .as_deref()
         .map(severity_from_level)
         .unwrap_or_else(|| severity_from_text(&parsed.message));
-    parsed.trace_id = object.get("trace_id").and_then(normalize_hex_trace_id_from_value);
-    parsed.span_id = object.get("span_id").and_then(normalize_hex_span_id_from_value);
+    parsed.trace_id = object
+        .get("trace_id")
+        .and_then(normalize_hex_trace_id_from_value);
+    parsed.span_id = object
+        .get("span_id")
+        .and_then(normalize_hex_span_id_from_value);
     if let Some((trace_id, span_id)) = object
         .get("traceparent")
         .and_then(serde_json::Value::as_str)
@@ -381,7 +385,10 @@ fn parse_collector_log_line(raw: &str) -> ParsedCollectorLog {
     ] {
         insert_scalar_json_attr(&mut parsed.attributes, key, object.get(key));
     }
-    if let Some(attrs) = object.get("attributes").and_then(serde_json::Value::as_object) {
+    if let Some(attrs) = object
+        .get("attributes")
+        .and_then(serde_json::Value::as_object)
+    {
         for (key, value) in attrs {
             insert_scalar_json_attr(&mut parsed.attributes, key, Some(value));
         }
@@ -952,7 +959,12 @@ impl CollectorRuntime {
             .get("severity_text")
             .and_then(|value| value.as_str())
             .map(str::to_string)
-            .or_else(|| payload.get("level").and_then(|v| v.as_str()).map(str::to_string));
+            .or_else(|| {
+                payload
+                    .get("level")
+                    .and_then(|v| v.as_str())
+                    .map(str::to_string)
+            });
         let event_id = next_event_id("app");
         let fingerprint = semantic_fingerprint(
             "app",
@@ -2673,7 +2685,11 @@ impl ThresholdState {
             span_id: None,
             signal_kind: "metric",
             deployment_environment: None,
-            severity_text: Some(if severity >= 2 { "warn".into() } else { "info".into() }),
+            severity_text: Some(if severity >= 2 {
+                "warn".into()
+            } else {
+                "info".into()
+            }),
         }))
     }
 }
@@ -2780,20 +2796,33 @@ fn collect_process_events(
         if hot {
             active_hot.insert(key.clone());
             if !seen_hot.contains(&key) {
-                let entered = [
-                    ("cpu", cpu_hot),
-                    ("memory", memory_hot),
-                ]
-                .into_iter()
-                .filter_map(|(name, active)| active.then_some(name))
-                .collect::<Vec<_>>();
+                let entered = [("cpu", cpu_hot), ("memory", memory_hot)]
+                    .into_iter()
+                    .filter_map(|(name, active)| active.then_some(name))
+                    .collect::<Vec<_>>();
                 let mut attrs = serde_json::Map::new();
                 insert_attr(&mut attrs, "process.pid", serde_json::json!(pid));
                 insert_attr(&mut attrs, "process.name", serde_json::json!(name));
-                insert_attr(&mut attrs, "process.cpu_percent", serde_json::json!(host_cpu));
-                insert_attr(&mut attrs, "process.memory_mb", serde_json::json!(memory_mb));
-                insert_attr(&mut attrs, "process.status", serde_json::json!(format!("{:?}", process.status())));
-                insert_attr(&mut attrs, "process.create_time", serde_json::json!(create_time));
+                insert_attr(
+                    &mut attrs,
+                    "process.cpu_percent",
+                    serde_json::json!(host_cpu),
+                );
+                insert_attr(
+                    &mut attrs,
+                    "process.memory_mb",
+                    serde_json::json!(memory_mb),
+                );
+                insert_attr(
+                    &mut attrs,
+                    "process.status",
+                    serde_json::json!(format!("{:?}", process.status())),
+                );
+                insert_attr(
+                    &mut attrs,
+                    "process.create_time",
+                    serde_json::json!(create_time),
+                );
                 let message = format!(
                     "process {name} pid={pid} high {} host_cpu={host_cpu:.1}% raw_process_cpu={cpu:.1}% memory={memory_mb:.1}MB",
                     entered.join(" and ")
@@ -2848,10 +2877,26 @@ fn collect_process_events(
             let mut attrs = serde_json::Map::new();
             insert_attr(&mut attrs, "process.pid", serde_json::json!(pid));
             insert_attr(&mut attrs, "process.name", serde_json::json!(name));
-            insert_attr(&mut attrs, "process.cpu_percent", serde_json::json!(host_cpu));
-            insert_attr(&mut attrs, "process.memory_mb", serde_json::json!(memory_mb));
-            insert_attr(&mut attrs, "process.status", serde_json::json!(format!("{:?}", process.status())));
-            insert_attr(&mut attrs, "process.create_time", serde_json::json!(create_time));
+            insert_attr(
+                &mut attrs,
+                "process.cpu_percent",
+                serde_json::json!(host_cpu),
+            );
+            insert_attr(
+                &mut attrs,
+                "process.memory_mb",
+                serde_json::json!(memory_mb),
+            );
+            insert_attr(
+                &mut attrs,
+                "process.status",
+                serde_json::json!(format!("{:?}", process.status())),
+            );
+            insert_attr(
+                &mut attrs,
+                "process.create_time",
+                serde_json::json!(create_time),
+            );
             events.push(collector_event(CollectorEventArgs {
                 id_prefix: "process",
                 timestamp: None,
@@ -2971,8 +3016,16 @@ fn collect_syslog_events(
                 fallback_message
             };
             let mut attrs = parsed.attributes;
-            insert_attr(&mut attrs, "log.file.path", serde_json::json!(path.display().to_string()));
-            insert_attr(&mut attrs, "log.raw_offset", serde_json::json!(current_offset));
+            insert_attr(
+                &mut attrs,
+                "log.file.path",
+                serde_json::json!(path.display().to_string()),
+            );
+            insert_attr(
+                &mut attrs,
+                "log.raw_offset",
+                serde_json::json!(current_offset),
+            );
             insert_attr(&mut attrs, "service.name", serde_json::json!(service_id));
             events.push(collector_event(CollectorEventArgs {
                 id_prefix: "syslog",
@@ -2992,7 +3045,11 @@ fn collect_syslog_events(
                 )),
                 host_id: None,
                 kind: CollectorEventKind::Log,
-                quality: if parsed.parsed_json.is_some() { "normalized" } else { "raw" },
+                quality: if parsed.parsed_json.is_some() {
+                    "normalized"
+                } else {
+                    "raw"
+                },
                 structured_data: Some(structured_with_attributes(
                     attrs,
                     "syslog",
@@ -3253,13 +3310,15 @@ fn collect_journald_events(
             span_id: None,
             signal_kind: "log",
             deployment_environment: None,
-            severity_text: Some(match severity_from_priority(priority) {
-                4 => "critical",
-                3 => "error",
-                2 => "warn",
-                _ => "info",
-            }
-            .into()),
+            severity_text: Some(
+                match severity_from_priority(priority) {
+                    4 => "critical",
+                    3 => "error",
+                    2 => "warn",
+                    _ => "info",
+                }
+                .into(),
+            ),
         }));
     }
     if let Some(cursor) = last_cursor {
@@ -3328,7 +3387,11 @@ fn collect_windows_eventlog_events(
         for item in parsed {
             newest = newest.max(item.record_id);
             let mut attrs = serde_json::Map::new();
-            insert_attr(&mut attrs, "windows.eventlog.channel", serde_json::json!(channel));
+            insert_attr(
+                &mut attrs,
+                "windows.eventlog.channel",
+                serde_json::json!(channel),
+            );
             insert_attr(
                 &mut attrs,
                 "windows.eventlog.record_id",
@@ -3434,7 +3497,9 @@ fn collect_windows_service_events(
         serde_json::to_string(&snapshot).context("serialize windows service snapshot")?;
     let previous = store
         .get_collector_state("windows_service", "snapshot")?
-        .and_then(|value| serde_json::from_str::<HashMap<String, WindowsServiceSnapshot>>(&value).ok());
+        .and_then(|value| {
+            serde_json::from_str::<HashMap<String, WindowsServiceSnapshot>>(&value).ok()
+        });
     store.set_collector_state("windows_service", "snapshot", &current_json, &now_iso())?;
     let mut events = Vec::new();
     for (service, current) in snapshot {
@@ -3454,20 +3519,33 @@ fn collect_windows_service_events(
         if previous_snapshot.is_none() && !automatic_stopped {
             continue;
         }
-        if !include_stopped && state == "stopped" && !(include_automatic_stopped && automatic_stopped)
+        if !include_stopped
+            && state == "stopped"
+            && !(include_automatic_stopped && automatic_stopped)
         {
             continue;
         }
         let severity = if automatic_stopped {
             3
-        } else if matches!(state.as_str(), "stopped" | "stop_pending" | "paused" | "pause_pending") {
+        } else if matches!(
+            state.as_str(),
+            "stopped" | "stop_pending" | "paused" | "pause_pending"
+        ) {
             2
         } else {
             1
         };
         let mut attrs = serde_json::Map::new();
-        insert_attr(&mut attrs, "windows.service.name", serde_json::json!(service_key));
-        insert_attr(&mut attrs, "windows.service.state", serde_json::json!(state));
+        insert_attr(
+            &mut attrs,
+            "windows.service.name",
+            serde_json::json!(service_key),
+        );
+        insert_attr(
+            &mut attrs,
+            "windows.service.state",
+            serde_json::json!(state),
+        );
         insert_attr(
             &mut attrs,
             "windows.service.previous_state",
@@ -3700,8 +3778,7 @@ fn docker_action_severity(action: &str) -> i64 {
         || lower.contains("health_status: unhealthy")
     {
         3
-    } else if matches!(lower.as_str(), "restart" | "stop" | "pause")
-        || lower.contains("unhealthy")
+    } else if matches!(lower.as_str(), "restart" | "stop" | "pause") || lower.contains("unhealthy")
     {
         2
     } else {
@@ -3796,7 +3873,11 @@ fn collect_kubernetes_events(
             insert_attr(&mut attrs, "k8s.namespace", serde_json::json!(namespace));
             insert_attr(&mut attrs, "k8s.event.reason", serde_json::json!(reason));
             insert_attr(&mut attrs, "k8s.event.type", serde_json::json!(event_type));
-            insert_attr(&mut attrs, "k8s.object.name", serde_json::json!(object_name));
+            insert_attr(
+                &mut attrs,
+                "k8s.object.name",
+                serde_json::json!(object_name),
+            );
             insert_attr(&mut attrs, "service.name", serde_json::json!(service_id));
             emitted.push(collector_event(CollectorEventArgs {
                 id_prefix: "k8s",
@@ -3898,7 +3979,8 @@ fn collect_kubernetes_events(
             let restart_count = kubernetes_restart_count(&item);
             let oom_killed = kubernetes_oom_killed(&item);
             let key = format!("{namespace}/{name}");
-            let state_signature = format!("{phase}|ready={ready}|restarts={restart_count}|oom={oom_killed}");
+            let state_signature =
+                format!("{phase}|ready={ready}|restarts={restart_count}|oom={oom_killed}");
             let noteworthy =
                 !phase.eq_ignore_ascii_case("running") || !ready || restart_count > 0 || oom_killed;
             if let Some(previous_state) = previous.get(&key) {
@@ -3920,7 +4002,11 @@ fn collect_kubernetes_events(
                         "k8s.pod.restart_count",
                         serde_json::json!(restart_count),
                     );
-                    insert_attr(&mut attrs, "k8s.pod.oom_killed", serde_json::json!(oom_killed));
+                    insert_attr(
+                        &mut attrs,
+                        "k8s.pod.oom_killed",
+                        serde_json::json!(oom_killed),
+                    );
                     insert_attr(&mut attrs, "service.name", serde_json::json!(service_id));
                     let node = item
                         .get("spec")
@@ -4003,16 +4089,16 @@ fn collect_kubernetes_events(
 fn kubernetes_workload_name(name: &str) -> String {
     let parts = name.split('-').collect::<Vec<_>>();
     if parts.len() >= 3
-        && parts
-            .last()
-            .is_some_and(|tail| tail.len() <= 6 && tail.chars().all(|ch| ch.is_ascii_alphanumeric()))
+        && parts.last().is_some_and(|tail| {
+            tail.len() <= 6 && tail.chars().all(|ch| ch.is_ascii_alphanumeric())
+        })
     {
         return parts[..parts.len() - 2].join("-");
     }
     if parts.len() >= 2
-        && parts
-            .last()
-            .is_some_and(|tail| tail.len() <= 10 && tail.chars().all(|ch| ch.is_ascii_alphanumeric()))
+        && parts.last().is_some_and(|tail| {
+            tail.len() <= 10 && tail.chars().all(|ch| ch.is_ascii_alphanumeric())
+        })
     {
         return parts[..parts.len() - 1].join("-");
     }
@@ -4059,7 +4145,11 @@ fn kubernetes_restart_count(pod: &serde_json::Value) -> i64 {
         .and_then(serde_json::Value::as_array)
         .into_iter()
         .flatten()
-        .filter_map(|status| status.get("restartCount").and_then(serde_json::Value::as_i64))
+        .filter_map(|status| {
+            status
+                .get("restartCount")
+                .and_then(serde_json::Value::as_i64)
+        })
         .sum()
 }
 
@@ -4181,7 +4271,11 @@ fn file_event_record(target: &FileTailTarget, message: &str, raw_offset: u64) ->
         )),
         host_id: None,
         kind: CollectorEventKind::Log,
-        quality: if parsed.parsed_json.is_some() { "normalized" } else { "raw" },
+        quality: if parsed.parsed_json.is_some() {
+            "normalized"
+        } else {
+            "raw"
+        },
         structured_data: Some(structured_with_attributes(
             attrs,
             "file",
@@ -4274,7 +4368,9 @@ fn parse_windows_service_snapshot(text: &str) -> HashMap<String, WindowsServiceS
             }
         } else if let Some((_, tail)) = line.split_once("STATE") {
             if let Some((_, value)) = tail.split_once(':') {
-                if let (Some(service), Some(state)) = (current.as_mut(), parse_state_value(value.trim())) {
+                if let (Some(service), Some(state)) =
+                    (current.as_mut(), parse_state_value(value.trim()))
+                {
                     service.state = state;
                 }
             }
@@ -4348,7 +4444,13 @@ fn parse_windows_start_type(raw: &str) -> Option<String> {
     } else if lower.trim().is_empty() {
         None
     } else {
-        Some(lower.split_whitespace().last().unwrap_or(lower.trim()).to_string())
+        Some(
+            lower
+                .split_whitespace()
+                .last()
+                .unwrap_or(lower.trim())
+                .to_string(),
+        )
     }
 }
 
@@ -4762,15 +4864,13 @@ fn payload_attribute_value<'a>(
     payload: &'a serde_json::Value,
     key: &str,
 ) -> Option<&'a serde_json::Value> {
-    payload
-        .as_object()
-        .and_then(|object| {
-            find_case_insensitive_json_value(object, key).or_else(|| {
-                find_case_insensitive_json_value(object, "attributes")
-                    .and_then(|value| value.as_object())
-                    .and_then(|attrs| find_case_insensitive_json_value(attrs, key))
-            })
+    payload.as_object().and_then(|object| {
+        find_case_insensitive_json_value(object, key).or_else(|| {
+            find_case_insensitive_json_value(object, "attributes")
+                .and_then(|value| value.as_object())
+                .and_then(|attrs| find_case_insensitive_json_value(attrs, key))
         })
+    })
 }
 
 fn find_case_insensitive_json_value<'a>(

@@ -5,8 +5,8 @@ use base64::{engine::general_purpose::STANDARD, Engine};
 use opentelemetry_proto::tonic::{
     collector::logs::v1::ExportLogsServiceRequest,
     common::v1::{
-        any_value::Value as ProtoAnyValue, AnyValue as ProtoAnyValueMessage,
-        InstrumentationScope, KeyValue,
+        any_value::Value as ProtoAnyValue, AnyValue as ProtoAnyValueMessage, InstrumentationScope,
+        KeyValue,
     },
     logs::v1::{LogRecord, ResourceLogs, ScopeLogs},
     resource::v1::Resource,
@@ -135,7 +135,11 @@ fn log_record_to_new_event(
     let deployment_environment = merged
         .get("deployment.environment")
         .and_then(json_as_string)
-        .or_else(|| merged.get("deployment_environment").and_then(json_as_string));
+        .or_else(|| {
+            merged
+                .get("deployment_environment")
+                .and_then(json_as_string)
+        });
 
     let trace_id = obj
         .get("traceId")
@@ -146,7 +150,10 @@ fn log_record_to_new_event(
         .and_then(|v| v.as_str())
         .and_then(parse_span_id);
 
-    let body = obj.get("body").map(any_value_to_json).unwrap_or(Value::Null);
+    let body = obj
+        .get("body")
+        .map(any_value_to_json)
+        .unwrap_or(Value::Null);
     let message = body_to_log_message(&body);
 
     let severity = severity_from_otel(sev_num, sev_text.as_deref());
@@ -195,7 +202,9 @@ fn log_record_to_new_event(
 
 fn json_u64(v: &Value) -> Option<u64> {
     match v {
-        Value::Number(n) => n.as_u64().or_else(|| n.as_i64().and_then(|i| u64::try_from(i).ok())),
+        Value::Number(n) => n
+            .as_u64()
+            .or_else(|| n.as_i64().and_then(|i| u64::try_from(i).ok())),
         Value::String(s) => s.trim().parse().ok(),
         _ => None,
     }
@@ -319,7 +328,10 @@ fn any_value_to_scalar_json(v: &Value) -> Option<Value> {
     if let Some(n) = v.get("doubleValue").and_then(json_f64) {
         return serde_json::Number::from_f64(n).map(Value::Number);
     }
-    if let Some(arr) = v.get("arrayValue").and_then(|a| a.get("values")).and_then(|a| a.as_array())
+    if let Some(arr) = v
+        .get("arrayValue")
+        .and_then(|a| a.get("values"))
+        .and_then(|a| a.as_array())
     {
         let mapped: Vec<Value> = arr.iter().map(any_value_to_json).collect();
         return Some(Value::Array(mapped));

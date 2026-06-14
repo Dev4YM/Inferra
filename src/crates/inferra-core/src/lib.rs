@@ -363,8 +363,11 @@ pub fn build_overview_with_runtime_signals(
     } else {
         vec![]
     };
-    let incidents =
-        enrich_incident_rows_with_latest_traces(incidents, incidents_db.as_ref(), events_db.as_ref())?;
+    let incidents = enrich_incident_rows_with_latest_traces(
+        incidents,
+        incidents_db.as_ref(),
+        events_db.as_ref(),
+    )?;
 
     let active_n = if let Some(ref db) = incidents_db {
         db.active_incident_count()?
@@ -8270,7 +8273,8 @@ pub fn enrich_incident_rows_with_latest_traces(
         .into_iter()
         .map(|mut incident| {
             let event_ids = incidents_db.incident_event_ids(&incident.incident_id)?;
-            incident.latest_trace_summary = events_db.latest_trace_summary_for_event_ids(&event_ids)?;
+            incident.latest_trace_summary =
+                events_db.latest_trace_summary_for_event_ids(&event_ids)?;
             Ok(incident)
         })
         .collect()

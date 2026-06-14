@@ -10,12 +10,12 @@ Inferra is a local-first AI-integrated runtime intelligence control plane. It ob
 | Deterministic ranking and scoring (rules + auditable state) with optional language explanations | A black-box “root cause AI” that silently changes scores |
 | Rust-first runtime shell + SQLite + React control plane | A cloud observability suite or mandatory SaaS dependency |
 
-Product positioning and AI boundaries are documented in [ADR 0001: Local-first guided AI](docs/adr/0001-local-first-guided-ai.md).
+Product positioning and AI boundaries are summarized in the [product vision](docs/dossier/product/product_vision.md) and [AI investigation system](docs/dossier/ai/ai_investigation_system.md) docs.
 
 ## Current Capabilities
 
 - Rust-first CLI/API/service runtime with SQLite local storage.
-- Legacy Python code has been moved under `deprecated/`; the active product path is Rust-first.
+- Legacy Python reference code may exist locally under `deprecated/` (gitignored); the active product path is Rust-first.
 - Native CLI for setup, database initialization, service management, incidents, events, services, collectors, config, workspace inspection, and AI investigation flows.
 - Experience modes are reflected in configuration defaults and the web UI.
 - React control plane under `src/web/frontend` with an Overview, Incidents, Systems, Evidence, AI Investigator, Workspace, Control, and Settings layout (no raw-JSON-first pages).
@@ -166,22 +166,14 @@ Archived Python reference code lives under `deprecated/` and is not part of the 
 
 ## Documentation
 
-**Architecture and planning**
+**Architecture and design**
 
-- [Full build architecture plan](docs/planning/full_build_architecture_plan.md) (source-of-truth architecture)
-- [Architecture overview](docs/planning/architecture_overview.md)
-- [Data flow contracts](docs/planning/data_flow_contracts.md)
-- [Implementation index (planning ↔ modules)](docs/planning/implementation_index.md)
-- [Implementation roadmap](docs/implementation_roadmap.md)
+- [Target architecture](docs/dossier/architecture/target_architecture.md)
+- [Execution roadmap](docs/dossier/execution/execution_roadmap.md)
+- [AI investigation system](docs/dossier/ai/ai_investigation_system.md)
+- [Repository reset plan](docs/dossier/architecture/repository_reset_plan.md)
 
-**Architecture Decision Records**
-
-- [ADR 0001 — Local-first guided AI](docs/adr/0001-local-first-guided-ai.md)
-- [ADR 0002 — Flat `src/` layout](docs/adr/0002-flat-src-layout.md)
-- [ADR 0003 — Storage protocols](docs/adr/0003-storage-protocols.md)
-- [ADR 0004 — Windows-first collectors](docs/adr/0004-windows-first-collectors.md)
-- [ADR 0005 — AI presentation-only](docs/adr/0005-ai-presentation-only.md)
-- [ADR 0006 — Ollama Gemma default](docs/adr/0006-ollama-gemma-default.md)
+Local planning scratch notes may live under `docs/planning/` (gitignored).
 
 **Operator guides**
 
@@ -214,17 +206,12 @@ Python is used for **developer tooling, docs, packaging-contract tests, and Rust
 
 ```text
 python -m pip install -e ".[dev]"
-python -m compileall tests deploy deprecated
+python -m compileall tests deploy
 python -m pytest -q tests/unit/test_rust_packaging_contracts.py
 INFERRA_BINARY=src/target/release/inferra python -m pytest -q tests/integration/test_rust_api.py -m integration
 ```
 
-Archived Python runtime tests under `deprecated/` are reference coverage only and require the **`[legacy]`** extra:
-
-```text
-python -m pip install -e ".[dev,legacy]"
-python -m pytest -q -m "not chaos and not perf"
-```
+Archived Python code under `deprecated/` is kept locally for reference only (gitignored) and is not part of CI.
 
 ## Non-Goals
 

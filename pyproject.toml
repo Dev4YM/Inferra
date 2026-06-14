@@ -7,30 +7,14 @@ name = "inferra"
 version = "0.2.0"
 description = """Local-first AI-integrated runtime intelligence control plane.
 
-The installable Python package exposes archived reference code under deprecated/ (see README).
-The active product runtime is the Rust workspace at src/Cargo.toml. Base Python dependencies are
-empty; archived modules and pytest need the optional [legacy] extra (see README Development)."""
+The shipping runtime is the Rust workspace at src/Cargo.toml. This Python project
+packages developer tooling, docs, and integration harnesses only."""
 readme = "README.md"
 requires-python = ">=3.11"
 keywords = ["observability", "debugging", "incident-response", "ollama", "sqlite"]
 dependencies = []
 
 [project.optional-dependencies]
-legacy = [
-  "argcomplete>=3.5",
-  "fastapi>=0.110",
-  "uvicorn[standard]>=0.27",
-  "networkx>=3.2",
-  "psutil>=5.9",
-  "pydantic>=2",
-  "aiofiles>=23",
-  "aiohttp>=3.9",
-  "rich>=13.9",
-  "tomli-w>=1.0",
-]
-windows = ["pywin32>=306"]
-build-windows = ["pyinstaller>=6,<8"]
-kubernetes = ["kubernetes>=29"]
 dev = [
   "pytest>=8",
   "pytest-asyncio>=0.23",
@@ -42,19 +26,8 @@ dev = [
 ui = ["playwright>=1.41"]
 docs = ["mkdocs>=1.6"]
 
-[project.scripts]
-inferra-python-legacy = "inferra_legacy.cli:main"
-
 [tool.setuptools]
-package-dir = {"" = "deprecated"}
 py-modules = []
-
-[tool.setuptools.packages.find]
-where = ["deprecated"]
-exclude = ["python_packages*", "windows-pyinstaller*", "python-runtime*"]
-
-[tool.setuptools.package-data]
-config = ["*.toml"]
 
 [tool.pytest.ini_options]
 testpaths = ["tests"]
@@ -71,21 +44,6 @@ markers = [
 ]
 filterwarnings = [
     "ignore::DeprecationWarning:websockets",
-]
-
-[tool.coverage.run]
-branch = false
-source = ["deprecated/inferra_legacy", "deploy/windows", "tests"]
-
-[tool.coverage.report]
-precision = 1
-fail_under = 80
-skip_empty = true
-include = [
-    "deprecated/inferra_legacy/**",
-    "deploy/windows/*.py",
-    "tests/unit/**",
-    "tests/integration/**",
 ]
 
 [tool.ruff]

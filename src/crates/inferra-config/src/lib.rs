@@ -475,9 +475,7 @@ pub fn validate_merged_config(config: &TomlValue) -> Result<()> {
         .unwrap_or_default()
         .trim();
     if !require_loopback && auth_token_env.is_empty() {
-        anyhow::bail!(
-            "server.auth_token_env is required when server.require_loopback is false"
-        );
+        anyhow::bail!("server.auth_token_env is required when server.require_loopback is false");
     }
     Ok(())
 }
@@ -674,7 +672,9 @@ auth_token_env = ""
             &json!({ "config": { "server": { "host": "0.0.0.0", "require_loopback": false } } }),
         )
         .expect_err("remote binding without auth should fail");
-        assert!(error.to_string().contains("server.auth_token_env is required"));
+        assert!(error
+            .to_string()
+            .contains("server.auth_token_env is required"));
     }
 
     #[test]

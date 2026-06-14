@@ -5,7 +5,7 @@ RUN npm ci
 COPY src/web/frontend/ .
 RUN npm run build
 
-FROM rust:1.87-bookworm AS rust-builder
+FROM rust:1.88-bookworm AS rust-builder
 
 WORKDIR /build
 COPY src/Cargo.toml src/Cargo.lock ./src/
