@@ -1,5 +1,5 @@
 <p align="center">
-  <img src="docs/assets/readme-hero.png" alt="Inferra Overview console on a warm macOS-style desktop backdrop" width="100%" />
+  <img src="docs/assets/readme-hero.png" alt="Inferra Overview console in a macOS-style window" width="100%" />
 </p>
 
 <h1 align="center">Inferra</h1>
@@ -94,7 +94,15 @@ Inferra is **Apache-2.0** licensed. We welcome issues, documentation improvement
 
 **Ship a fix** — fork, branch from `main`, keep PRs focused, and ensure CI passes (`cargo test`, `npm run build`, `python scripts/version.py verify`).
 
-Maintainers can regenerate `docs/assets/readme-hero.png` locally with the gitignored tooling under `mock/readme-hero/` (not published in the repository).
+Maintainers can regenerate `docs/assets/readme-hero.png` locally:
+
+```bash
+cd mock/readme-hero
+npm install
+npm run capture
+```
+
+That folder is a **standalone Vite app** (own `node_modules`, gitignored under `mock/`) that imports the real Overview UI from `src/web/frontend/src`.
 
 ## AI (optional)
 
