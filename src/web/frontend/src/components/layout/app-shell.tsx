@@ -1,12 +1,12 @@
 import { Menu, Moon, Sun, X } from "lucide-react";
 import { type ComponentType, type ReactNode, useState } from "react";
-import { NavLink } from "react-router-dom";
+import { NavLink, useLocation } from "react-router-dom";
 
 import type { Mode } from "@/lib/experience";
+import type { InferraRuntimeSnapshot } from "@/lib/inferra-runtime";
 import type { Theme } from "@/lib/theme";
-import { formatDisplayValue, formatModeLabel } from "@/lib/format";
 import { cn } from "@/lib/utils";
-import { Badge } from "@/components/ui/badge";
+import { InferraRuntimeRail } from "@/components/inferra/runtime-console";
 import { Button } from "@/components/ui/button";
 
 export type NavItem = {
@@ -25,6 +25,7 @@ export function AppShell({
   modeStatus,
   theme,
   onThemeChange,
+  inferraRuntime,
 }: {
   navItems: NavItem[];
   children: ReactNode;
@@ -33,19 +34,32 @@ export function AppShell({
   modeStatus?: string;
   theme: Theme;
   onThemeChange: (theme: Theme) => void;
+  inferraRuntime?: InferraRuntimeSnapshot;
 }) {
   const [open, setOpen] = useState(false);
+  const location = useLocation();
+  const isGraphPage = location.pathname === "/graph";
+
+  const investigate = navItems.filter((item) => ["/", "/incidents", "/systems", "/graph", "/evidence"].includes(item.to));
+  const tools = navItems.filter((item) => ["/ai", "/workspace", "/learning"].includes(item.to));
+  const runtimeNav = navItems.filter((item) => ["/control", "/settings"].includes(item.to));
+
+  const groups = [
+    { title: "Investigate", items: investigate },
+    { title: "Tools", items: tools },
+    { title: "Runtime", items: runtimeNav },
+  ].filter((group) => group.items.length > 0);
 
   return (
-    <div className="min-h-screen lg:grid lg:h-screen lg:grid-cols-[288px_minmax(0,1fr)] lg:overflow-hidden">
-      <div className="flex items-center justify-between border-b border-border/70 bg-background/70 px-4 py-3 backdrop-blur lg:hidden">
+    <div className="min-h-screen bg-background lg:grid lg:h-screen lg:grid-cols-[15.5rem_minmax(0,1fr)]">
+      <div className="flex items-center justify-between border-b border-border bg-sidebar px-4 py-3 lg:hidden">
         <div>
-          <p className="text-sm font-semibold uppercase tracking-[0.28em] text-primary/80">Inferra</p>
-          <p className="text-xs text-muted-foreground">runtime intelligence control plane</p>
+          <p className="font-data text-xs font-semibold tracking-[0.2em] text-sidebar-foreground">INFERRA</p>
+          <p className="text-xs text-sidebar-muted">local runtime console</p>
         </div>
-        <div className="flex items-center gap-2">
+        <div className="flex items-center gap-1">
           <Button
-            variant="outline"
+            variant="ghost"
             size="icon"
             type="button"
             aria-label={theme === "light" ? "Switch to dark theme" : "Switch to light theme"}
@@ -53,115 +67,118 @@ export function AppShell({
           >
             {theme === "light" ? <Moon className="size-4" /> : <Sun className="size-4" />}
           </Button>
-          <Button variant="outline" size="icon" type="button" aria-label="Toggle navigation" onClick={() => setOpen((v) => !v)}>
-          {open ? <X className="size-4" /> : <Menu className="size-4" />}
+          <Button variant="ghost" size="icon" type="button" aria-label="Toggle navigation" onClick={() => setOpen((v) => !v)}>
+            {open ? <X className="size-4" /> : <Menu className="size-4" />}
           </Button>
         </div>
       </div>
 
       <aside
         className={cn(
-          "fixed inset-y-0 left-0 z-40 w-[288px] transform border-r border-border/80 bg-background/95 p-4 shadow-2xl backdrop-blur-xl transition-transform duration-200 lg:static lg:h-screen lg:translate-x-0 lg:overflow-hidden",
+          "fixed inset-y-0 left-0 z-40 flex w-[15.5rem] flex-col border-r border-border bg-sidebar transition-transform duration-150 lg:static lg:h-screen lg:translate-x-0",
           open ? "translate-x-0" : "-translate-x-full lg:translate-x-0",
         )}
       >
-        <div className="glass-panel flex h-full max-h-full flex-col overflow-hidden rounded-2xl border border-border/70 p-4">
-          <div className="space-y-2">
-            <p className="text-sm font-semibold uppercase tracking-[0.32em] text-primary/90">Inferra</p>
+        <div className="border-b border-border px-4 py-4">
+          <div className="flex items-center gap-2.5">
+            <div className="flex size-8 items-center justify-center rounded-sm border border-border bg-panel-inset font-data text-sm font-bold text-accent">
+              I
+            </div>
             <div>
-              <h1 className="text-2xl font-semibold">Control Plane</h1>
-              <p className="text-sm text-muted-foreground">Local-first runtime investigation with safe AI guidance.</p>
+              <p className="font-data text-[11px] font-semibold tracking-[0.2em] text-accent">INFERRA</p>
+              <h1 className="text-base font-semibold leading-tight text-sidebar-foreground">Console</h1>
             </div>
           </div>
+          <p className="mt-2 text-xs leading-5 text-sidebar-muted">Read-only runtime investigation.</p>
+        </div>
 
-          <div className="mt-6 space-y-4 rounded-2xl border border-border/60 bg-background/35 p-3">
-            <div className="flex items-center justify-between">
-              <p className="text-xs font-semibold uppercase tracking-[0.25em] text-muted-foreground">Experience</p>
-              <Badge variant="outline">{formatModeLabel(mode)}</Badge>
+        <nav className="min-h-0 flex-1 overflow-y-auto px-2 py-3">
+          {groups.map((group) => (
+            <div key={group.title} className="mb-4">
+              <p className="px-2 pb-1 text-[10px] font-semibold uppercase tracking-[0.18em] text-sidebar-muted">{group.title}</p>
+              <div className="space-y-0.5">
+                {group.items.map((item) => {
+                  const Icon = item.icon;
+                  return (
+                    <NavLink
+                      key={item.to}
+                      end={item.to === "/"}
+                      onClick={() => setOpen(false)}
+                      to={item.to}
+                      className={({ isActive }) =>
+                        cn(
+                          "flex items-center gap-2.5 rounded-sm px-2.5 py-2 text-sm font-medium transition-colors",
+                          isActive
+                            ? "nav-rail-active bg-panel-inset text-sidebar-foreground"
+                            : "text-sidebar-muted hover:bg-panel-inset/70 hover:text-sidebar-foreground",
+                        )
+                      }
+                    >
+                      <Icon className="size-4 shrink-0 opacity-80" />
+                      <span>{item.label}</span>
+                    </NavLink>
+                  );
+                })}
+              </div>
             </div>
-            <div className="grid grid-cols-3 gap-1.5">
+          ))}
+        </nav>
+
+        <div className="mt-auto space-y-3 border-t border-border p-3">
+          {inferraRuntime ? <InferraRuntimeRail runtime={inferraRuntime} /> : null}
+          <div>
+            <p className="mb-1.5 px-1 text-[10px] font-semibold uppercase tracking-[0.18em] text-sidebar-muted">Experience</p>
+            <div className="grid grid-cols-3 gap-1">
               {MODES.map((value) => (
                 <Button
                   key={value}
-                  variant={value === mode ? "default" : "outline"}
+                  variant={value === mode ? "default" : "ghost"}
                   size="sm"
                   type="button"
+                  className="h-7 px-1 text-[11px]"
                   aria-pressed={value === mode}
                   onClick={() => onModeChange(value)}
                 >
-                  {formatModeLabel(value)}
+                  {value === "operator" ? "Op" : value === "expert" ? "Exp" : "Dev"}
                 </Button>
               ))}
             </div>
-            <div className="flex items-center justify-between">
-              <p className="text-xs font-semibold uppercase tracking-[0.25em] text-muted-foreground">Appearance</p>
-              <Badge variant="outline">{formatDisplayValue(theme)}</Badge>
-            </div>
-            <div className="grid grid-cols-2 gap-1.5">
-              <Button
-                variant={theme === "light" ? "default" : "outline"}
-                size="sm"
-                type="button"
-                aria-pressed={theme === "light"}
-                onClick={() => onThemeChange("light")}
-              >
-                <Sun className="size-4" />
-                Light
-              </Button>
-              <Button
-                variant={theme === "dark" ? "default" : "outline"}
-                size="sm"
-                type="button"
-                aria-pressed={theme === "dark"}
-                onClick={() => onThemeChange("dark")}
-              >
-                <Moon className="size-4" />
-                Dark
-              </Button>
-            </div>
-            {modeStatus ? <p className="text-xs leading-5 text-muted-foreground">{modeStatus}</p> : null}
+            {modeStatus ? <p className="mt-2 px-1 text-[11px] leading-4 text-sidebar-muted">{modeStatus}</p> : null}
           </div>
-
-          <nav className="mt-6 min-h-0 flex-1 space-y-1 overflow-y-auto pr-1">
-            {navItems.map((item) => {
-              const Icon = item.icon;
-              return (
-                <NavLink
-                  key={item.to}
-                  end={item.to === "/"}
-                  onClick={() => setOpen(false)}
-                  to={item.to}
-                  className={({ isActive }) =>
-                    cn(
-                      "flex items-center gap-3 rounded-xl px-3.5 py-2.5 text-sm font-medium transition hover:bg-secondary/80 hover:text-foreground",
-                      isActive
-                        ? "bg-primary/10 text-foreground shadow-[inset_0_0_0_1px_var(--ring)]"
-                        : "text-muted-foreground",
-                    )
-                  }
-                >
-                  <Icon className="size-4" />
-                  <span>{item.label}</span>
-                </NavLink>
-              );
-            })}
-          </nav>
-
-          <div className="mt-auto rounded-2xl border border-border/70 bg-secondary/40 p-4 text-xs leading-6 text-muted-foreground">
-            Local-first and read-only toward observed systems.
-            <br />
-            AI suggests, retries when needed, and never executes commands.
+          <div className="grid grid-cols-2 gap-1">
+            <Button
+              variant={theme === "light" ? "default" : "ghost"}
+              size="sm"
+              type="button"
+              className="h-7"
+              aria-pressed={theme === "light"}
+              onClick={() => onThemeChange("light")}
+            >
+              <Sun className="size-3.5" />
+              Light
+            </Button>
+            <Button
+              variant={theme === "dark" ? "default" : "ghost"}
+              size="sm"
+              type="button"
+              className="h-7"
+              aria-pressed={theme === "dark"}
+              onClick={() => onThemeChange("dark")}
+            >
+              <Moon className="size-3.5" />
+              Dark
+            </Button>
           </div>
         </div>
       </aside>
 
-      {open ? <button type="button" aria-label="Close navigation overlay" className="fixed inset-0 z-30 bg-black/40 lg:hidden" onClick={() => setOpen(false)} /> : null}
+      {open ? (
+        <button type="button" aria-label="Close navigation overlay" className="fixed inset-0 z-30 bg-black/50 lg:hidden" onClick={() => setOpen(false)} />
+      ) : null}
 
-      <main className="min-w-0 px-4 py-5 md:px-6 lg:h-screen lg:overflow-hidden lg:px-8 lg:py-8">
-        <div className="mx-auto h-full max-w-[1680px] overflow-hidden rounded-2xl border border-border/70 bg-background/70 p-4 shadow-[0_24px_90px_-56px_rgba(15,23,42,0.55)] backdrop-blur md:p-5">
-          <div className="h-full overflow-y-auto pr-1">
-            <div className="mx-auto max-w-[1520px] pb-4">{children}</div>
-          </div>
+      <main className="min-w-0 lg:h-screen lg:overflow-hidden">
+        <div className={cn("h-full", isGraphPage ? "overflow-hidden" : "overflow-y-auto px-4 py-5 md:px-8 md:py-6")}>
+          <div className={cn(isGraphPage ? "h-full" : "mx-auto max-w-[1480px] pb-8")}>{children}</div>
         </div>
       </main>
     </div>

@@ -544,6 +544,13 @@ pub fn build_overview_with_runtime_signals(
     })
 }
 
+fn is_infrastructure_service_id(service_id: &str) -> bool {
+    matches!(
+        service_id.trim().to_ascii_lowercase().as_str(),
+        "host" | "localhost"
+    )
+}
+
 pub fn build_workspace_map(config: &TomlValue, paths: &Paths) -> Result<WorkspaceMapResponse> {
     let enabled = workspace_enabled(config);
     let scan_root = paths.config_path.parent().unwrap_or(Path::new("."));
@@ -606,7 +613,7 @@ pub fn build_workspace_map(config: &TomlValue, paths: &Paths) -> Result<Workspac
         .collect();
     let unmapped_services = service_ids
         .into_iter()
-        .filter(|s| enabled && !mapped_services.contains(s))
+        .filter(|s| enabled && !mapped_services.contains(s) && !is_infrastructure_service_id(s))
         .collect();
     Ok(WorkspaceMapResponse {
         enabled,

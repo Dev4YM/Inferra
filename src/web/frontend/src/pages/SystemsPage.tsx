@@ -1,12 +1,14 @@
-import { Activity, AlertTriangle, Gauge, RefreshCcw, ServerCog, Waypoints } from "lucide-react";
-import { useState } from "react";
+import { Box, Container, Database, HardDrive, RefreshCcw, Server, Waypoints } from "lucide-react";
+import { useMemo, useState } from "react";
 import { Link, useParams } from "react-router-dom";
 
 import type {
   AnomalyStatus,
   AiGeneration,
   AiGenerationsResponse,
+  CollectorRow,
   InvestigationResponse,
+  OverviewResponse,
   ServiceDetailResponse,
   ServiceRow,
   TopologyEdge,
@@ -19,155 +21,232 @@ import { Td, Th, Table, TableWrap } from "@/components/ui/table";
 import { PageHeader } from "@/components/layout/page-header";
 import { EmptyState, ErrorState, LoadingState } from "@/components/feedback/states";
 import { InvestigationView } from "@/components/investigation/investigation-view";
+import {
+  ApplicationInventoryRow,
+  AttentionStrip,
+  ContainerInventoryRow,
+  DataStoreInventoryRow,
+  DeveloperServiceRegistry,
+  InventorySection,
+  InventorySummaryStrip,
+  ObservedServiceRow,
+  ServerInventoryCard,
+} from "@/components/inferra/systems-runtime-inventory";
 import type { Mode } from "@/lib/experience";
 import { isAdvancedMode } from "@/lib/experience";
 import { formatDisplayValue, formatRiskTone, formatRelativeDate, formatSeverityLabel, summarizeEvent } from "@/lib/format";
 import { buildTracePath, hasValidTraceId, shortTraceId } from "@/lib/observability";
+import { buildSystemsInventory, hasInventoryContent } from "@/lib/systems-inventory";
+import { useInferraRuntime } from "@/lib/inferra-runtime";
 import { useApiQuery } from "@/lib/query";
-import { RuntimeIdentity, RuntimeStatusCard, ServiceHealthBadge, riskTone } from "@/components/inferra/health";
-import { Sparkline } from "@/components/inferra/charts";
+import { ServiceHealthBadge } from "@/components/inferra/health";
 import { TraceSummaryInline } from "@/components/inferra/trace-summary";
 
 export function SystemsPage({ mode }: { mode: Mode }) {
+  const runtime = useInferraRuntime();
   const services = useApiQuery<{ services: ServiceRow[] }>("/api/services");
+  const overview = useApiQuery<OverviewResponse>("/api/overview", { staleTime: 15_000 });
+  const workspace = useApiQuery<WorkspaceMapResponse>("/api/workspace/map", { staleTime: 60_000 });
+  const collectors = useApiQuery<{ collectors: CollectorRow[] }>("/api/collectors", { staleTime: 15_000 });
 
-  if (services.isLoading && !services.data) {
-    return (
-      <div className="space-y-6">
-        <PageHeader title="Systems" subtitle="Services, processes, and dependency health." mode={mode} />
-        <LoadingState title="Loading systems" />
-      </div>
-    );
-  }
+  const loading = (services.isLoading && !services.data) || (overview.isLoading && !overview.data);
+  const error = services.errorMessage ?? overview.errorMessage;
 
-  if (services.errorMessage && !services.data) {
-    return (
-      <div className="space-y-6">
-        <PageHeader title="Systems" subtitle="Services, processes, and dependency health." mode={mode} />
-        <ErrorState description={services.errorMessage} onRetry={() => void services.reload()} />
-      </div>
-    );
-  }
+  const collectorStats = useMemo(() => {
+    const rows = collectors.data?.collectors ?? [];
+    const configured = rows.filter((row) => row.status !== "disabled").length;
+    const running = rows.filter((row) => row.is_running).length;
+    return { running, configured };
+  }, [collectors.data]);
 
+  const inventory = useMemo(
+    () =>
+      buildSystemsInventory(
+        services.data?.services ?? [],
+        overview.data,
+        workspace.data,
+        runtime.health,
+        collectorStats,
+      ),
+    [services.data, overview.data, workspace.data, runtime.health, collectorStats],
+  );
+
+  const refreshAll = () => {
+    void services.reload({ silent: true });
+    void overview.reload({ silent: true });
+    void workspace.reload({ silent: true });
+    void collectors.reload({ silent: true });
+  };
+
+  const refreshing = services.isRefreshing || overview.isRefreshing || workspace.isRefreshing || collectors.isRefreshing;
   const rows = services.data?.services ?? [];
-  const degraded = rows.filter((service) => ["critical", "degraded", "elevated"].includes(service.status));
-  const traceLinkedServices = rows.filter((service) => Boolean(service.latest_trace_summary));
-  const totalEvents = rows.reduce((sum, service) => sum + (service.event_count ?? 0), 0);
-  const totalErrors = rows.reduce((sum, service) => sum + (service.error_count ?? 0), 0);
+
+  if (loading) {
+    return (
+      <div className="space-y-6">
+        <PageHeader title="Systems" subtitle="Servers, applications, data stores, and platform runtimes." mode={mode} />
+        <LoadingState title="Loading runtime inventory" />
+      </div>
+    );
+  }
+
+  if (error && !services.data) {
+    return (
+      <div className="space-y-6">
+        <PageHeader title="Systems" subtitle="Servers, applications, data stores, and platform runtimes." mode={mode} />
+        <ErrorState description={error} onRetry={() => void services.reload()} />
+      </div>
+    );
+  }
 
   return (
     <div className="space-y-6">
       <PageHeader
         title="Systems"
-        subtitle="Observed services, their status, and recent event volume."
+        subtitle="Type-first runtime inventory — server, apps, data, and platform signals."
         mode={mode}
         actions={
-          <Button variant="outline" size="sm" onClick={() => void services.reload({ silent: true })}>
-            <RefreshCcw className={`size-4 ${services.isRefreshing ? "animate-spin" : ""}`} />
+          <Button variant="outline" size="sm" onClick={refreshAll}>
+            <RefreshCcw className={`size-4 ${refreshing ? "animate-spin" : ""}`} />
             Refresh
           </Button>
         }
       />
 
-      <div className="dashboard-grid">
-        <RuntimeStatusCard
-          icon={ServerCog}
-          label="Services"
-          value={String(rows.length)}
-          tone="info"
-          detail={`${traceLinkedServices.length} have a latest trace ready to inspect.`}
-        />
-        <RuntimeStatusCard icon={AlertTriangle} label="Needs attention" value={String(degraded.length)} tone={degraded.length ? "warning" : "success"} detail="Critical, degraded, or elevated services." />
-        <RuntimeStatusCard icon={Activity} label="Events" value={String(totalEvents)} tone="info" detail="Total events attached to service rows." />
-        <RuntimeStatusCard icon={Gauge} label="Errors" value={String(totalErrors)} tone={totalErrors ? "warning" : "success"} detail="Current known error count across services." />
-      </div>
+      <InventorySummaryStrip inventory={inventory} />
+      <AttentionStrip items={inventory.attention} />
 
-      {rows.length === 0 ? (
-        <EmptyState title="No services observed yet" description="Start collectors or ingest runtime events to populate the systems view." />
+      {!hasInventoryContent(inventory) ? (
+        <EmptyState
+          title="No runtime inventory yet"
+          description="Start collectors, enable workspace scanning, or ingest app events. Inferra groups what it can observe by server, application, and data store."
+          action={
+            <Button asChild>
+              <Link to="/control">Open Control</Link>
+            </Button>
+          }
+        />
       ) : (
         <div className="space-y-4">
-          <div className="grid gap-4 xl:grid-cols-3">
-            {rows.slice(0, 6).map((service) => (
-              <Link
-                key={service.service_id}
-                to={`/systems/${service.service_id}`}
-                className="rounded-2xl border border-border/70 bg-card/75 p-4 text-foreground shadow-sm transition hover:-translate-y-0.5 hover:border-primary/30 hover:opacity-100"
-              >
-                <div className="flex items-start justify-between gap-3">
-                  <RuntimeIdentity service={service.service_id} runtime="service" latency={service.last_event_at ? `last ${formatRelativeDate(service.last_event_at)}` : null} />
-                  <ServiceHealthBadge status={service.status} />
-                </div>
-                <div className="mt-4 grid grid-cols-2 gap-3 text-sm">
-                  <div className="rounded-xl border border-border/60 bg-background/35 p-3">
-                    <p className="text-xs text-muted-foreground">Events</p>
-                    <p className="mt-1 text-lg font-semibold">{service.event_count ?? 0}</p>
-                  </div>
-                  <div className="rounded-xl border border-border/60 bg-background/35 p-3">
-                    <p className="text-xs text-muted-foreground">Errors</p>
-                    <p className="mt-1 text-lg font-semibold">{service.error_count ?? 0}</p>
-                  </div>
-                </div>
-                <div className="mt-4">
-                  <Sparkline
-                    values={[1, 2, service.event_count ?? 0, service.error_count ?? 0, Math.max(1, service.event_count ?? 0)]}
-                    tone={riskTone(service.status) === "destructive" ? "critical" : riskTone(service.status) === "warning" ? "warning" : "success"}
-                  />
-                </div>
-                {service.latest_trace_summary ? (
-                  <div className="mt-4 flex flex-wrap items-center gap-2 text-xs text-muted-foreground">
-                    <Badge variant="info" className="font-mono">
-                      {shortTraceId(service.latest_trace_summary.trace_id)}
-                    </Badge>
-                    <span>{service.latest_trace_summary.event_count} traced rows</span>
-                    <span>last {formatRelativeDate(service.latest_trace_summary.last_seen_at)}</span>
-                  </div>
-                ) : null}
-              </Link>
-            ))}
-          </div>
+          <InventorySection
+            title="Server"
+            description="Host pressure, top processes, and machine-level evidence."
+            icon={HardDrive}
+            count={1}
+            emptyLabel="No host identity available from the runtime snapshot."
+          >
+            <ServerInventoryCard inventory={inventory} />
+          </InventorySection>
 
-          <TableWrap>
-            <Table>
-              <thead>
-                <tr>
-                  <Th>Service</Th>
-                  <Th>Status</Th>
-                  <Th>Events</Th>
-                  <Th>Errors</Th>
-                  <Th>Error rate</Th>
-                  <Th>Latest trace</Th>
-                  <Th>Last event</Th>
-                </tr>
-              </thead>
-              <tbody>
-                {rows.map((service) => (
-                  <tr key={service.service_id} className="transition hover:bg-secondary/50">
-                    <Td>
-                      <Link className="font-medium" to={`/systems/${service.service_id}`}>
-                        {service.service_id}
-                      </Link>
-                    </Td>
-                    <Td>
-                      <ServiceHealthBadge status={service.status} />
-                    </Td>
-                    <Td>{service.event_count ?? 0}</Td>
-                    <Td>{service.error_count ?? 0}</Td>
-                    <Td>{typeof service.error_ratio === "number" ? `${Math.round(service.error_ratio * 100)}%` : "-"}</Td>
-                    <Td>
-                      <TraceSummaryInline
-                        summary={service.latest_trace_summary}
-                        context={{ from: "service", serviceId: service.service_id }}
-                        emptyLabel="—"
-                      />
-                    </Td>
-                    <Td className="text-muted-foreground">{formatRelativeDate(service.last_event_at)}</Td>
-                  </tr>
-                ))}
-              </tbody>
-            </Table>
-          </TableWrap>
+          <InventorySection
+            title="Applications"
+            description="Live Python, Rust, Node, and other workspace runtimes with CPU, mapping, and log errors."
+            icon={Box}
+            count={inventory.applications.length}
+            emptyLabel="No mapped workspace apps detected. Run a workspace scan or start your dev processes."
+          >
+            <div className="grid gap-4 md:grid-cols-2 xl:grid-cols-3">
+              {inventory.applications.map((entry) => (
+                <ApplicationInventoryRow key={`${entry.app.name}-${entry.app.pid ?? "na"}`} entry={entry} />
+              ))}
+            </div>
+          </InventorySection>
+
+          <InventorySection
+            title="Data stores"
+            description="Postgres, MSSQL, Supabase, and other databases — from log signals or detected processes."
+            icon={Database}
+            count={inventory.dataStores.length}
+            emptyLabel="No database processes or log-attributed data stores observed."
+          >
+            {inventory.dataStores.map((store) => (
+              <DataStoreInventoryRow key={store.id} store={store} />
+            ))}
+          </InventorySection>
+
+          <InventorySection
+            title="Containers"
+            description="Docker workloads observed on this host."
+            icon={Container}
+            count={inventory.containers.length}
+            emptyLabel="No containers reported. Enable the Docker collector if this host runs containers."
+          >
+            {inventory.containers.map((container) => (
+              <ContainerInventoryRow key={container.name} container={container} />
+            ))}
+          </InventorySection>
+
+          {inventory.platformServices.length || inventory.otherServices.length ? (
+            <InventorySection
+              title="Platform & other observed services"
+              description="Windows services, ingress, and log-attributed services not tied to a workspace app."
+              icon={Server}
+              count={inventory.platformServices.length + inventory.otherServices.length}
+              emptyLabel="No additional services."
+            >
+              {[...inventory.platformServices, ...inventory.otherServices].map((service) => (
+                <ObservedServiceRow key={service.service_id} service={service} />
+              ))}
+            </InventorySection>
+          ) : null}
         </div>
       )}
+
+      {isAdvancedMode(mode) ? (
+        <div className="space-y-4">
+          <DeveloperServiceRegistry services={rows} />
+          {rows.length ? (
+            <Card>
+              <CardHeader>
+                <CardTitle>Service registry table</CardTitle>
+                <CardDescription>Developer view of internal service_id projections.</CardDescription>
+              </CardHeader>
+              <CardContent>
+                <TableWrap>
+                  <Table>
+                    <thead>
+                      <tr>
+                        <Th>Service</Th>
+                        <Th>Status</Th>
+                        <Th>Events</Th>
+                        <Th>Errors</Th>
+                        <Th>Error rate</Th>
+                        <Th>Latest trace</Th>
+                        <Th>Last event</Th>
+                      </tr>
+                    </thead>
+                    <tbody>
+                      {rows.map((service) => (
+                        <tr key={service.service_id} className="transition hover:bg-secondary/50">
+                          <Td>
+                            <Link className="font-medium" to={`/systems/${service.service_id}`}>
+                              {service.service_id}
+                            </Link>
+                          </Td>
+                          <Td>
+                            <ServiceHealthBadge status={service.status} />
+                          </Td>
+                          <Td>{service.event_count ?? 0}</Td>
+                          <Td>{service.error_count ?? 0}</Td>
+                          <Td>{typeof service.error_ratio === "number" ? `${Math.round(service.error_ratio * 100)}%` : "-"}</Td>
+                          <Td>
+                            <TraceSummaryInline
+                              summary={service.latest_trace_summary}
+                              context={{ from: "service", serviceId: service.service_id }}
+                              emptyLabel="—"
+                            />
+                          </Td>
+                          <Td className="text-muted-foreground">{formatRelativeDate(service.last_event_at)}</Td>
+                        </tr>
+                      ))}
+                    </tbody>
+                  </Table>
+                </TableWrap>
+              </CardContent>
+            </Card>
+          ) : null}
+        </div>
+      ) : null}
     </div>
   );
 }
@@ -271,7 +350,7 @@ export function ServiceDetailPage({ mode }: { mode: Mode }) {
             </CardHeader>
             <CardContent className="space-y-4 text-sm">
               {anomaly.data ? (
-                <div className="rounded-2xl border border-border/60 bg-background/30 p-4">
+                <div className="rounded-md border border-border bg-panel-inset p-4">
                   <div className="flex flex-wrap items-center gap-2">
                     <Badge variant={formatRiskTone(anomaly.data.status)}>{formatDisplayValue(anomaly.data.status)}</Badge>
                     <span className="text-muted-foreground">{anomaly.data.event_count} events in {anomaly.data.window_hours}h</span>
@@ -287,7 +366,7 @@ export function ServiceDetailPage({ mode }: { mode: Mode }) {
               {topologyEdges.length ? (
                 <div className="space-y-2">
                   {topologyEdges.map((edge, index) => (
-                    <div key={`${edge.source}-${edge.target}-${index}`} className="rounded-2xl border border-border/60 bg-background/30 p-4">
+                    <div key={`${edge.source}-${edge.target}-${index}`} className="rounded-md border border-border bg-panel-inset p-4">
                       <p className="font-medium">
                         {edge.source} {formatDisplayValue(edge.relation_type ?? edge.type ?? "relates_to")} {edge.target}
                       </p>
@@ -308,7 +387,7 @@ export function ServiceDetailPage({ mode }: { mode: Mode }) {
             <CardContent className="space-y-3 text-sm">
               {workspaceMappings.length ? (
                 workspaceMappings.map((mapping) => (
-                  <div key={`${mapping.service_id}-${mapping.project_path}`} className="rounded-2xl border border-border/60 bg-background/30 p-4">
+                  <div key={`${mapping.service_id}-${mapping.project_path}`} className="rounded-md border border-border bg-panel-inset p-4">
                     <p className="font-medium">{mapping.project_path}</p>
                     <p className="mt-1 text-muted-foreground">
                       Confidence {(mapping.confidence * 100).toFixed(0)}% via {formatDisplayValue(mapping.source)}
@@ -329,7 +408,7 @@ export function ServiceDetailPage({ mode }: { mode: Mode }) {
             <CardContent className="space-y-3">
               {detail.data.incidents.length ? (
                 detail.data.incidents.map((incident) => (
-                  <div key={incident.incident_id} className="rounded-2xl border border-border/60 bg-background/30 p-4">
+                  <div key={incident.incident_id} className="rounded-md border border-border bg-panel-inset p-4">
                     <div className="flex items-center justify-between gap-3">
                       <Link className="font-medium" to={`/incidents/${incident.incident_id}`}>
                         {incident.incident_id}
@@ -364,7 +443,7 @@ export function ServiceDetailPage({ mode }: { mode: Mode }) {
             <CardContent className="space-y-3">
               {detail.data.events.length ? (
                 detail.data.events.slice(0, isAdvancedMode(mode) ? 24 : 10).map((event) => (
-                  <div key={event.event_id} className="rounded-2xl border border-border/60 bg-background/30 p-4">
+                  <div key={event.event_id} className="rounded-md border border-border bg-panel-inset p-4">
                     <div className="flex flex-wrap items-center justify-between gap-2">
                       <div className="flex flex-wrap items-center gap-2">
                         <Badge variant={formatRiskTone(event.severity ? String(event.severity) : serviceStatus)}>

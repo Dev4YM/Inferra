@@ -13,16 +13,18 @@ import {
   Siren,
   Workflow,
 } from "lucide-react";
-import { Link, Route, Routes } from "react-router-dom";
-import { Toaster, toast } from "sonner";
+import { Link, Route, Routes, useLocation } from "react-router-dom";
+import { Toaster } from "sonner";
 
-import { ApiError, type ConfigResponse, type InferraConfigPayload, fetchJson, putJson } from "@/api";
+import { ApiError, type ConfigResponse } from "@/api";
+import { InferraRuntimeBanner } from "@/components/inferra/runtime-console";
 import { AppShell, type NavItem } from "@/components/layout/app-shell";
 import { Alert, AlertDescription, AlertTitle } from "@/components/ui/alert";
 import { Button } from "@/components/ui/button";
 import { configMode, type Mode, useMode } from "@/lib/experience";
 import { formatModeLabel } from "@/lib/format";
 import { useApiQuery } from "@/lib/query";
+import { useInferraRuntime } from "@/lib/inferra-runtime";
 import { useTheme } from "@/lib/theme";
 import { AiInvestigatorPage } from "@/pages/AiInvestigatorPage";
 import { ControlPage } from "@/pages/ControlPage";
@@ -53,44 +55,32 @@ export default function App() {
   const [mode, setMode] = useMode();
   const [theme, setTheme] = useTheme();
   const [modeStatus, setModeStatus] = useState("");
+  const runtime = useInferraRuntime();
   const configState = useApiQuery<ConfigResponse>("/api/config");
   const authError =
     configState.error instanceof ApiError && [401, 403, 503].includes(configState.error.status)
       ? configState.errorMessage
       : null;
+  const location = useLocation();
+  const isGraphPage = location.pathname === "/graph";
 
   useEffect(() => {
+    if (!configState.data) return;
     const persisted = configMode(configState.data?.config);
-    if (persisted && persisted !== mode) {
+    if (!persisted) return;
+    const stored =
+      typeof window !== "undefined" ? window.localStorage.getItem("inferra.mode") : null;
+    if (!stored && persisted !== mode) {
       setMode(persisted);
     }
   }, [configState.data, mode, setMode]);
 
-  const persistMode = useCallback(
-    async (nextMode: Mode) => {
+  const applyMode = useCallback(
+    (nextMode: Mode) => {
       setMode(nextMode);
-      setModeStatus("Saving mode to config…");
-      try {
-        const current = configState.data?.config ?? (await fetchJson<ConfigResponse>("/api/config")).config;
-        const nextConfig: InferraConfigPayload = {
-          ...current,
-          experience: {
-            ...(current.experience ?? {}),
-            mode: nextMode,
-            show_raw_evidence_by_default: nextMode !== "operator",
-          },
-        };
-        const saved = await putJson<ConfigResponse>("/api/config", { config: nextConfig });
-        setModeStatus(saved.applied ? "Mode saved to config." : "Mode updated locally.");
-        toast.success("Experience mode updated", { description: `${formatModeLabel(nextMode)} mode is now active.` });
-        void configState.reload({ silent: true });
-      } catch (error) {
-        const message = error instanceof Error ? error.message : String(error);
-        setModeStatus(`Mode is local only: ${message}`);
-        toast.warning("Mode could not be persisted to config", { description: message });
-      }
+      setModeStatus(`${formatModeLabel(nextMode)} mode (this browser only).`);
     },
-    [configState, setMode],
+    [setMode],
   );
 
   return (
@@ -98,18 +88,20 @@ export default function App() {
       <AppShell
         navItems={NAV_ITEMS}
         mode={mode}
-        onModeChange={(next) => void persistMode(next)}
+        onModeChange={applyMode}
         modeStatus={modeStatus}
         theme={theme}
         onThemeChange={setTheme}
+        inferraRuntime={runtime}
       >
-        {configState.isRefreshing ? (
-          <div className="mb-4 flex items-center gap-2 rounded-2xl border border-border/70 bg-card/60 px-4 py-2 text-sm text-muted-foreground">
-            <Activity className="size-4 animate-pulse text-primary" />
-            Syncing config and refreshing control-plane state…
+        {!isGraphPage && configState.isRefreshing ? (
+          <div className="mb-4 flex items-center gap-2 rounded-md border border-border bg-card px-3 py-2 text-sm text-muted-foreground">
+            <Activity className="size-4 animate-pulse" />
+            Syncing config…
           </div>
         ) : null}
-        {authError ? (
+        {!isGraphPage ? <InferraRuntimeBanner runtime={runtime} /> : null}
+        {!isGraphPage && authError ? (
           <Alert variant="warning" className="mb-4">
             <AlertTriangle className="size-4" />
             <div className="min-w-0">
@@ -149,9 +141,9 @@ export default function App() {
 function NotFoundPage({ mode }: { mode: Mode }) {
   return (
     <div className="space-y-6">
-      <div className="rounded-3xl border border-dashed border-border bg-card/70 p-8 text-center shadow-sm">
-        <p className="text-xs font-semibold uppercase tracking-[0.25em] text-muted-foreground">{formatModeLabel(mode)} mode</p>
-        <h1 className="mt-3 text-3xl font-semibold tracking-tight">Page not found</h1>
+      <div className="rounded-md border border-dashed border-border bg-card p-8 text-center">
+        <p className="font-data text-xs text-muted-foreground">{formatModeLabel(mode)}</p>
+        <h1 className="mt-2 text-xl font-semibold tracking-tight">Page not found</h1>
         <p className="mx-auto mt-3 max-w-xl text-sm leading-6 text-muted-foreground">
           This route is not part of the Inferra console. Return to the overview or use the sidebar navigation.
         </p>

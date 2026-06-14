@@ -1599,7 +1599,26 @@ async fn run_host_metrics(
             break;
         }
         let observed_at = now_iso();
-        let sample = collect_host_sample();
+        let sample = match tokio::task::spawn_blocking(collect_host_sample).await {
+            Ok(sample) => sample,
+            Err(error) => {
+                record_collector_error(
+                    &runtime,
+                    &events_db,
+                    &incidents_db,
+                    &config,
+                    collector_id,
+                    source_type,
+                    &format!("host sample task failed: {error}"),
+                )
+                .await;
+                tokio::select! {
+                    _ = stop_rx.changed() => {},
+                    _ = tokio::time::sleep(poll_interval) => {},
+                }
+                continue;
+            }
+        };
         match sample {
             Ok(sample) => {
                 let events = state
@@ -1674,15 +1693,27 @@ async fn run_process_snapshot(
             break;
         }
         let observed_at = now_iso();
-        match collect_process_events(
-            top_n,
-            min_cpu_percent,
-            min_memory_mb,
-            &watch_processes,
-            &watch_pids,
-            &mut seen_hot,
-        ) {
-            Ok(events) => {
+        let top_n = top_n;
+        let min_cpu_percent = min_cpu_percent;
+        let min_memory_mb = min_memory_mb;
+        let watch_processes = watch_processes.clone();
+        let watch_pids = watch_pids.clone();
+        let mut seen_hot_local = seen_hot.clone();
+        let collect_result = tokio::task::spawn_blocking(move || {
+            collect_process_events(
+                top_n,
+                min_cpu_percent,
+                min_memory_mb,
+                &watch_processes,
+                &watch_pids,
+                &mut seen_hot_local,
+            )
+            .map(|events| (events, seen_hot_local))
+        })
+        .await;
+        match collect_result {
+            Ok(Ok((events, updated_seen))) => {
+                seen_hot = updated_seen;
                 handle_collected_events(
                     &runtime,
                     &events_db,
@@ -1695,7 +1726,7 @@ async fn run_process_snapshot(
                 )
                 .await;
             }
-            Err(error) => {
+            Ok(Err(error)) => {
                 record_collector_error(
                     &runtime,
                     &events_db,
@@ -1704,6 +1735,18 @@ async fn run_process_snapshot(
                     collector_id,
                     source_type,
                     &format!("{error:#}"),
+                )
+                .await
+            }
+            Err(error) => {
+                record_collector_error(
+                    &runtime,
+                    &events_db,
+                    &incidents_db,
+                    &config,
+                    collector_id,
+                    source_type,
+                    &format!("process snapshot task failed: {error}"),
                 )
                 .await
             }
@@ -1924,8 +1967,14 @@ async fn run_windows_eventlog(
             break;
         }
         let observed_at = now_iso();
-        match collect_windows_eventlog_events(&events_db, &channels) {
-            Ok(events) => {
+        let events_db_for_collect = events_db.clone();
+        let channels_for_collect = channels.clone();
+        let collect_result = tokio::task::spawn_blocking(move || {
+            collect_windows_eventlog_events(&events_db_for_collect, &channels_for_collect)
+        })
+        .await;
+        match collect_result {
+            Ok(Ok(events)) => {
                 handle_collected_events(
                     &runtime,
                     &events_db,
@@ -1938,7 +1987,7 @@ async fn run_windows_eventlog(
                 )
                 .await;
             }
-            Err(error) => {
+            Ok(Err(error)) => {
                 record_collector_error(
                     &runtime,
                     &events_db,
@@ -1947,6 +1996,18 @@ async fn run_windows_eventlog(
                     collector_id,
                     source_type,
                     &format!("{error:#}"),
+                )
+                .await
+            }
+            Err(error) => {
+                record_collector_error(
+                    &runtime,
+                    &events_db,
+                    &incidents_db,
+                    &config,
+                    collector_id,
+                    source_type,
+                    &format!("windows eventlog task failed: {error}"),
                 )
                 .await
             }
@@ -1977,13 +2038,21 @@ async fn run_windows_service(
             break;
         }
         let observed_at = now_iso();
-        match collect_windows_service_events(
-            &events_db,
-            include_stopped,
-            include_automatic_stopped,
-            &names,
-        ) {
-            Ok(events) => {
+        let events_db_for_collect = events_db.clone();
+        let include_stopped = include_stopped;
+        let include_automatic_stopped = include_automatic_stopped;
+        let names = names.clone();
+        let collect_result = tokio::task::spawn_blocking(move || {
+            collect_windows_service_events(
+                &events_db_for_collect,
+                include_stopped,
+                include_automatic_stopped,
+                &names,
+            )
+        })
+        .await;
+        match collect_result {
+            Ok(Ok(events)) => {
                 handle_collected_events(
                     &runtime,
                     &events_db,
@@ -1996,7 +2065,7 @@ async fn run_windows_service(
                 )
                 .await;
             }
-            Err(error) => {
+            Ok(Err(error)) => {
                 record_collector_error(
                     &runtime,
                     &events_db,
@@ -2005,6 +2074,18 @@ async fn run_windows_service(
                     collector_id,
                     source_type,
                     &format!("{error:#}"),
+                )
+                .await
+            }
+            Err(error) => {
+                record_collector_error(
+                    &runtime,
+                    &events_db,
+                    &incidents_db,
+                    &config,
+                    collector_id,
+                    source_type,
+                    &format!("windows service task failed: {error}"),
                 )
                 .await
             }
@@ -2280,8 +2361,21 @@ async fn handle_collected_events(
             .await;
         return;
     }
-    match persist_events_and_reconcile(events_db, incidents_db, config, &events) {
-        Ok(result) => {
+    let events_db_owned = events_db.to_path_buf();
+    let incidents_db_owned = incidents_db.to_path_buf();
+    let config_owned = config.clone();
+    let events_owned = events;
+    let persist_result = tokio::task::spawn_blocking(move || {
+        persist_events_and_reconcile(
+            &events_db_owned,
+            &incidents_db_owned,
+            &config_owned,
+            &events_owned,
+        )
+    })
+    .await;
+    match persist_result {
+        Ok(Ok(result)) => {
             runtime
                 .bump_success(
                     collector_id,
@@ -2292,7 +2386,7 @@ async fn handle_collected_events(
                 )
                 .await;
         }
-        Err(error) => {
+        Ok(Err(error)) => {
             record_collector_error(
                 runtime,
                 events_db,
@@ -2301,6 +2395,18 @@ async fn handle_collected_events(
                 collector_id,
                 source_type,
                 &format!("{error:#}"),
+            )
+            .await;
+        }
+        Err(error) => {
+            record_collector_error(
+                runtime,
+                events_db,
+                incidents_db,
+                config,
+                collector_id,
+                source_type,
+                &format!("persist task failed: {error}"),
             )
             .await;
         }

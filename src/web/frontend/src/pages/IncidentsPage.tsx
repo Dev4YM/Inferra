@@ -23,6 +23,7 @@ import { Card, CardContent, CardDescription, CardHeader, CardTitle } from "@/com
 import { Td, Th, Table, TableWrap } from "@/components/ui/table";
 import { Textarea } from "@/components/ui/textarea";
 import { PageHeader } from "@/components/layout/page-header";
+import { FilterBar, FilterChip } from "@/components/layout/console-patterns";
 import { EmptyState, ErrorState, LoadingState } from "@/components/feedback/states";
 import { InvestigationView } from "@/components/investigation/investigation-view";
 import { AlternativeHypotheses, HypothesisPanel, SuggestedChecks } from "@/components/inferra/incident";
@@ -37,6 +38,7 @@ import { useApiMutation, useApiQuery } from "@/lib/query";
 
 export function IncidentsPage({ mode }: { mode: Mode }) {
   const incidents = useApiQuery<{ incidents: IncidentRow[] }>("/api/incidents");
+  const [stateFilter, setStateFilter] = useState<"all" | "open" | "resolved">("open");
 
   if (incidents.isLoading && !incidents.data) {
     return (
@@ -57,12 +59,16 @@ export function IncidentsPage({ mode }: { mode: Mode }) {
   }
 
   const rows = incidents.data?.incidents ?? [];
+  const openRows = rows.filter((incident) => incident.state !== "resolved");
+  const resolvedRows = rows.filter((incident) => incident.state === "resolved");
+  const visibleRows =
+    stateFilter === "open" ? openRows : stateFilter === "resolved" ? resolvedRows : rows;
 
   return (
-    <div className="space-y-6">
+    <div className="space-y-5">
       <PageHeader
         title="Incidents"
-        subtitle="Active failures, their severity, and the latest evidence-backed routes."
+        subtitle="Open failures, severity, and evidence routes."
         mode={mode}
         actions={
           <Button variant="outline" size="sm" onClick={() => void incidents.reload({ silent: true })}>
@@ -72,8 +78,35 @@ export function IncidentsPage({ mode }: { mode: Mode }) {
         }
       />
 
-      {rows.length === 0 ? (
-        <EmptyState title="No active incidents" description="The current runtime looks stable. Keep collectors running or ingest real application events to observe failures." />
+      <div className="grid gap-3 sm:grid-cols-3">
+        <div className="rounded-md border border-border bg-card px-3 py-2">
+          <p className="label-caps">Total</p>
+          <p className="font-data text-xl font-semibold">{rows.length}</p>
+        </div>
+        <div className="rounded-md border border-border bg-card px-3 py-2">
+          <p className="label-caps">Open</p>
+          <p className="font-data text-xl font-semibold">{openRows.length}</p>
+        </div>
+        <div className="rounded-md border border-border bg-card px-3 py-2">
+          <p className="label-caps">Resolved</p>
+          <p className="font-data text-xl font-semibold">{resolvedRows.length}</p>
+        </div>
+      </div>
+
+      <FilterBar>
+        <FilterChip active={stateFilter === "open"} onClick={() => setStateFilter("open")}>
+          Open ({openRows.length})
+        </FilterChip>
+        <FilterChip active={stateFilter === "all"} onClick={() => setStateFilter("all")}>
+          All ({rows.length})
+        </FilterChip>
+        <FilterChip active={stateFilter === "resolved"} onClick={() => setStateFilter("resolved")}>
+          Resolved ({resolvedRows.length})
+        </FilterChip>
+      </FilterBar>
+
+      {visibleRows.length === 0 ? (
+        <EmptyState title="No incidents in this view" description="The runtime looks stable for this filter. Keep collectors running or ingest application events." />
       ) : (
         <TableWrap>
           <Table>
@@ -89,8 +122,12 @@ export function IncidentsPage({ mode }: { mode: Mode }) {
               </tr>
             </thead>
             <tbody>
-              {rows.map((incident) => (
-                <tr key={incident.incident_id} className="transition hover:bg-secondary/50">
+              {visibleRows.map((incident) => (
+                <tr
+                  key={incident.incident_id}
+                  className="transition hover:bg-panel-inset"
+                  style={{ borderLeftWidth: 3, borderLeftColor: severityRailColor(incident.severity) }}
+                >
                   <Td>
                     <Link className="font-medium" to={`/incidents/${incident.incident_id}`}>
                       {incident.incident_id}
@@ -346,7 +383,7 @@ export function IncidentDetailPage({ mode }: { mode: Mode }) {
                   const affectedServices = arrayOfStrings(data?.affected_services);
                   const messages = arrayOfStrings(data?.top_messages);
                   return (
-                    <div key={String(data?.cluster_id ?? index)} className="rounded-2xl border border-border/60 bg-background/30 p-4">
+                    <div key={String(data?.cluster_id ?? index)} className="rounded-md border border-border bg-panel-inset p-4">
                       <div className="flex flex-wrap items-center gap-2">
                         <p className="font-medium">{String(data?.cluster_id ?? `cluster-${index + 1}`)}</p>
                         {data?.source_type ? <Badge variant="outline">{formatDisplayValue(String(data.source_type))}</Badge> : null}
@@ -388,12 +425,12 @@ export function IncidentDetailPage({ mode }: { mode: Mode }) {
                   </div>
                   <p className="font-medium">{detail.data.explanation.summary}</p>
                   {detail.data.explanation.evidence_text ? (
-                    <pre className="overflow-auto rounded-xl border border-border/70 bg-background/70 p-3 text-xs text-primary">
+                    <pre className="overflow-auto rounded-xl border border-border bg-background/70 p-3 text-xs text-primary">
                       <code>{detail.data.explanation.evidence_text}</code>
                     </pre>
                   ) : null}
                   {detail.data.explanation.timeline_text ? (
-                    <pre className="overflow-auto rounded-xl border border-border/70 bg-background/70 p-3 text-xs text-primary">
+                    <pre className="overflow-auto rounded-xl border border-border bg-background/70 p-3 text-xs text-primary">
                       <code>{detail.data.explanation.timeline_text}</code>
                     </pre>
                   ) : null}
@@ -442,7 +479,7 @@ export function IncidentDetailPage({ mode }: { mode: Mode }) {
 
                   {adaptiveArtifacts.length ? (
                     adaptiveArtifacts.map((artifact) => (
-                      <div key={artifact.key} className="rounded-2xl border border-border/60 bg-background/30 p-4">
+                      <div key={artifact.key} className="rounded-md border border-border bg-panel-inset p-4">
                         <div className="flex flex-wrap items-start justify-between gap-3">
                           <div>
                             <p className="font-medium">{artifact.label}</p>
@@ -566,7 +603,7 @@ export function IncidentDetailPage({ mode }: { mode: Mode }) {
             <CardContent className="space-y-3">
               {detail.data.events.length ? (
                 detail.data.events.slice(0, 12).map((event) => (
-                  <div key={event.event_id} className="rounded-2xl border border-border/60 bg-background/30 p-4">
+                  <div key={event.event_id} className="rounded-md border border-border bg-panel-inset p-4">
                     <div className="flex flex-wrap items-center justify-between gap-2">
                       <div className="flex flex-wrap items-center gap-2">
                         <Badge variant={formatRiskTone(formatSeverity(event.severity))}>{formatSeverityLabel(event.severity)}</Badge>
@@ -605,7 +642,7 @@ export function IncidentDetailPage({ mode }: { mode: Mode }) {
             <CardContent className="space-y-3 text-sm">
               <IncidentStateTimeline states={detail.data.state_log} />
               {detail.data.latest_trace ? (
-                <div className="rounded-2xl border border-border/60 bg-background/30 p-4">
+                <div className="rounded-md border border-border bg-panel-inset p-4">
                   <div className="flex flex-wrap items-center gap-2">
                     <Badge variant="outline">{detail.data.latest_trace.trace_kind}</Badge>
                     <span className="text-muted-foreground">{formatRelativeDate(detail.data.latest_trace.created_at)}</span>
@@ -617,7 +654,7 @@ export function IncidentDetailPage({ mode }: { mode: Mode }) {
               ) : null}
               {detail.data.state_log?.length ? (
                 detail.data.state_log.slice(0, 5).map((entry, index) => (
-                  <div key={`${entry.changed_at ?? "audit"}-${index}`} className="rounded-2xl border border-border/60 bg-background/30 p-4">
+                  <div key={`${entry.changed_at ?? "audit"}-${index}`} className="rounded-md border border-border bg-panel-inset p-4">
                     <div className="flex flex-wrap items-center gap-2">
                       <Badge variant="outline">{formatDisplayValue(entry.old_state ?? "?")}</Badge>
                       <span className="text-muted-foreground">to</span>
@@ -817,7 +854,7 @@ function humanizeAdaptiveKind(value: string): string {
 
 function StatusStat({ label, value }: { label: string; value: string }) {
   return (
-    <div className="rounded-2xl border border-border/60 bg-background/30 px-4 py-3">
+    <div className="rounded-md border border-border bg-panel-inset px-4 py-3">
       <p className="text-xs font-semibold uppercase tracking-[0.18em] text-muted-foreground">{label}</p>
       <p className="mt-2 text-sm font-medium">{value}</p>
     </div>
@@ -830,6 +867,13 @@ function asRecord(value: unknown): Record<string, unknown> | null {
 
 function arrayOfStrings(value: unknown): string[] {
   return Array.isArray(value) ? value.filter((item): item is string => typeof item === "string") : [];
+}
+
+function severityRailColor(severity: number): string {
+  if (severity >= 4) return "var(--critical)";
+  if (severity >= 3) return "var(--warning)";
+  if (severity >= 2) return "var(--accent)";
+  return "var(--border)";
 }
 
 function shortTraceId(traceId: string): string {

@@ -44,7 +44,6 @@ def build_release_readiness(root: Path | None = None) -> dict[str, Any]:
         "React lockfile": "src/web/frontend/package-lock.json",
         "Windows web build script": "scripts/build-web.ps1",
         "Unix web build script": "scripts/build-web.sh",
-        "Packaged web UI": "src/web/ui_dist/index.html",
         "CLI command modules": "src/cli_core/commands",
     }
     for name, rel in required_paths.items():
@@ -56,6 +55,8 @@ def build_release_readiness(root: Path | None = None) -> dict[str, Any]:
         "Frontend dependency folder": "src/web/frontend/node_modules",
         "Root dependency folder": "node_modules",
         "TypeScript build cache": "src/web/frontend/tsconfig.tsbuildinfo",
+        "Committed web UI build output": "src/web/ui_dist",
+        "MkDocs site build output": "site",
         "Dropped version artifact": "1.41",
         "Duplicate top-level planning scratch": "planning",
         "Python coverage artifact": ".coverage",
@@ -67,7 +68,7 @@ def build_release_readiness(root: Path | None = None) -> dict[str, Any]:
         present = exists(rel)
         add_check(name, not present, f"{rel} {'is present' if present else 'is absent'}", path=rel)
 
-    ignored_artifacts = ["dist", ".pytest_cache", ".ruff_cache", ".ruff_cache_tmp", ".venv-inferra-build", "data"]
+    ignored_artifacts = ["dist", ".pytest_cache", ".ruff_cache", ".ruff_cache_tmp", ".venv-inferra-build", "data", "src/web/ui_dist", "site"]
     for rel in ignored_artifacts:
         if exists(rel):
             warnings.append(
@@ -104,20 +105,12 @@ def build_release_readiness(root: Path | None = None) -> dict[str, Any]:
             add_check("Package metadata parse", False, f"pyproject.toml could not be parsed: {exc}", path="pyproject.toml")
         else:
             project = metadata.get("project", {})
-            setuptools = metadata.get("tool", {}).get("setuptools", {})
-            package_data = setuptools.get("package-data", {})
             scripts = project.get("scripts", {})
             description = str(project.get("description", "")).lower()
             add_check(
                 "Package script",
                 scripts.get("inferra-python-legacy") == "inferra_legacy.cli:main" and "inferra" not in scripts,
                 "Python package exposes only the legacy compatibility script",
-                path="pyproject.toml",
-            )
-            add_check(
-                "Package UI data",
-                "ui_dist/**/*" in list(package_data.get("web", [])),
-                "web package-data includes built UI assets",
                 path="pyproject.toml",
             )
             add_check(

@@ -36,7 +36,7 @@ export function TimelineView({
         return (
           <div key={`${event.event_id ?? "event"}-${index}`} className="relative grid gap-3 pl-10">
             <span className={`absolute left-[11px] top-3 size-2.5 rounded-full ring-4 ring-card ${dotClass}`} />
-            <div className="rounded-2xl border border-border/60 bg-background/35 p-4">
+            <div className="rounded-md border border-border bg-panel-inset p-4">
               <div className="flex flex-wrap items-center justify-between gap-2">
                 <div className="flex flex-wrap items-center gap-2">
                   <SeverityIndicator value={event.severity} />
@@ -78,7 +78,7 @@ export function IncidentStateTimeline({
   return (
     <div className="space-y-3">
       {states.slice(0, 8).map((entry, index) => (
-        <div key={`${entry.changed_at ?? "state"}-${index}`} className="rounded-2xl border border-border/60 bg-background/35 p-4">
+        <div key={`${entry.changed_at ?? "state"}-${index}`} className="rounded-md border border-border bg-panel-inset p-4">
           <div className="flex flex-wrap items-center gap-2">
             <Badge variant="outline">{formatDisplayValue(entry.old_state ?? "unknown")}</Badge>
             <span className="text-xs text-muted-foreground">to</span>

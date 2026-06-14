@@ -4,6 +4,7 @@ import { toast } from "sonner";
 
 import type { AiDoctorResponse, AiStatus, CollectorRow, EventRow, ScannerStatusResponse } from "@/api";
 import { postJson } from "@/api";
+import { InferraRuntimePanel } from "@/components/inferra/runtime-console";
 import { Alert, AlertDescription, AlertTitle } from "@/components/ui/alert";
 import { Button } from "@/components/ui/button";
 import { Card, CardContent, CardHeader, CardTitle } from "@/components/ui/card";
@@ -11,11 +12,13 @@ import { Badge } from "@/components/ui/badge";
 import { PageHeader } from "@/components/layout/page-header";
 import { ErrorState, LoadingState } from "@/components/feedback/states";
 import type { Mode } from "@/lib/experience";
-import { useApiMutation, useApiQuery } from "@/lib/query";
 import { formatDisplayValue } from "@/lib/format";
+import { useInferraRuntime } from "@/lib/inferra-runtime";
+import { useApiMutation, useApiQuery } from "@/lib/query";
 import { TimelineView } from "@/components/inferra/timeline";
 
 export function ControlPage({ mode }: { mode: Mode }) {
+  const runtime = useInferraRuntime();
   const collectors = useApiQuery<{ collectors: CollectorRow[]; queue_depth: number }>("/api/collectors");
   const ai = useApiQuery<AiStatus>("/api/ai/status");
   const doctor = useApiQuery<AiDoctorResponse>("/api/ai/doctor");
@@ -58,15 +61,21 @@ export function ControlPage({ mode }: { mode: Mode }) {
     return (
       <div className="space-y-6">
         <PageHeader title="Control" subtitle="Manage Inferra itself — collectors, AI provider, and storage policy." mode={mode} />
+        <InferraRuntimePanel runtime={runtime} />
         <LoadingState title="Loading control plane" />
       </div>
     );
   }
 
-  if ((collectors.errorMessage && !collectors.data) || (ai.errorMessage && !ai.data) || (doctor.errorMessage && !doctor.data)) {
+  const collectorsUnavailable = collectors.errorMessage && !collectors.data;
+  const aiUnavailable = ai.errorMessage && !ai.data;
+  const doctorUnavailable = doctor.errorMessage && !doctor.data;
+
+  if (collectorsUnavailable && aiUnavailable && doctorUnavailable) {
     return (
       <div className="space-y-6">
         <PageHeader title="Control" subtitle="Manage Inferra itself — collectors, AI provider, and storage policy." mode={mode} />
+        <InferraRuntimePanel runtime={runtime} />
         <ErrorState
           description={collectors.errorMessage ?? ai.errorMessage ?? doctor.errorMessage ?? "Unknown error"}
           onRetry={() => {
@@ -92,6 +101,17 @@ export function ControlPage({ mode }: { mode: Mode }) {
           </Button>
         }
       />
+
+      <InferraRuntimePanel runtime={runtime} />
+
+      {collectorsUnavailable ? (
+        <Alert variant="warning">
+          <div className="min-w-0">
+            <AlertTitle>Collectors API unavailable</AlertTitle>
+            <AlertDescription>{collectors.errorMessage}</AlertDescription>
+          </div>
+        </Alert>
+      ) : null}
 
       <div className="dashboard-grid">
         <Metric title="Collectors" value={String(collectors.data?.collectors.length ?? 0)} note={`queue depth ${collectors.data?.queue_depth ?? 0}`} />
@@ -135,7 +155,7 @@ export function ControlPage({ mode }: { mode: Mode }) {
             ) : null}
             <div className="space-y-3">
               {collectorRows.map((collector) => (
-                <div key={collector.collector_id} className="rounded-2xl border border-border/60 bg-background/30 p-4">
+                <div key={collector.collector_id} className="rounded-md border border-border bg-panel-inset p-4">
                   <div className="flex items-center justify-between gap-3">
                     <div>
                       <p className="font-medium">{collector.collector_id}</p>
@@ -200,7 +220,7 @@ export function ControlPage({ mode }: { mode: Mode }) {
             </Button>
             <div className="space-y-3">
               {Object.entries(scanner.data?.scanner ?? {}).map(([key, row]) => (
-                <div key={key} className="rounded-2xl border border-border/60 bg-background/30 p-4">
+                <div key={key} className="rounded-md border border-border bg-panel-inset p-4">
                   <div className="flex items-start justify-between gap-3">
                     <div>
                       <p className="font-medium">{formatDisplayValue(row.data_type)}</p>
@@ -278,7 +298,7 @@ export function ControlPage({ mode }: { mode: Mode }) {
               </Alert>
             ) : null}
             {doctor.data?.guidance?.length ? (
-              <div className="rounded-2xl border border-border/60 bg-background/30 p-3 text-sm text-muted-foreground">
+              <div className="rounded-md border border-border bg-panel-inset p-3 text-sm text-muted-foreground">
                 {doctor.data.guidance.map((item, index) => (
                   <p key={index}>• {item}</p>
                 ))}
@@ -333,7 +353,7 @@ function collectorBadgeVariant(collector: CollectorRow) {
 
 function Metric({ title, value, note }: { title: string; value: string; note: string }) {
   return (
-    <Card className="border-border/70 bg-background/30">
+    <Card className="border-border bg-panel-inset">
       <CardContent className="p-5">
         <p className="text-xs font-semibold uppercase tracking-[0.2em] text-muted-foreground">{title}</p>
         <p className="mt-2 text-3xl font-semibold">{value}</p>
@@ -345,7 +365,7 @@ function Metric({ title, value, note }: { title: string; value: string; note: st
 
 function StatusRow({ label, value }: { label: string; value: string }) {
   return (
-    <div className="flex items-center justify-between gap-4 rounded-xl border border-border/60 bg-background/30 px-3 py-2">
+    <div className="flex items-center justify-between gap-4 rounded-xl border border-border bg-panel-inset px-3 py-2">
       <span className="text-muted-foreground">{label}</span>
       <span className="font-medium text-right">{value}</span>
     </div>

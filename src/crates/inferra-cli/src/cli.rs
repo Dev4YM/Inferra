@@ -6,6 +6,8 @@ const ROOT_AFTER_HELP: &str = "\
 Examples:
   inferra
   inferra status
+  inferra runtime start
+  inferra runtime open
   inferra serve
   inferra collectors status
   inferra ai ask \"What changed in the last hour?\"
@@ -34,9 +36,14 @@ pub struct Cli {
 pub enum Command {
     #[command(about = "Show a welcome screen with version, runtime status, and next commands")]
     Status,
-    #[command(about = "Start the local Inferra HTTP runtime and dashboard")]
+    #[command(about = "Start the local Inferra HTTP runtime and dashboard (foreground dev mode)")]
     Serve,
-    #[command(about = "Manage the Windows service or run the service host")]
+    #[command(about = "Start, stop, and inspect the API + web dashboard runtime")]
+    Runtime {
+        #[command(subcommand)]
+        action: Option<RuntimeAction>,
+    },
+    #[command(about = "Manage the Windows service install (API + dashboard run inside the service)")]
     Service {
         #[command(subcommand)]
         action: Option<ServiceAction>,
@@ -89,6 +96,20 @@ pub enum Command {
         #[command(subcommand)]
         action: AiAction,
     },
+}
+
+#[derive(Subcommand, Debug)]
+pub enum RuntimeAction {
+    #[command(about = "Show whether the API and dashboard are running")]
+    Status,
+    #[command(about = "Start the installed Windows service (API + dashboard)")]
+    Start,
+    #[command(about = "Stop the installed Windows service")]
+    Stop,
+    #[command(about = "Restart the installed Windows service")]
+    Restart,
+    #[command(about = "Open the dashboard in your default browser")]
+    Open,
 }
 
 #[derive(Subcommand, Debug)]

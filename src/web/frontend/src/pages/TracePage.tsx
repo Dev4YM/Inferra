@@ -366,7 +366,7 @@ export function TracePage({ mode }: { mode: Mode }) {
               <CardTitle>Trace identity</CardTitle>
             </CardHeader>
             <CardContent className="space-y-3 text-sm">
-              <div className="rounded-2xl border border-border/60 bg-background/30 p-4">
+              <div className="rounded-md border border-border bg-panel-inset p-4">
                 <p className="text-xs font-semibold uppercase tracking-[0.18em] text-muted-foreground">Trace id</p>
                 <code className="mt-2 block overflow-x-auto text-xs text-primary">{traceData.trace_id}</code>
                 <div className="mt-3 flex flex-wrap gap-2">
@@ -382,7 +382,7 @@ export function TracePage({ mode }: { mode: Mode }) {
                   </Button>
                 </div>
               </div>
-              <div className="rounded-2xl border border-border/60 bg-background/30 p-4">
+              <div className="rounded-md border border-border bg-panel-inset p-4">
                 <p className="text-xs font-semibold uppercase tracking-[0.18em] text-muted-foreground">Observed window</p>
                 <div className="mt-3 space-y-2">
                   <TraceStat label="First seen" value={stats.firstSeen ? formatRelativeDate(stats.firstSeen) : "Unknown"} />
@@ -391,7 +391,7 @@ export function TracePage({ mode }: { mode: Mode }) {
                   <TraceStat label="Server limit" value={String(traceData.limit)} />
                 </div>
               </div>
-              <div className="rounded-2xl border border-border/60 bg-background/30 p-4">
+              <div className="rounded-md border border-border bg-panel-inset p-4">
                 <p className="text-xs font-semibold uppercase tracking-[0.18em] text-muted-foreground">Observed services</p>
                 <div className="mt-3 flex flex-wrap gap-2">
                   {stats.services.length ? (
@@ -410,7 +410,7 @@ export function TracePage({ mode }: { mode: Mode }) {
                   )}
                 </div>
               </div>
-              <div className="rounded-2xl border border-border/60 bg-background/30 p-4">
+              <div className="rounded-md border border-border bg-panel-inset p-4">
                 <p className="text-xs font-semibold uppercase tracking-[0.18em] text-muted-foreground">Environments</p>
                 <div className="mt-3 flex flex-wrap gap-2">
                   {stats.environments.length ? (
@@ -424,7 +424,7 @@ export function TracePage({ mode }: { mode: Mode }) {
                   )}
                 </div>
               </div>
-              <div className="rounded-2xl border border-border/60 bg-background/30 p-4">
+              <div className="rounded-md border border-border bg-panel-inset p-4">
                 <p className="text-xs font-semibold uppercase tracking-[0.18em] text-muted-foreground">Source types</p>
                 <div className="mt-3 flex flex-wrap gap-2">
                   {stats.sources.length ? (

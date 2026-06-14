@@ -4,6 +4,8 @@ param(
     [string]$ProgramDataRoot = "$env:ProgramData\Inferra",
     [string]$ConfigPath = "",
     [string]$DataDir = "",
+    [int]$PreferredPort = 7433,
+    [string]$PreferredHost = "127.0.0.1",
     [switch]$AllowFirewall,
     [switch]$AddCliToPath,
     [switch]$KillInferraProcessesBeforeInstall
@@ -201,6 +203,83 @@ function Get-InferraFreeTcpPort {
     }
 }
 
+function Get-ZombieListenerPids {
+    param([int]$Port)
+    $pids = @()
+    $pattern = ":\s*$Port\s+.*LISTENING"
+    foreach ($line in (netstat -ano | Select-String $pattern)) {
+        $procId = ($line -split '\s+')[-1]
+        if ($procId -match '^\d+$') {
+            $pids += [int]$procId
+        }
+    }
+    return $pids | Select-Object -Unique
+}
+
+function Test-ZombiePortListener {
+    param([int]$Port)
+    foreach ($procId in (Get-ZombieListenerPids -Port $Port)) {
+        if (-not (Get-Process -Id $procId -ErrorAction SilentlyContinue)) {
+            return $true
+        }
+    }
+    return $false
+}
+
+function Resolve-InferraDashboardPort {
+    param(
+        [Parameter(Mandatory = $true)][string]$InstalledExe,
+        [Parameter(Mandatory = $true)][string]$ConfigPath,
+        [Parameter(Mandatory = $true)][string]$BindHost,
+        [int]$ConfiguredPort,
+        [int]$PreferredPort,
+        [string]$PreferredHost
+    )
+
+    $clientHost = Get-InferraClientHost -BindHost $BindHost
+    $healthUrl = "http://${clientHost}:${ConfiguredPort}/api/health"
+
+    if (Test-ZombiePortListener -Port $ConfiguredPort) {
+        Write-Warning "Port $ConfiguredPort has a zombie listener (TCP open but owning process is gone). Reboot Windows to clear ghost ports 7433-7437, or Inferra will keep using alternate ports."
+    }
+
+    if ($ConfiguredPort -ne $PreferredPort -and (Test-InferraPortBindable -BindHost $PreferredHost -Port $PreferredPort)) {
+        Write-Host "Using preferred port $PreferredPort on $PreferredHost."
+        Invoke-InferraCommand $InstalledExe @("--config", $ConfigPath, "config", "set", "server.host", $PreferredHost)
+        Invoke-InferraCommand $InstalledExe @("--config", $ConfigPath, "config", "set", "server.port", "$PreferredPort")
+        return @{
+            BindHost = $PreferredHost
+            Port = $PreferredPort
+            HealthUrl = "http://$(Get-InferraClientHost -BindHost $PreferredHost):${PreferredPort}/api/health"
+        }
+    }
+
+    if (Test-InferraPortBindable -BindHost $BindHost -Port $ConfiguredPort) {
+        return @{
+            BindHost = $BindHost
+            Port = $ConfiguredPort
+            HealthUrl = $healthUrl
+        }
+    }
+
+    $existingInferra = Test-InferraHealthEndpoint -Url $healthUrl -TimeoutSec 3
+    $replacementPort = Get-InferraFreeTcpPort -BindHost $PreferredHost
+    $reason = if ($existingInferra) {
+        "an existing Inferra runtime is already responding there"
+    }
+    else {
+        "another listener is occupying the port without answering Inferra health checks"
+    }
+    Write-Warning "Configured port $ConfiguredPort on $BindHost is unavailable because $reason. Switching Inferra to free port $replacementPort on $PreferredHost."
+    Invoke-InferraCommand $InstalledExe @("--config", $ConfigPath, "config", "set", "server.host", $PreferredHost)
+    Invoke-InferraCommand $InstalledExe @("--config", $ConfigPath, "config", "set", "server.port", "$replacementPort")
+  return @{
+        BindHost = $PreferredHost
+        Port = $replacementPort
+        HealthUrl = "http://$(Get-InferraClientHost -BindHost $PreferredHost):${replacementPort}/api/health"
+    }
+}
+
 function Test-InferraHealthEndpoint {
     param(
         [Parameter(Mandatory = $true)][string]$Url,
@@ -316,24 +395,17 @@ finally {
 
 $bindHost = Read-InferraConfigHost -Path $ConfigPath -InferraExe $installedExe
 $dashPort = Read-InferraConfigPort -Path $ConfigPath -InferraExe $installedExe
+$resolved = Resolve-InferraDashboardPort `
+    -InstalledExe $installedExe `
+    -ConfigPath $ConfigPath `
+    -BindHost $bindHost `
+    -ConfiguredPort $dashPort `
+    -PreferredPort $PreferredPort `
+    -PreferredHost $PreferredHost
+$bindHost = $resolved.BindHost
+$dashPort = $resolved.Port
+$healthUrl = $resolved.HealthUrl
 $clientHost = Get-InferraClientHost -BindHost $bindHost
-$healthUrl = "http://${clientHost}:${dashPort}/api/health"
-if (-not (Test-InferraPortBindable -BindHost $bindHost -Port $dashPort)) {
-    $existingInferra = Test-InferraHealthEndpoint -Url $healthUrl -TimeoutSec 3
-    $replacementPort = Get-InferraFreeTcpPort -BindHost $bindHost
-    if ($replacementPort -ne $dashPort) {
-        $reason = if ($existingInferra) {
-            "an existing Inferra runtime is already responding there"
-        }
-        else {
-            "another listener is occupying the port without answering Inferra health checks"
-        }
-        Write-Warning "Configured port $dashPort on $bindHost is unavailable because $reason. Switching Inferra to free port $replacementPort."
-        Invoke-InferraCommand $installedExe @("--config", $ConfigPath, "config", "set", "server.port", "$replacementPort")
-        $dashPort = $replacementPort
-        $healthUrl = "http://${clientHost}:${dashPort}/api/health"
-    }
-}
 
 $installArgs = @(
     "--config", $ConfigPath,
@@ -364,6 +436,11 @@ $serveLog = Join-Path $ProgramDataRoot "logs\serve.log"
 if ($reachable) {
     Write-Host "Runtime health: $healthUrl"
     Write-Host "Dashboard: http://${clientHost}:${dashPort}/"
+    Write-Host ""
+    Write-Host "Control commands (new terminal after -AddCliToPath):"
+    Write-Host "  inferra runtime status"
+    Write-Host "  inferra runtime open"
+    Write-Host "  inferra runtime restart"
 }
 else {
     Write-Warning "Runtime health not reachable at $healthUrl (service may still be starting). If this step was very slow, check Windows proxy settings for localhost; see $serveLog for service host errors."
@@ -383,6 +460,8 @@ if ($AllowFirewall) {
 
 if ($AddCliToPath) {
     Add-InferraBinToMachinePath -BinDir $installBinDir
+    [Environment]::SetEnvironmentVariable("INFERRA_CONFIG", $ConfigPath, "Machine")
+    Write-Host "Set machine INFERRA_CONFIG=$ConfigPath"
 }
 
 Write-Host "Installed runtime root: $InstallRoot"

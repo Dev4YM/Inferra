@@ -95,7 +95,7 @@ export function WorkspacePage({ mode }: { mode: Mode }) {
       />
 
       {workspaceScanner ? (
-        <Card className="border-border/70 bg-background/35">
+        <Card className="border-border bg-panel-inset">
           <CardContent className="flex flex-wrap items-center justify-between gap-3 p-4 text-sm">
             <div>
               <p className="font-medium">Workspace scanner cache</p>
@@ -125,7 +125,7 @@ export function WorkspacePage({ mode }: { mode: Mode }) {
           </CardHeader>
           <CardContent className="grid gap-3 md:grid-cols-2 xl:grid-cols-4">
             {workspace.data.support_layers.map((layer) => (
-              <div key={layer.layer} className="rounded-2xl border border-border/60 bg-background/30 p-4">
+              <div key={layer.layer} className="rounded-md border border-border bg-panel-inset p-4">
                 <p className="font-medium">{layer.title}</p>
                 <p className="mt-1 text-xs text-muted-foreground">{layer.items.length} supported</p>
                 <div className="mt-3 flex flex-wrap gap-2">
@@ -269,7 +269,7 @@ export function WorkspacePage({ mode }: { mode: Mode }) {
         </CardHeader>
         <CardContent className="grid gap-3 md:grid-cols-2 xl:grid-cols-3">
           {workspace.data.projects.map((project) => (
-            <div key={project.path} className="rounded-2xl border border-border/60 bg-background/30 p-4">
+            <div key={project.path} className="rounded-md border border-border bg-panel-inset p-4">
               <p className="font-medium">{project.kind}</p>
               <p className="mt-2 break-all font-mono text-xs text-muted-foreground">{project.path}</p>
               <Badge className="mt-3 w-fit" variant="outline">
@@ -355,7 +355,7 @@ export function WorkspaceAppPage({ mode }: { mode: Mode }) {
 
 function SummaryCard({ label, value }: { label: string; value: string }) {
   return (
-    <Card className="border-border/70 bg-background/30">
+    <Card className="border-border bg-panel-inset">
       <CardContent className="p-5">
         <p className="text-xs font-semibold uppercase tracking-[0.2em] text-muted-foreground">{label}</p>
         <p className="mt-2 text-3xl font-semibold">{value}</p>
@@ -529,7 +529,7 @@ function WorkspaceAppDetails({
           {!logsError && !logsLoading && rawLogs.length ? (
             <div className="space-y-2">
               {rawLogs.slice(0, 16).map((entry, index) => (
-                <div key={`${entry.source?.path ?? "raw"}-${entry.line_number_from_tail ?? index}`} className="rounded-lg border border-border/60 bg-background/30 p-3">
+                <div key={`${entry.source?.path ?? "raw"}-${entry.line_number_from_tail ?? index}`} className="rounded-lg border border-border bg-panel-inset p-3">
                   <div className="mb-2 flex flex-wrap items-center gap-2 text-xs text-muted-foreground">
                     <Badge variant="outline">{formatDisplayValue(entry.source?.label ?? "File")}</Badge>
                     {entry.source?.path || entry.source?.command || entry.source?.stream ? (
@@ -545,7 +545,7 @@ function WorkspaceAppDetails({
             <div className="mt-4 space-y-3">
               <p className="text-xs font-semibold uppercase tracking-[0.18em] text-muted-foreground">Stored normalized events</p>
               {logs.slice(0, 8).map((event, index) => (
-                <div key={event.event_id ?? index} className="rounded-lg border border-border/60 bg-background/30 p-3">
+                <div key={event.event_id ?? index} className="rounded-lg border border-border bg-panel-inset p-3">
                   <div className="flex flex-wrap items-center gap-2 text-xs text-muted-foreground">
                     <span>{event.timestamp ?? "-"}</span>
                     <Badge variant="outline">Severity {event.severity == null ? "-" : formatSeverityLabel(event.severity)}</Badge>
@@ -623,7 +623,7 @@ function WorkspaceAppDetails({
           <CardContent className="space-y-3">
             {app.endpoints?.length ? (
               app.endpoints.map((endpoint) => (
-                <div key={`${endpoint.url}-${endpoint.source}`} className="rounded-xl border border-border/60 bg-background/30 p-3">
+                <div key={`${endpoint.url}-${endpoint.source}`} className="rounded-xl border border-border bg-panel-inset p-3">
                   <a className="break-all font-mono text-xs" href={endpoint.url} target="_blank" rel="noreferrer">
                     {endpoint.url}
                   </a>
@@ -664,7 +664,7 @@ function WorkspaceAppDetails({
         <CardContent className="grid gap-3 md:grid-cols-2 xl:grid-cols-3">
           {app.log_sources?.length ? (
             app.log_sources.map((source, index) => (
-              <div key={`${source.kind}-${source.path ?? source.command ?? index}`} className="rounded-xl border border-border/60 bg-background/30 p-3">
+              <div key={`${source.kind}-${source.path ?? source.command ?? index}`} className="rounded-xl border border-border bg-panel-inset p-3">
                 <div className="mb-2 flex flex-wrap items-center gap-2">
                   <Badge variant="outline">{formatDisplayValue(source.kind)}</Badge>
                   <Badge variant={source.readable === false ? "warning" : "info"}>{formatDisplayValue(source.source)}</Badge>
@@ -715,7 +715,7 @@ function WorkspaceAppDetails({
                 <button
                   key={generation.generation_id}
                   type="button"
-                  className="flex w-full items-center justify-between gap-3 rounded-xl border border-border/60 bg-background/30 p-3 text-left text-sm transition hover:bg-secondary/40"
+                  className="flex w-full items-center justify-between gap-3 rounded-xl border border-border bg-panel-inset p-3 text-left text-sm transition hover:bg-secondary/40"
                   onClick={() => setAiResult(hydrateWorkspaceSavedGeneration(generation))}
                 >
                   <span className="min-w-0">

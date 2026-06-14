@@ -66,8 +66,6 @@ jobs:
       - name: Build frontend
         working-directory: src/web/frontend
         run: npm run build
-      - name: Verify committed ui_dist matches frontend build
-        run: git diff --exit-code src/web/ui_dist
 
   rust-coverage:
     name: Rust coverage (llvm-cov)

@@ -68,7 +68,9 @@ impl AppContext {
             request = request.json(&payload);
         }
         let response = request.send().await.with_context(|| {
-            format!("request local API at {url}; start `inferra serve` if needed")
+            format!(
+                "request local API at {url}; start `inferra runtime start` or install the Windows service if needed"
+            )
         })?;
         let status = response.status();
         let text = response

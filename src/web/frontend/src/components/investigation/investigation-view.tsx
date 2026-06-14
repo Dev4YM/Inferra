@@ -23,7 +23,7 @@ export function InvestigationView({
   return (
     <div className="space-y-4">
       <Card className="overflow-hidden">
-        <CardHeader className="border-b border-border/60 bg-gradient-to-r from-sky-500/8 via-transparent to-emerald-400/8">
+        <CardHeader>
           <div className="flex flex-wrap items-center justify-between gap-3">
             <div className="space-y-2">
               <div className="flex flex-wrap items-center gap-2">
@@ -119,21 +119,21 @@ export function InvestigationView({
           <Section title="Likely causes" items={output.likely_causes} empty="No likely causes were proposed." />
 
           <div className="grid gap-4 xl:grid-cols-[minmax(0,1.3fr)_minmax(320px,1fr)]">
-            <Card className="border-border/60 bg-background/30">
+            <Card className="border-border bg-panel-inset">
               <CardHeader>
                 <CardTitle>Safe next steps</CardTitle>
               </CardHeader>
               <CardContent className="space-y-3">
                 {output.next_steps.length ? (
                   output.next_steps.map((step, index) => (
-                    <div key={`${step.title}-${index}`} className="rounded-2xl border border-border/60 bg-card/60 p-4">
+                    <div key={`${step.title}-${index}`} className="rounded-md border border-border bg-card/60 p-4">
                       <div className="mb-2 flex flex-wrap items-center gap-2">
                         <p className="font-medium">{step.title}</p>
                         <Badge variant="success">{step.safety || "read_only"}</Badge>
                       </div>
                       {step.reason ? <p className="text-sm text-muted-foreground">{step.reason}</p> : null}
                       {step.command ? (
-                        <pre className="mt-3 overflow-x-auto rounded-xl border border-border/70 bg-background/70 p-3 text-xs text-primary">
+                        <pre className="mt-3 overflow-x-auto rounded-xl border border-border bg-background/70 p-3 text-xs text-primary">
                           <code>{step.command}</code>
                         </pre>
                       ) : null}
@@ -146,14 +146,14 @@ export function InvestigationView({
             </Card>
 
             <div className="space-y-4">
-              <Card className="border-border/60 bg-background/30">
+              <Card className="border-border bg-panel-inset">
                 <CardHeader>
                   <CardTitle>Evidence</CardTitle>
                 </CardHeader>
                 <CardContent className="space-y-2">
                   {output.evidence.length ? (
                     output.evidence.map((item) => (
-                      <div key={`${item.type}-${item.id}`} className="rounded-xl border border-border/60 bg-card/60 p-3">
+                      <div key={`${item.type}-${item.id}`} className="rounded-xl border border-border bg-card/60 p-3">
                         <div className="mb-1 flex items-center gap-2">
                           <Badge variant="outline">{item.type}</Badge>
                           <span className="text-xs font-medium text-muted-foreground">{item.id}</span>
@@ -167,7 +167,7 @@ export function InvestigationView({
                 </CardContent>
               </Card>
 
-              <Card className="border-border/60 bg-background/30">
+              <Card className="border-border bg-panel-inset">
                 <CardHeader>
                   <CardTitle>Uncertainty</CardTitle>
                 </CardHeader>
@@ -180,7 +180,7 @@ export function InvestigationView({
                 </CardContent>
               </Card>
 
-              <Card className="border-border/60 bg-background/30">
+              <Card className="border-border bg-panel-inset">
                 <CardHeader>
                   <CardTitle>Missing evidence</CardTitle>
                 </CardHeader>
@@ -193,7 +193,7 @@ export function InvestigationView({
                 </CardContent>
               </Card>
 
-              <Card className="border-border/60 bg-background/30">
+              <Card className="border-border bg-panel-inset">
                 <CardHeader>
                   <CardTitle>Citations</CardTitle>
                 </CardHeader>
@@ -214,7 +214,7 @@ export function InvestigationView({
 
           {result.audit ? (
             <div className="grid gap-4 xl:grid-cols-[minmax(0,1.1fr)_minmax(320px,0.9fr)]">
-              <Card className="border-border/60 bg-background/30">
+              <Card className="border-border bg-panel-inset">
                 <CardHeader>
                   <CardTitle>Persisted investigation</CardTitle>
                 </CardHeader>
@@ -241,7 +241,7 @@ export function InvestigationView({
                     <p className="text-muted-foreground">No persisted explanation is attached to this investigation yet.</p>
                   )}
                   {result.audit.latest_trace ? (
-                    <div className="rounded-xl border border-border/60 bg-card/60 p-3 text-muted-foreground">
+                    <div className="rounded-xl border border-border bg-card/60 p-3 text-muted-foreground">
                       <p className="font-medium text-foreground">Latest trace</p>
                       <p>{result.audit.latest_trace.trace_kind}</p>
                       <p>stored {formatRelativeDate(result.audit.latest_trace.created_at)}</p>
@@ -250,14 +250,14 @@ export function InvestigationView({
                 </CardContent>
               </Card>
 
-              <Card className="border-border/60 bg-background/30">
+              <Card className="border-border bg-panel-inset">
                 <CardHeader>
                   <CardTitle>Audit trail</CardTitle>
                 </CardHeader>
                 <CardContent className="space-y-3 text-sm">
                   {result.audit.state_log?.length ? (
                     result.audit.state_log.slice(0, 5).map((entry, index) => (
-                      <div key={`${entry.changed_at ?? "state"}-${index}`} className="rounded-xl border border-border/60 bg-card/60 p-3">
+                      <div key={`${entry.changed_at ?? "state"}-${index}`} className="rounded-xl border border-border bg-card/60 p-3">
                         <div className="flex flex-wrap items-center gap-2">
                           <Badge variant="outline">{formatDisplayValue(entry.old_state ?? "?")}</Badge>
                           <span className="text-muted-foreground">to</span>
@@ -271,7 +271,7 @@ export function InvestigationView({
                     <p className="text-muted-foreground">No audit state transitions were recorded.</p>
                   )}
                   {result.audit.feedback?.length ? (
-                    <div className="rounded-xl border border-border/60 bg-card/60 p-3">
+                    <div className="rounded-xl border border-border bg-card/60 p-3">
                       <p className="font-medium text-foreground">Operator feedback</p>
                       <p className="mt-1 text-muted-foreground">
                         {result.audit.feedback.length} feedback item{result.audit.feedback.length === 1 ? "" : "s"} recorded.
@@ -295,7 +295,7 @@ export function InvestigationView({
           </CardHeader>
           <CardContent className="space-y-4">
             {result.trace || result.audit?.latest_trace ? (
-              <details className="rounded-2xl border border-border/60 bg-background/40 p-4">
+              <details className="rounded-md border border-border bg-background/40 p-4">
                 <summary className="cursor-pointer text-sm font-medium text-muted-foreground">Prompt trace</summary>
                 <JsonInspector
                   className="mt-3"
@@ -306,7 +306,7 @@ export function InvestigationView({
               </details>
             ) : null}
             {result.bundle ? (
-              <details className="rounded-2xl border border-border/60 bg-background/40 p-4">
+              <details className="rounded-md border border-border bg-background/40 p-4">
                 <summary className="cursor-pointer text-sm font-medium text-muted-foreground">Evidence bundle</summary>
                 <JsonInspector className="mt-3" data={result.bundle} defaultRaw={showRaw} title="Evidence bundle" />
               </details>
@@ -320,7 +320,7 @@ export function InvestigationView({
 
 function Section({ title, items, empty }: { title: string; items: string[]; empty: string }) {
   return (
-    <Card className="border-border/60 bg-background/30">
+    <Card className="border-border bg-panel-inset">
       <CardHeader>
         <CardTitle>{title}</CardTitle>
       </CardHeader>

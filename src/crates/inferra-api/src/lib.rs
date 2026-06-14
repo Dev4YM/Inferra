@@ -560,17 +560,27 @@ async fn api_put_config(
             "storage.data_dir cannot be changed at runtime".into(),
         ));
     }
-    inferra_config::write_config(&state.paths.config_path, &new_cfg)
-        .map_err(|e| (StatusCode::INTERNAL_SERVER_ERROR, e.to_string()))?;
-    *state.config.write().await = new_cfg.clone();
+    let config_path = state.paths.config_path.clone();
+    let paths = state.paths.clone();
+    let cfg_for_disk = new_cfg.clone();
     let config_json = config_to_json(&new_cfg);
-    let _ = persist_ui_snapshot(
-        state.paths.as_ref(),
-        SNAPSHOT_SETTINGS,
-        &config_json,
-        UI_SNAPSHOT_SOURCE_CORE,
-        None,
-    );
+    let snapshot_json = config_json.clone();
+    tokio::task::spawn_blocking(move || {
+        inferra_config::write_config(&config_path, &cfg_for_disk)
+            .map_err(|e| e.to_string())?;
+        persist_ui_snapshot(
+            paths.as_ref(),
+            SNAPSHOT_SETTINGS,
+            &snapshot_json,
+            UI_SNAPSHOT_SOURCE_CORE,
+            None,
+        )
+        .map_err(|e| e.to_string())
+    })
+    .await
+    .map_err(|e| (StatusCode::INTERNAL_SERVER_ERROR, e.to_string()))?
+    .map_err(|e| (StatusCode::INTERNAL_SERVER_ERROR, e))?;
+    *state.config.write().await = new_cfg.clone();
     Ok(Json(ConfigResponse {
         config: config_json,
         applied: Some(true),
@@ -588,8 +598,15 @@ async fn api_overview(
         queue_depth: Some(state.collectors.queue_depth()),
         collector_errors: Some(state.collectors.active_error_count().await),
     };
-    let overview = build_overview_with_runtime_signals(&cfg, state.paths.as_ref(), Some(&signals))
-        .map_err(|e| (StatusCode::INTERNAL_SERVER_ERROR, e.to_string()))?;
+    let paths = state.paths.clone();
+    let cfg_for_overview = cfg.clone();
+    let signals_for_overview = signals.clone();
+    let overview = tokio::task::spawn_blocking(move || {
+        build_overview_with_runtime_signals(&cfg_for_overview, paths.as_ref(), Some(&signals_for_overview))
+    })
+    .await
+    .map_err(|error| (StatusCode::INTERNAL_SERVER_ERROR, error.to_string()))?
+    .map_err(|error| (StatusCode::INTERNAL_SERVER_ERROR, error.to_string()))?;
     let _ = persist_ui_snapshot(
         state.paths.as_ref(),
         SNAPSHOT_OVERVIEW,
@@ -2533,7 +2550,10 @@ async fn api_collectors_start(
 ) -> Result<Json<JsonValue>, (StatusCode, String)> {
     let current = state.config.read().await.clone();
     if let Ok(next) = apply_config_put(current, &json!({ "collectors": { "auto_start": true } })) {
-        let _ = inferra_config::write_config(&state.paths.config_path, &next);
+        let config_path = state.paths.config_path.clone();
+        let next_for_write = next.clone();
+        let _ = tokio::task::spawn_blocking(move || inferra_config::write_config(&config_path, &next_for_write))
+            .await;
         *state.config.write().await = next;
     }
     let cfg = state.config.read().await.clone();
@@ -2554,7 +2574,10 @@ async fn api_collectors_stop(
 ) -> Result<Json<JsonValue>, (StatusCode, String)> {
     let current = state.config.read().await.clone();
     if let Ok(next) = apply_config_put(current, &json!({ "collectors": { "auto_start": false } })) {
-        let _ = inferra_config::write_config(&state.paths.config_path, &next);
+        let config_path = state.paths.config_path.clone();
+        let next_for_write = next.clone();
+        let _ = tokio::task::spawn_blocking(move || inferra_config::write_config(&config_path, &next_for_write))
+            .await;
         *state.config.write().await = next;
     }
     state
@@ -2943,7 +2966,11 @@ async fn refresh_workspace_scan_cache(
     config: &TomlValue,
 ) -> Result<WorkspaceMapResponse> {
     let interval_seconds = workspace_scan_interval_seconds(config);
-    let mut value = build_workspace_map(config, state.paths.as_ref())?;
+    let paths = state.paths.clone();
+    let config_for_scan = config.clone();
+    let mut value = tokio::task::spawn_blocking(move || build_workspace_map(&config_for_scan, paths.as_ref()))
+        .await
+        .context("workspace scan task failed")??;
     hydrate_workspace_runtime_app_traces(state.paths.as_ref(), &mut value)?;
     let cached = CachedWorkspaceMap {
         value: value.clone(),
@@ -2951,13 +2978,19 @@ async fn refresh_workspace_scan_cache(
         cached_at: Instant::now(),
         interval_seconds,
     };
-    persist_ui_snapshot(
-        state.paths.as_ref(),
-        SNAPSHOT_WORKSPACE,
-        &serde_json::to_value(&value).unwrap_or_else(|_| json!({})),
-        UI_SNAPSHOT_SOURCE_CORE,
-        Some(interval_seconds),
-    )?;
+    let snapshot_value = serde_json::to_value(&value).unwrap_or_else(|_| json!({}));
+    let paths = state.paths.clone();
+    tokio::task::spawn_blocking(move || {
+        persist_ui_snapshot(
+            paths.as_ref(),
+            SNAPSHOT_WORKSPACE,
+            &snapshot_value,
+            UI_SNAPSHOT_SOURCE_CORE,
+            Some(interval_seconds),
+        )
+    })
+    .await
+    .context("workspace snapshot task failed")??;
     state.scanner_cache.write().await.workspace = Some(cached);
     Ok(value)
 }

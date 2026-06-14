@@ -8,7 +8,7 @@ use inferra_config::{apply_config_put, load_merged_config, server_listen, write_
 use inferra_core::build_overview;
 use serde_json::{json, Value as JsonValue};
 
-use crate::cli::{CollectorAction, ConfigAction, ServiceAction};
+use crate::cli::{CollectorAction, ConfigAction, RuntimeAction, ServiceAction};
 use crate::commands::{
     emit_command_result, parse_cli_value, patch_from_path, preset_patch, toml_to_display,
     toml_to_json, toml_value_at,
@@ -60,6 +60,272 @@ pub async fn run_serve_command(ctx: &AppContext) -> Result<()> {
             handle_existing_runtime(host, port, error).await
         }
         Err(error) => Err(error),
+    }
+}
+
+pub async fn run_runtime_command(
+    ctx: &AppContext,
+    action: Option<RuntimeAction>,
+) -> Result<()> {
+    match action {
+        Some(RuntimeAction::Status) => emit_runtime_status(ctx).await,
+        Some(RuntimeAction::Start) => runtime_start(ctx).await,
+        Some(RuntimeAction::Stop) => runtime_stop(ctx),
+        Some(RuntimeAction::Restart) => runtime_restart(ctx).await,
+        Some(RuntimeAction::Open) => runtime_open(ctx).await,
+        None => emit_runtime_status(ctx).await,
+    }
+}
+
+async fn emit_runtime_status(ctx: &AppContext) -> Result<()> {
+    let payload = collect_runtime_payload(ctx).await?;
+    if ctx.ui.is_json() {
+        ctx.ui.print_json(&payload);
+        return Ok(());
+    }
+    ctx.ui.banner("Inferra runtime", "API and web dashboard status");
+    let mode = payload["mode"].as_str().unwrap_or("unknown");
+    let dashboard = payload["dashboard_url"].as_str().unwrap_or_default();
+    if payload["reachable"].as_bool().unwrap_or(false) {
+        ctx.ui.success(&format!("API and dashboard are running ({mode}) at {dashboard}"));
+    } else {
+        ctx.ui.warning("API and dashboard are not responding on the configured address.");
+    }
+    ctx.ui.kv_table([
+        ("Mode", mode.to_string()),
+        ("Dashboard", dashboard.to_string()),
+        (
+            "API health",
+            payload["health_status"]
+                .as_str()
+                .unwrap_or("unknown")
+                .to_string(),
+        ),
+        (
+            "Service installed",
+            payload["service_installed"]
+                .as_bool()
+                .unwrap_or(false)
+                .to_string(),
+        ),
+        (
+            "Service state",
+            payload["service_state"]
+                .as_str()
+                .unwrap_or("not_installed")
+                .to_string(),
+        ),
+    ]);
+    if let Some(hint) = payload["hint"].as_str() {
+        ctx.ui.paragraph("");
+        ctx.ui.section("Next");
+        ctx.ui.bullets(vec![hint.to_string()]);
+    }
+    Ok(())
+}
+
+async fn runtime_start(ctx: &AppContext) -> Result<()> {
+    if !cfg!(windows) {
+        bail!("Windows service control is required. On this platform run `inferra serve` for a foreground API + dashboard.");
+    }
+    let status = inferra_windows_service::query_service_status()?;
+    if !status.installed {
+        let paths = ctx.paths()?;
+        bail!(
+            "Inferra service is not installed. Run deploy/windows/install-service.ps1 as Administrator, or:\n  inferra --config \"{}\" --ui-dist <ui_dist> service install --startup auto",
+            paths.config_path.display()
+        );
+    }
+    if status.state.as_deref() == Some("Running") && runtime_health_ok(ctx).await? {
+        return finish_runtime_action(
+            ctx,
+            "start",
+            "Runtime already running (API + dashboard)",
+        )
+        .await;
+    }
+    inferra_windows_service::start_service()?;
+    wait_for_runtime_health(ctx, 45).await?;
+    finish_runtime_action(ctx, "start", "Started Inferra runtime (API + dashboard)").await
+}
+
+fn runtime_stop(ctx: &AppContext) -> Result<()> {
+    if !cfg!(windows) {
+        bail!("Windows service control is required on this platform.");
+    }
+    let status = inferra_windows_service::query_service_status()?;
+    if !status.installed {
+        bail!("Inferra service is not installed.");
+    }
+    inferra_windows_service::stop_service()?;
+    let payload = json!({
+        "action": "stop",
+        "ok": true,
+        "service": inferra_windows_service::SERVICE_NAME,
+    });
+    emit_command_result(
+        ctx,
+        &payload,
+        &[format!(
+            "Stopped Windows service {} (API + dashboard)",
+            inferra_windows_service::SERVICE_NAME
+        )],
+    );
+    Ok(())
+}
+
+async fn runtime_restart(ctx: &AppContext) -> Result<()> {
+    if !cfg!(windows) {
+        bail!("Windows service control is required on this platform.");
+    }
+    let status = inferra_windows_service::query_service_status()?;
+    if !status.installed {
+        bail!("Inferra service is not installed.");
+    }
+    inferra_windows_service::restart_service()?;
+    wait_for_runtime_health(ctx, 45).await?;
+    finish_runtime_action(ctx, "restart", "Restarted Inferra runtime (API + dashboard)").await
+}
+
+async fn runtime_open(ctx: &AppContext) -> Result<()> {
+    let payload = collect_runtime_payload(ctx).await?;
+    let url = payload["dashboard_url"]
+        .as_str()
+        .context("dashboard URL unavailable")?;
+    if !payload["reachable"].as_bool().unwrap_or(false) {
+        bail!("Runtime is not reachable at {url}. Run `inferra runtime start` first.");
+    }
+    open_dashboard_url(url)?;
+    let message = format!("Opened dashboard at {url}");
+    emit_command_result(
+        ctx,
+        &json!({ "action": "open", "ok": true, "dashboard_url": url }),
+        &[message],
+    );
+    Ok(())
+}
+
+async fn finish_runtime_action(ctx: &AppContext, action: &str, message: &str) -> Result<()> {
+    let payload = collect_runtime_payload(ctx).await?;
+    let dashboard = payload["dashboard_url"].as_str().unwrap_or_default();
+    let lines = vec![
+        message.to_string(),
+        format!("Dashboard: {dashboard}"),
+        format!("API health: {dashboard}api/health"),
+    ];
+    emit_command_result(
+        ctx,
+        &json!({
+            "action": action,
+            "ok": payload["reachable"],
+            "dashboard_url": dashboard,
+            "mode": payload["mode"],
+        }),
+        &lines,
+    );
+    Ok(())
+}
+
+async fn collect_runtime_payload(ctx: &AppContext) -> Result<JsonValue> {
+    let paths = ctx.paths()?;
+    let config = load_merged_config(&paths.config_path)?;
+    let (bind_host, port) = server_listen(&config)?;
+    let dashboard_url = format!("{}/", local_base_url(&bind_host, port));
+    let health = ctx
+        .api_request(reqwest::Method::GET, "/api/health", None)
+        .await
+        .ok();
+    let reachable = health.is_some();
+    let service = if cfg!(windows) {
+        inferra_windows_service::query_service_status().ok()
+    } else {
+        None
+    };
+    let service_installed = service.as_ref().map(|status| status.installed).unwrap_or(false);
+    let service_state = service
+        .as_ref()
+        .and_then(|status| status.state.clone())
+        .unwrap_or_else(|| "not_installed".to_string());
+    let service_running = service_state.eq_ignore_ascii_case("running");
+    let mode = if service_running {
+        "windows_service"
+    } else if reachable {
+        "foreground"
+    } else {
+        "stopped"
+    };
+    let hint = if reachable {
+        "inferra runtime open".to_string()
+    } else if service_installed {
+        "inferra runtime start".to_string()
+    } else {
+        "deploy/windows/install-service.ps1 (Administrator)".to_string()
+    };
+    Ok(json!({
+        "reachable": reachable,
+        "dashboard_url": dashboard_url,
+        "health_status": health.as_ref().and_then(|payload| payload.get("status")).cloned().unwrap_or(JsonValue::Null),
+        "mode": mode,
+        "service_installed": service_installed,
+        "service_state": service_state,
+        "hint": hint,
+        "config_path": paths.config_path.display().to_string(),
+    }))
+}
+
+async fn runtime_health_ok(ctx: &AppContext) -> Result<bool> {
+    Ok(ctx
+        .api_request(reqwest::Method::GET, "/api/health", None)
+        .await
+        .is_ok())
+}
+
+async fn wait_for_runtime_health(ctx: &AppContext, timeout_secs: u64) -> Result<()> {
+    let deadline = std::time::Instant::now() + std::time::Duration::from_secs(timeout_secs);
+    while std::time::Instant::now() < deadline {
+        if runtime_health_ok(ctx).await? {
+            return Ok(());
+        }
+        tokio::time::sleep(std::time::Duration::from_secs(1)).await;
+    }
+    let paths = ctx.paths()?;
+    let log_path = inferra_windows_service::service_log_path();
+    bail!(
+        "runtime did not become healthy within {timeout_secs}s; check {} and {}",
+        log_path.display(),
+        paths.config_path.display()
+    );
+}
+
+fn open_dashboard_url(url: &str) -> Result<()> {
+    #[cfg(windows)]
+    {
+        std::process::Command::new("cmd")
+            .args(["/C", "start", "", url])
+            .spawn()
+            .context("open dashboard in browser")?;
+        return Ok(());
+    }
+    #[cfg(target_os = "macos")]
+    {
+        std::process::Command::new("open")
+            .arg(url)
+            .spawn()
+            .context("open dashboard in browser")?;
+        return Ok(());
+    }
+    #[cfg(all(unix, not(target_os = "macos")))]
+    {
+        std::process::Command::new("xdg-open")
+            .arg(url)
+            .spawn()
+            .context("open dashboard in browser")?;
+        return Ok(());
+    }
+    #[cfg(not(any(windows, unix)))]
+    {
+        let _ = url;
+        bail!("opening URLs is not supported on this platform");
     }
 }
 
@@ -730,12 +996,13 @@ fn render_status_snapshot(ctx: &AppContext, payload: &JsonValue, welcome_only: b
     let runtime = &payload["runtime"];
     if runtime.get("reachable") == Some(&JsonValue::Bool(true)) {
         ctx.ui.success(&format!(
-            "Runtime reachable at {}",
+            "API and dashboard reachable at {}",
             runtime["dashboard_url"].as_str().unwrap_or_default()
         ));
     } else {
-        ctx.ui
-            .warning("Runtime is not responding on the configured local address.");
+        ctx.ui.warning(
+            "API and dashboard are not responding. Use `inferra runtime start` when the Windows service is installed.",
+        );
     }
     ctx.ui.kv_table([
         (
@@ -857,10 +1124,11 @@ fn render_status_snapshot(ctx: &AppContext, payload: &JsonValue, welcome_only: b
     ctx.ui.paragraph("");
     ctx.ui.section("Next");
     ctx.ui.bullets(vec![
-        "inferra status".to_string(),
+        "inferra runtime status".to_string(),
+        "inferra runtime start".to_string(),
+        "inferra runtime open".to_string(),
         "inferra serve".to_string(),
         "inferra collectors status".to_string(),
-        "inferra ai status".to_string(),
         "inferra service status".to_string(),
     ]);
 }

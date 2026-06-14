@@ -3,16 +3,14 @@ import { cva, type VariantProps } from "class-variance-authority";
 
 import { cn } from "@/lib/utils";
 
-const alertVariants = cva(
-  "flex items-start gap-3 rounded-2xl border px-4 py-3 text-sm shadow-sm [&>svg]:mt-0.5 [&>svg]:size-4 [&>svg]:shrink-0",
-  {
+const alertVariants = cva("flex items-start gap-3 rounded-md border px-3 py-2.5 text-sm [&>svg]:mt-0.5 [&>svg]:size-4 [&>svg]:shrink-0", {
   variants: {
     variant: {
-      default: "border-border bg-card/80 text-foreground",
-      warning: "border-amber-400/35 bg-amber-400/12 text-foreground",
-      destructive: "border-rose-400/35 bg-rose-400/12 text-foreground",
-      success: "border-emerald-400/35 bg-emerald-400/12 text-foreground",
-      info: "border-sky-400/35 bg-sky-400/12 text-foreground",
+      default: "border-border bg-card text-foreground",
+      warning: "border-warning/50 bg-warning/8 text-foreground",
+      destructive: "border-critical/50 bg-critical/8 text-foreground",
+      success: "border-success/50 bg-success/8 text-foreground",
+      info: "border-border bg-panel-inset text-foreground",
     },
   },
   defaultVariants: {
@@ -31,6 +29,5 @@ export function AlertTitle({ className, ...props }: HTMLAttributes<HTMLParagraph
 }
 
 export function AlertDescription({ className, ...props }: HTMLAttributes<HTMLParagraphElement>) {
-  return <p className={cn("mt-1 leading-6 text-current/90", className)} {...props} />;
+  return <p className={cn("mt-1 leading-relaxed text-current/90", className)} {...props} />;
 }
-

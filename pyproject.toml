@@ -55,7 +55,6 @@ exclude = ["python_packages*", "windows-pyinstaller*", "python-runtime*"]
 
 [tool.setuptools.package-data]
 config = ["*.toml"]
-web = ["ui_dist/**/*"]
 
 [tool.pytest.ini_options]
 testpaths = ["tests"]

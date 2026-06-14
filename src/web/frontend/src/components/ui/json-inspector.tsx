@@ -34,7 +34,7 @@ export function JsonInspector({
   };
 
   return (
-    <div className={cn("rounded-2xl border border-border/70 bg-background/40 p-4", className)}>
+    <div className={cn("rounded-md border border-border bg-background/40 p-4", className)}>
       <div className="flex flex-wrap items-start justify-between gap-3">
         <div className="space-y-1">
           <p className="text-sm font-semibold">{title}</p>
@@ -60,7 +60,7 @@ export function JsonInspector({
 
       <div className="mt-4">
         {showRaw ? (
-          <pre className="overflow-auto rounded-xl border border-border/70 bg-background/75 p-4 text-xs text-primary">
+          <pre className="overflow-auto rounded-xl border border-border bg-background/75 p-4 text-xs text-primary">
             <code>{rawText}</code>
           </pre>
         ) : (
@@ -105,7 +105,7 @@ function FriendlyNode({ value, depth }: { value: unknown; depth: number }) {
     return (
       <div className="space-y-3">
         {preview.map((item, index) => (
-          <div key={index} className="rounded-xl border border-border/60 bg-card/60 p-3">
+          <div key={index} className="rounded-xl border border-border bg-card/60 p-3">
             <p className="text-xs font-semibold uppercase tracking-[0.16em] text-muted-foreground">Item {index + 1}</p>
             <div className="mt-2">
               <FriendlyNode value={item} depth={depth + 1} />
@@ -127,7 +127,7 @@ function FriendlyNode({ value, depth }: { value: unknown; depth: number }) {
   return (
     <dl className="space-y-3">
       {entries.map(([key, entryValue]) => (
-        <div key={key} className="rounded-xl border border-border/60 bg-card/60 p-3">
+        <div key={key} className="rounded-xl border border-border bg-card/60 p-3">
           <dt className="text-xs font-semibold uppercase tracking-[0.16em] text-muted-foreground">{humanizeKey(key)}</dt>
           <dd className="mt-2">
             <FriendlyNode value={entryValue} depth={depth + 1} />
@@ -144,7 +144,7 @@ function PrimitiveValue({ value }: { value: unknown }) {
   }
 
   return (
-    <span className="inline-flex rounded-lg border border-border/60 bg-secondary/60 px-2.5 py-1 font-mono text-xs text-foreground">
+    <span className="inline-flex rounded-lg border border-border bg-secondary/60 px-2.5 py-1 font-mono text-xs text-foreground">
       {formatPrimitive(value)}
     </span>
   );

@@ -94,20 +94,43 @@ async function parseResponseBody(response: Response, path: string): Promise<unkn
   }
 }
 
+function networkErrorDetail(error: unknown, path: string): string {
+  const message = error instanceof Error ? error.message : String(error);
+  const lowered = message.toLowerCase();
+  if (lowered.includes("failed to fetch") || lowered.includes("networkerror") || lowered.includes("load failed")) {
+    return `Cannot reach the Inferra API at ${path}. The Rust runtime may be stopped, hung, or listening on a different port than the dev proxy expects. Check Control → Inferra runtime or run \`inferra service status\`.`;
+  }
+  if (lowered.includes("aborted") || lowered.includes("abort")) {
+    return "Request to the Inferra API was cancelled.";
+  }
+  if (lowered.includes("timeout") || lowered.includes("timed out")) {
+    return `Inferra API timed out on ${path}. The process may be hung — restart \`inferra serve\` or the Windows Inferra service.`;
+  }
+  return message || "Network request to the Inferra API failed.";
+}
+
 export function errorMessage(error: unknown): string {
-  if (error instanceof ApiError) return apiErrorDetail(error);
+  if (error instanceof ApiError) {
+    if (error.status === 0) return networkErrorDetail(error, error.path);
+    return apiErrorDetail(error);
+  }
   if (error instanceof Error) return error.message;
   return String(error);
 }
 
 export async function fetchJson<T>(path: string, init?: RequestInit): Promise<T> {
-  const response = await fetch(path, {
-    ...init,
-    headers: {
-      Accept: "application/json",
-      ...apiAuthHeaders(path, init),
-    },
-  });
+  let response: Response;
+  try {
+    response = await fetch(path, {
+      ...init,
+      headers: {
+        Accept: "application/json",
+        ...apiAuthHeaders(path, init),
+      },
+    });
+  } catch (error) {
+    throw new ApiError(networkErrorDetail(error, path), path, 0, "");
+  }
   if (!response.ok) {
     const text = await response.text();
     const detail = parseApiErrorBody(text) || response.statusText || "Request failed";
@@ -644,6 +667,24 @@ export type InferraConfigPayload = {
 export type ConfigResponse = {
   config: InferraConfigPayload;
   applied?: boolean;
+};
+
+export type HealthResponse = {
+  status: string;
+  runtime: string;
+  storage_writes_ok: boolean;
+  degraded_reasons?: string[];
+  config_path?: string;
+  data_dir?: string;
+  events_db?: string;
+  incidents_db?: string;
+  ai_enabled?: boolean;
+};
+
+export type ProbeHealthResponse = {
+  status: string;
+  runtime: string;
+  storage_writes_ok?: boolean;
 };
 
 export type QuickAnalysis = {

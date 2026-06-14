@@ -109,7 +109,6 @@ def test_release_readiness_detects_required_and_forbidden_paths(tmp_path) -> Non
         "src/web/frontend/package-lock.json",
         "scripts/build-web.ps1",
         "scripts/build-web.sh",
-        "src/web/ui_dist/index.html",
         "src/cli_core/commands",
     ):
         path = tmp_path / rel

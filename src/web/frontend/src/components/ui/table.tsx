@@ -3,15 +3,7 @@ import type { HTMLAttributes, TableHTMLAttributes, TdHTMLAttributes, ThHTMLAttri
 import { cn } from "@/lib/utils";
 
 export function TableWrap({ className, ...props }: HTMLAttributes<HTMLDivElement>) {
-  return (
-    <div
-      className={cn(
-        "overflow-hidden rounded-2xl border border-border/80 bg-card/80 shadow-[0_14px_48px_-38px_rgba(15,23,42,0.45)]",
-        className,
-      )}
-      {...props}
-    />
-  );
+  return <div className={cn("overflow-x-auto rounded-md border border-border bg-card", className)} {...props} />;
 }
 
 export function Table({ className, ...props }: TableHTMLAttributes<HTMLTableElement>) {
@@ -22,7 +14,7 @@ export function Th({ className, ...props }: ThHTMLAttributes<HTMLTableCellElemen
   return (
     <th
       className={cn(
-        "sticky top-0 z-10 bg-secondary/80 px-4 py-3 text-left text-[11px] font-semibold uppercase tracking-[0.16em] text-muted-foreground backdrop-blur",
+        "sticky top-0 z-10 border-b border-border bg-panel-inset px-3 py-2 text-left text-[11px] font-semibold uppercase tracking-wide text-muted-foreground",
         className,
       )}
       {...props}
@@ -31,5 +23,5 @@ export function Th({ className, ...props }: ThHTMLAttributes<HTMLTableCellElemen
 }
 
 export function Td({ className, ...props }: TdHTMLAttributes<HTMLTableCellElement>) {
-  return <td className={cn("border-t border-border/60 px-4 py-3 align-top text-sm", className)} {...props} />;
+  return <td className={cn("border-t border-border px-3 py-2.5 align-top text-sm", className)} {...props} />;
 }

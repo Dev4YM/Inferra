@@ -29,8 +29,8 @@ export function SeverityIndicator({
   const tone = riskTone(value);
   const Icon = tone === "destructive" ? CircleAlert : tone === "warning" ? AlertCircle : tone === "success" ? CheckCircle2 : Info;
   return (
-    <Badge variant={tone} className={cn("gap-1.5", className)}>
-      <Icon className="size-3.5" />
+    <Badge variant={tone} className={cn("gap-1", className)}>
+      <Icon className="size-3" />
       {label ? formatDisplayValue(label) : severity}
     </Badge>
   );
@@ -52,13 +52,13 @@ export function ConfidenceMeter({
   const percent = Math.max(0, Math.min(100, Math.round((value ?? 0) * 100)));
   const tone = percent >= 75 ? "bg-success" : percent >= 45 ? "bg-warning" : "bg-muted-foreground";
   return (
-    <div className={cn("min-w-0", compact ? "space-y-1" : "space-y-2")}>
+    <div className={cn("min-w-0", compact ? "space-y-1" : "space-y-1.5")}>
       <div className="flex items-center justify-between gap-3 text-xs">
-        <span className="font-semibold uppercase tracking-[0.16em] text-muted-foreground">{label}</span>
-        <span className="font-medium text-foreground">{percent}%</span>
+        <span className="label-caps">{label}</span>
+        <span className="font-data font-medium text-foreground">{percent}%</span>
       </div>
-      <div className="h-2 overflow-hidden rounded-full bg-secondary">
-        <div className={cn("h-full rounded-full transition-all duration-300", tone)} style={{ width: `${percent}%` }} />
+      <div className="h-1.5 overflow-hidden rounded-sm bg-panel-inset">
+        <div className={cn("h-full rounded-sm transition-all duration-300", tone)} style={{ width: `${percent}%` }} />
       </div>
     </div>
   );
@@ -79,25 +79,25 @@ export function RuntimeStatusCard({
 }) {
   const toneClass =
     tone === "destructive"
-      ? "text-critical bg-rose-500/10 border-rose-400/25"
+      ? "text-critical"
       : tone === "warning"
-        ? "text-warning bg-amber-500/10 border-amber-400/25"
+        ? "text-warning"
         : tone === "success"
-          ? "text-success bg-emerald-500/10 border-emerald-400/25"
-          : "text-primary bg-sky-500/10 border-sky-400/25";
+          ? "text-success"
+          : "text-foreground";
 
   return (
-    <div className="rounded-2xl border border-border/70 bg-card/65 p-4 shadow-sm">
+    <div className="rounded-md border border-border bg-card p-3">
       <div className="flex items-start justify-between gap-3">
-        <div>
-          <p className="text-xs font-semibold uppercase tracking-[0.2em] text-muted-foreground">{label}</p>
-          <div className="mt-2 text-2xl font-semibold tracking-tight">{typeof value === "string" ? formatDisplayValue(value) : value}</div>
+        <div className="min-w-0">
+          <p className="label-caps">{label}</p>
+          <div className={cn("mt-1 font-data text-2xl font-semibold tracking-tight", toneClass)}>
+            {typeof value === "string" ? formatDisplayValue(value) : value}
+          </div>
         </div>
-        <div className={cn("rounded-xl border p-2.5", toneClass)}>
-          <Icon className="size-4" />
-        </div>
+        <Icon className="size-4 shrink-0 text-muted-foreground" />
       </div>
-      {detail ? <p className="mt-3 text-sm leading-6 text-muted-foreground">{detail}</p> : null}
+      {detail ? <p className="mt-2 text-sm leading-relaxed text-muted-foreground">{detail}</p> : null}
     </div>
   );
 }
@@ -113,21 +113,21 @@ export function RuntimeIdentity({
 }) {
   return (
     <div className="flex min-w-0 items-center gap-3">
-      <div className="rounded-xl border border-border/70 bg-secondary/65 p-2.5">
-        <Server className="size-4 text-primary" />
+      <div className="rounded-sm border border-border bg-panel-inset p-2">
+        <Server className="size-4 text-muted-foreground" />
       </div>
       <div className="min-w-0">
         <p className="truncate font-medium">{service}</p>
-        <div className="mt-1 flex flex-wrap items-center gap-2 text-xs text-muted-foreground">
+        <div className="mt-0.5 flex flex-wrap items-center gap-2 font-data text-xs text-muted-foreground">
           {runtime ? (
             <span className="inline-flex items-center gap-1">
-              <RadioTower className="size-3.5" />
+              <RadioTower className="size-3" />
               {formatDisplayValue(runtime)}
             </span>
           ) : null}
           {latency ? (
             <span className="inline-flex items-center gap-1">
-              <TimerReset className="size-3.5" />
+              <TimerReset className="size-3" />
               {latency}
             </span>
           ) : null}

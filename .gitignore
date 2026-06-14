@@ -21,9 +21,13 @@ node_modules/
 target/
 .idea/
 .vscode/
+.cursor/
+Thumbs.db
+Desktop.ini
 .env
 .env.*
 inferra.local.toml
+inferra.dev.toml
 missing_inferra.toml
 data/
 logs/
@@ -33,4 +37,8 @@ logs/
 *.db
 *.db-wal
 *.db-shm
+*.pdb
 docs/planning/
+deprecated/
+src/web/frontend/dist/
+src/web/ui_dist/

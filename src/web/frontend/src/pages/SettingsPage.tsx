@@ -114,7 +114,7 @@ export function SettingsPage({
             <CardTitle>Appearance & defaults</CardTitle>
           </CardHeader>
           <CardContent className="space-y-4 text-sm">
-            <div className="rounded-2xl border border-border/60 bg-background/30 p-4">
+            <div className="rounded-md border border-border bg-panel-inset p-4">
               <div className="flex items-center justify-between gap-3">
                 <div>
                   <p className="font-medium">Theme</p>
@@ -150,7 +150,7 @@ export function SettingsPage({
               <SettingTile icon={Bot} label="AI role" value={formatDisplayValue(String(experience?.ai_role ?? "investigator"))} />
               <SettingTile icon={Database} label="Storage policy" value={retention ? "Custom" : "Default"} />
             </div>
-            <div className="rounded-2xl border border-border/60 bg-background/30 p-4">
+            <div className="rounded-md border border-border bg-panel-inset p-4">
               <div className="space-y-2">
                 <p className="font-medium">API bearer token</p>
                 <p className="text-sm text-muted-foreground">
@@ -174,7 +174,7 @@ export function SettingsPage({
                 </Button>
               </div>
             </div>
-            <div className="rounded-2xl border border-border/60 bg-background/30 p-4">
+            <div className="rounded-md border border-border bg-panel-inset p-4">
               <div className="flex flex-wrap items-center justify-between gap-3">
                 <div>
                   <p className="font-medium">Workspace scan interval</p>
@@ -235,7 +235,7 @@ function SettingTile({
   value: string;
 }) {
   return (
-    <div className="rounded-2xl border border-border/60 bg-background/35 p-4">
+    <div className="rounded-md border border-border bg-panel-inset p-4">
       <div className="flex items-center gap-2">
         <Icon className="size-4 text-primary" />
         <p className="text-xs font-semibold uppercase tracking-[0.18em] text-muted-foreground">{label}</p>

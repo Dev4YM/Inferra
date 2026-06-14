@@ -13,43 +13,41 @@ import { cn } from "@/lib/utils";
 
 export function IncidentCard({ incident }: { incident: IncidentRow }) {
   return (
-    <div className="rounded-2xl border border-border/70 bg-card/70 p-4 text-foreground shadow-sm transition hover:-translate-y-0.5 hover:border-primary/30 hover:opacity-100 hover:shadow-md">
+    <div className="rounded-sm border border-border bg-card p-3 transition-colors hover:bg-panel-inset">
       <div className="flex flex-wrap items-start justify-between gap-3">
         <div className="min-w-0">
           <div className="flex flex-wrap items-center gap-2">
             <SeverityIndicator value={incident.severity} label={`Sev ${formatSeverityLabel(incident.severity)}`} />
             <Badge variant="outline">{formatDisplayValue(incident.state)}</Badge>
           </div>
-          <h3 className="mt-3 truncate text-base font-semibold">{incident.primary_service || "Unknown service"}</h3>
-          <p className="mt-1 text-sm text-muted-foreground">{incident.incident_id}</p>
+          <h3 className="mt-2 truncate text-sm font-semibold">{incident.primary_service || "Unknown service"}</h3>
+          <p className="font-data text-xs text-muted-foreground">{incident.incident_id}</p>
         </div>
-        <div className="text-right text-sm">
-          <p className="font-medium">{incident.event_count ?? 0}</p>
-          <p className="text-xs text-muted-foreground">events</p>
+        <div className="text-right font-data text-xs">
+          <p className="text-base font-semibold text-foreground">{incident.event_count ?? 0}</p>
+          <p className="text-muted-foreground">events</p>
         </div>
       </div>
-      <div className="mt-4 flex flex-wrap items-center gap-2 text-xs text-muted-foreground">
-        {(incident.affected_services ?? []).slice(0, 4).map((service) => (
+      <div className="mt-3 flex flex-wrap items-center gap-2 text-xs text-muted-foreground">
+        {(incident.affected_services ?? []).slice(0, 3).map((service) => (
           <Badge key={service} variant="outline">
             {service}
           </Badge>
         ))}
-        <span>updated {formatRelativeDate(incident.updated_at)}</span>
+        <span>· {formatRelativeDate(incident.updated_at)}</span>
       </div>
       {incident.latest_trace_summary ? (
-        <div className="mt-4 rounded-2xl border border-border/60 bg-background/35 p-3">
-          <p className="text-xs font-semibold uppercase tracking-[0.18em] text-muted-foreground">Latest trace</p>
+        <div className="mt-3 border-t border-border pt-3">
           <TraceSummaryInline
             summary={incident.latest_trace_summary}
             context={{ from: "incident", incidentId: incident.incident_id }}
-            className="mt-3"
             showMessage
           />
         </div>
       ) : null}
-      <div className="mt-4 flex flex-wrap gap-2">
+      <div className="mt-3">
         <Button variant="outline" size="sm" asChild>
-          <Link to={`/incidents/${incident.incident_id}`}>Open incident</Link>
+          <Link to={`/incidents/${incident.incident_id}`}>Open</Link>
         </Button>
       </div>
     </div>
@@ -74,7 +72,7 @@ export function HypothesisPanel({
   const learnedImpact = hypothesis.provenance?.estimated_total_impact ?? 0;
 
   return (
-    <div className="rounded-2xl border border-border/70 bg-card/75 shadow-sm">
+    <div className="rounded-md border border-border bg-card/75 shadow-sm">
       <button
         type="button"
         className="flex w-full items-start justify-between gap-4 p-5 text-left"
@@ -96,7 +94,7 @@ export function HypothesisPanel({
 
       <div className={cn("grid transition-all", open ? "grid-rows-[1fr]" : "grid-rows-[0fr]")}>
         <div className="overflow-hidden">
-          <div className="border-t border-border/60 p-5">
+          <div className="border-t border-border p-5">
             <div className="grid gap-5 xl:grid-cols-[minmax(0,1fr)_minmax(280px,0.6fr)]">
               <div className="space-y-4">
                 <ConfidenceMeter value={score ?? confidenceFromLabel(hypothesis.confidence_label)} />
@@ -120,14 +118,14 @@ export function HypothesisPanel({
               </div>
 
               <div className="space-y-4">
-                <div className="rounded-2xl border border-border/60 bg-background/35 p-4">
+                <div className="rounded-md border border-border bg-panel-inset p-4">
                   <p className="text-xs font-semibold uppercase tracking-[0.18em] text-muted-foreground">Why it is plausible</p>
                   <p className="mt-2 text-sm leading-6 text-muted-foreground">
                     Inferra ranks this hypothesis from correlated event severity, service proximity, learned patterns, and evidence density.
                   </p>
                 </div>
                 {hypothesis.provenance?.artifacts?.length ? (
-                  <div className="rounded-2xl border border-border/60 bg-background/35 p-4">
+                  <div className="rounded-md border border-border bg-panel-inset p-4">
                     <p className="text-xs font-semibold uppercase tracking-[0.18em] text-muted-foreground">Learned signals</p>
                     <div className="mt-3 flex flex-wrap gap-2">
                       {hypothesis.provenance.artifacts.slice(0, 6).map((artifact, index) => (
@@ -159,7 +157,7 @@ export function EvidenceViewer({
       {evidence?.length ? (
         <div className="grid gap-3 md:grid-cols-2">
           {evidence.slice(0, 6).map((item) => (
-            <div key={`${item.type}-${item.id}`} className="rounded-2xl border border-border/60 bg-background/35 p-4">
+            <div key={`${item.type}-${item.id}`} className="rounded-md border border-border bg-panel-inset p-4">
               <div className="mb-2 flex flex-wrap items-center gap-2">
                 <Badge variant="outline">{item.type}</Badge>
                 <span className="text-xs text-muted-foreground">{item.id}</span>
@@ -182,7 +180,7 @@ export function SuggestedChecks({ checks }: { checks: InvestigationStep[] }) {
   return (
     <div className="space-y-3">
       {checks.slice(0, 6).map((check, index) => (
-        <div key={`${check.title}-${index}`} className="rounded-2xl border border-border/60 bg-background/35 p-4">
+        <div key={`${check.title}-${index}`} className="rounded-md border border-border bg-panel-inset p-4">
           <div className="flex flex-wrap items-center gap-2">
             <Badge variant="success">{check.safety || "read-only"}</Badge>
             {check.requires_user_action ? <Badge variant="warning">manual</Badge> : null}
@@ -190,7 +188,7 @@ export function SuggestedChecks({ checks }: { checks: InvestigationStep[] }) {
           <p className="mt-2 font-medium">{check.title}</p>
           {check.reason ? <p className="mt-1 text-sm leading-6 text-muted-foreground">{check.reason}</p> : null}
           {check.command ? (
-            <pre className="mt-3 overflow-x-auto rounded-xl border border-border/70 bg-background/75 p-3 text-xs text-primary">
+            <pre className="mt-3 overflow-x-auto rounded-sm border border-border bg-panel-inset p-2.5 font-data text-xs text-foreground">
               <code>{check.command}</code>
             </pre>
           ) : null}
@@ -208,7 +206,7 @@ export function AlternativeHypotheses({ items }: { items: string[] }) {
   return (
     <div className="space-y-2">
       {items.slice(0, 6).map((item, index) => (
-        <div key={index} className="flex gap-3 rounded-2xl border border-border/60 bg-background/35 p-4">
+        <div key={index} className="flex gap-3 rounded-md border border-border bg-panel-inset p-4">
           <ShieldQuestion className="mt-0.5 size-4 shrink-0 text-muted-foreground" />
           <p className="text-sm leading-6 text-muted-foreground">{item}</p>
         </div>
@@ -229,7 +227,7 @@ export function ExplanationBlock({
   empty?: string;
 }) {
   return (
-    <div className="rounded-2xl border border-border/60 bg-background/35 p-4">
+    <div className="rounded-md border border-border bg-panel-inset p-4">
       <div className="flex items-center gap-2">
         <Icon className="size-4 text-primary" />
         <p className="text-xs font-semibold uppercase tracking-[0.18em] text-muted-foreground">{title}</p>

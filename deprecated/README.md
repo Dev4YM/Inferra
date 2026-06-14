@@ -8,7 +8,7 @@ Inferra runtime.
 - **Rust workspace:** `src/Cargo.toml` and `src/crates/` own the live CLI, API,
   collectors, storage, service integration, and investigation runtime.
 - **Frontend:** `src/web/frontend/` builds the shipped React UI, and
-  `src/web/ui_dist/` is the packaged bundle consumed by the Rust server.
+  `src/web/ui_dist/` is the Vite build output consumed by the Rust server (gitignored — run `scripts/build-web.ps1` or `npm run build` in `src/web/frontend`).
 - **Shared config/assets:** `src/config/defaults.toml` and related runtime assets
   remain live because the Rust runtime reads and ships them.
 

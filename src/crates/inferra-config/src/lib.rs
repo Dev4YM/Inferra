@@ -72,6 +72,13 @@ fn resolve_config_path(config_override: Option<PathBuf>) -> Result<PathBuf> {
     if let Ok(exe) = std::env::current_exe() {
         let candidates = config_path_candidates_from_executable(&exe);
         if executable_looks_installed(&exe) {
+            let programdata_config = windows_programdata_config_path();
+            if programdata_config.exists() {
+                return Ok(programdata_config);
+            }
+            if let Some(candidate) = candidates.iter().find(|path| path.exists()) {
+                return Ok(candidate.clone());
+            }
             if let Some(candidate) = candidates.first() {
                 return Ok(candidate.clone());
             }

@@ -618,10 +618,10 @@ export function LearningReviewPage({ mode }: { mode: Mode }) {
                       key={view.view_id}
                       type="button"
                       onClick={() => void applySavedView(view)}
-                      className={`w-full rounded-2xl border p-4 text-left transition ${
+                      className={`w-full rounded-md border p-4 text-left transition ${
                         activeViewId === view.view_id
                           ? "border-sky-400/35 bg-sky-400/10"
-                          : "border-border/60 bg-background/30 hover:border-border hover:bg-background/50"
+                          : "border-border bg-panel-inset hover:border-border hover:bg-background/50"
                       }`}
                     >
                       <div className="flex flex-wrap items-start justify-between gap-3">
@@ -659,7 +659,7 @@ export function LearningReviewPage({ mode }: { mode: Mode }) {
             <CardContent className="space-y-4">
               <div className="grid gap-3 sm:grid-cols-2">
                 {review.data.analytics.kind_breakdown.map((entry) => (
-                  <div key={entry.artifact_kind} className="rounded-2xl border border-border/60 bg-background/30 p-4">
+                  <div key={entry.artifact_kind} className="rounded-md border border-border bg-panel-inset p-4">
                     <div className="flex items-center justify-between gap-2">
                       <p className="font-medium">{humanizeKind(entry.artifact_kind)}</p>
                       <Badge variant="outline">{entry.total}</Badge>
@@ -827,7 +827,7 @@ export function LearningReviewPage({ mode }: { mode: Mode }) {
                 <CardDescription>Make the review decision and runtime state explicit for this learned artifact.</CardDescription>
               </CardHeader>
               <CardContent className="space-y-5">
-                <div className="space-y-3 rounded-2xl border border-border/60 bg-background/30 p-4">
+                <div className="space-y-3 rounded-md border border-border bg-panel-inset p-4">
                   <div className="flex flex-wrap items-start justify-between gap-3">
                     <div>
                       <p className="text-lg font-semibold">{selectedArtifact.label}</p>
@@ -899,7 +899,7 @@ export function LearningReviewPage({ mode }: { mode: Mode }) {
                 </div>
 
                 <div className="grid gap-3 xl:grid-cols-2">
-                  <div className="rounded-2xl border border-border/60 bg-background/30 p-4">
+                  <div className="rounded-md border border-border bg-panel-inset p-4">
                     <p className="text-sm font-semibold">Review decisions</p>
                     <p className="mt-1 text-sm text-muted-foreground">Review state stays explicit and durable. Rejection also retires runtime influence.</p>
                     <div className="mt-4 flex flex-wrap gap-3">
@@ -922,7 +922,7 @@ export function LearningReviewPage({ mode }: { mode: Mode }) {
                     </div>
                   </div>
 
-                  <div className="rounded-2xl border border-border/60 bg-background/30 p-4">
+                  <div className="rounded-md border border-border bg-panel-inset p-4">
                     <p className="text-sm font-semibold">Runtime state</p>
                     <p className="mt-1 text-sm text-muted-foreground">Use this when you need to hard-disable or restore runtime influence regardless of review state.</p>
                     <div className="mt-4 flex flex-wrap gap-3">
@@ -988,7 +988,7 @@ export function LearningReviewPage({ mode }: { mode: Mode }) {
               <CardContent className="space-y-3">
                 {recentActivity.length ? (
                   recentActivity.map((entry) => (
-                    <div key={entry.audit_id} className="rounded-2xl border border-border/60 bg-background/30 p-4">
+                    <div key={entry.audit_id} className="rounded-md border border-border bg-panel-inset p-4">
                       <div className="flex flex-wrap items-center gap-2">
                         <Badge variant="outline">{entry.artifact_kind}</Badge>
                         <Badge variant={reviewVariant(entry.review_status_after ?? "unreviewed")}>
@@ -1014,7 +1014,7 @@ export function LearningReviewPage({ mode }: { mode: Mode }) {
               <CardContent className="space-y-3">
                 {incidents.length ? (
                   incidents.map((item) => (
-                    <div key={item.incident_id} className="rounded-2xl border border-border/60 bg-background/30 p-4">
+                    <div key={item.incident_id} className="rounded-md border border-border bg-panel-inset p-4">
                       <div className="flex flex-wrap items-center justify-between gap-2">
                         <div>
                           <Link to={`/incidents/${item.incident_id}`} className="font-medium hover:underline">
@@ -1054,7 +1054,7 @@ export function LearningReviewPage({ mode }: { mode: Mode }) {
 
 function MetricCard({ title, value, note }: { title: string; value: string; note: string }) {
   return (
-    <Card className="border-border/70 bg-background/30">
+    <Card className="border-border bg-panel-inset">
       <CardContent className="p-5">
         <p className="text-xs font-semibold uppercase tracking-[0.2em] text-muted-foreground">{title}</p>
         <p className="mt-2 text-3xl font-semibold">{value}</p>
@@ -1066,7 +1066,7 @@ function MetricCard({ title, value, note }: { title: string; value: string; note
 
 function StatusStat({ label, value }: { label: string; value: string }) {
   return (
-    <div className="rounded-2xl border border-border/60 bg-background/30 px-4 py-3">
+    <div className="rounded-md border border-border bg-panel-inset px-4 py-3">
       <p className="text-xs font-semibold uppercase tracking-[0.18em] text-muted-foreground">{label}</p>
       <p className="mt-2 text-sm font-medium">{value}</p>
     </div>
@@ -1094,10 +1094,10 @@ function ArtifactListItem({
     <button
       type="button"
       onClick={onClick}
-      className={`w-full rounded-2xl border p-4 text-left transition ${
+      className={`w-full rounded-md border p-4 text-left transition ${
         active
           ? "border-sky-400/35 bg-sky-400/10"
-          : "border-border/60 bg-background/30 hover:border-border hover:bg-background/50"
+          : "border-border bg-panel-inset hover:border-border hover:bg-background/50"
       }`}
     >
       <div className="flex flex-wrap items-start justify-between gap-3">
@@ -1107,7 +1107,7 @@ function ArtifactListItem({
         </div>
         <div className="flex flex-wrap items-center gap-2">
           <label
-            className="flex items-center gap-2 rounded-full border border-border/60 px-2 py-1 text-xs text-muted-foreground"
+            className="flex items-center gap-2 rounded-full border border-border px-2 py-1 text-xs text-muted-foreground"
             onClick={(event) => event.stopPropagation()}
           >
             <input type="checkbox" checked={selected} onChange={onToggleSelect} />
@@ -1130,7 +1130,7 @@ function ArtifactCohort({
   onFocus: (key: string) => void;
 }) {
   return (
-    <div className="space-y-3 rounded-2xl border border-border/60 bg-background/30 p-4">
+    <div className="space-y-3 rounded-md border border-border bg-panel-inset p-4">
       <div className="flex items-center justify-between gap-2">
         <p className="text-sm font-semibold">{title}</p>
         <Badge variant="outline">{rows.length}</Badge>
@@ -1141,7 +1141,7 @@ function ArtifactCohort({
             <button
               key={`${row.artifact_kind}:${row.artifact_id}`}
               type="button"
-              className="w-full rounded-2xl border border-border/60 px-3 py-2 text-left hover:border-border hover:bg-background/50"
+              className="w-full rounded-md border border-border px-3 py-2 text-left hover:border-border hover:bg-background/50"
               onClick={() => onFocus(`${row.artifact_kind}:${row.artifact_id}`)}
             >
               <div className="flex flex-wrap items-center justify-between gap-2">
@@ -1174,7 +1174,7 @@ function TrendDrilldownCard({
   onFocus: (key: string) => void;
 }) {
   return (
-    <div className="rounded-2xl border border-border/60 bg-background/30 p-4">
+    <div className="rounded-md border border-border bg-panel-inset p-4">
       <div className="flex flex-wrap items-start justify-between gap-3">
         <div>
           <button
@@ -1193,7 +1193,7 @@ function TrendDrilldownCard({
       </div>
       <div className="mt-3 grid gap-3 lg:grid-cols-2">
         {drilldown.observations.map((item, index) => (
-          <div key={`${drilldown.artifact_id}-${item.observed_at}-${index}`} className="rounded-2xl border border-border/60 bg-background/40 p-3">
+          <div key={`${drilldown.artifact_id}-${item.observed_at}-${index}`} className="rounded-md border border-border bg-background/40 p-3">
             <div className="flex items-center justify-between gap-2">
               <p className="text-sm font-medium">{formatRelativeDate(item.observed_at)}</p>
               <Badge variant="outline">{item.incident_id}</Badge>
@@ -1245,7 +1245,7 @@ function ArtifactSignals({ artifact }: { artifact: ArtifactRecord }) {
         <StatusStat label="Cause subtype" value={detail.cause_subtype || "—"} />
         <StatusStat label="Same service only" value={detail.requires_same_service ? "yes" : "no"} />
       </div>
-      <div className="rounded-2xl border border-border/60 bg-background/30 p-4">
+      <div className="rounded-md border border-border bg-panel-inset p-4">
         <p className="text-xs font-semibold uppercase tracking-[0.18em] text-muted-foreground">Title template</p>
         <p className="mt-2 text-sm">{detail.title_template}</p>
       </div>
@@ -1263,7 +1263,7 @@ function ArtifactSignals({ artifact }: { artifact: ArtifactRecord }) {
 
 function SignalGroup({ title, items }: { title: string; items: string[] }) {
   return (
-    <div className="rounded-2xl border border-border/60 bg-background/30 p-4">
+    <div className="rounded-md border border-border bg-panel-inset p-4">
       <p className="text-xs font-semibold uppercase tracking-[0.18em] text-muted-foreground">{title}</p>
       <div className="mt-3 flex flex-wrap gap-2">
         {items.length ? (

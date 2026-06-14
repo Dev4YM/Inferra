@@ -15,6 +15,7 @@ pub async fn dispatch(cli: Cli) -> Result<()> {
         None => system::show_landing(&ctx).await,
         Some(Command::Status) => system::show_status(&ctx).await,
         Some(Command::Serve) => system::run_serve_command(&ctx).await,
+        Some(Command::Runtime { action }) => system::run_runtime_command(&ctx, action).await,
         Some(Command::Service {
             action,
             service_run,

@@ -257,7 +257,7 @@ export function AiInvestigatorPage({ mode }: { mode: Mode }) {
             <CardTitle>Live stream (model tokens)</CardTitle>
           </CardHeader>
           <CardContent>
-            <pre className="max-h-56 overflow-auto rounded-xl border border-border/60 bg-muted/40 p-3 text-xs leading-relaxed text-muted-foreground">
+            <pre className="max-h-56 overflow-auto rounded-xl border border-border bg-muted/40 p-3 text-xs leading-relaxed text-muted-foreground">
               {streamTranscript || (streamBusy ? "… waiting for tokens" : "")}
             </pre>
             <p className="mt-2 text-xs text-muted-foreground">
@@ -281,7 +281,7 @@ export function AiInvestigatorPage({ mode }: { mode: Mode }) {
               <button
                 key={generation.generation_id}
                 type="button"
-                className="flex w-full items-center justify-between gap-3 rounded-xl border border-border/60 bg-background/30 p-3 text-left text-sm transition hover:bg-secondary/40"
+                className="flex w-full items-center justify-between gap-3 rounded-xl border border-border bg-panel-inset p-3 text-left text-sm transition hover:bg-secondary/40"
                 onClick={() => setResult(hydrateSavedGeneration(generation))}
               >
                 <span className="min-w-0">

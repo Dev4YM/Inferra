@@ -208,7 +208,7 @@ cargo clippy --manifest-path src/Cargo.toml --workspace --all-targets -- -D warn
 cargo test --manifest-path src/Cargo.toml --workspace
 ```
 
-The web console source is under `src/web/frontend`; `npm run build` writes the packaged bundle to `src/web/ui_dist`. **Commit `ui_dist` whenever you change the frontend** so packaged installs and CI smoke tests match the React source (CI checks that the tree is in sync).
+The web console source is under `src/web/frontend`; `npm run build` (or `scripts/build-web.ps1` / `scripts/build-web.sh`) writes the bundle to `src/web/ui_dist`. That directory is **build output** — gitignored, not committed. CI and install scripts build it when needed.
 
 Python is used for **developer tooling, docs, packaging-contract tests, and Rust black-box integration harnesses**:
 
