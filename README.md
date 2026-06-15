@@ -34,8 +34,6 @@
 | Deterministic scoring + auditable state, with optional AI narration | A black-box “root cause AI” that rewrites scores |
 | Rust runtime + SQLite + loopback web UI | A mandatory SaaS observability suite |
 
-The screenshot above is a **real render** of the Overview page using the same React components and design tokens as the shipping UI. The committed asset lives at [`docs/assets/readme-hero.png`](docs/assets/readme-hero.png).
-
 ## Features
 
 | Area | What you get |
