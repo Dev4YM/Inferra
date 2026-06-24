@@ -45,6 +45,45 @@ pub struct QuickAnalysis {
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct PlatformReadinessIssue {
+    pub id: String,
+    pub category: String,
+    pub severity: String,
+    pub title: String,
+    pub detail: String,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct PlatformReadinessAction {
+    pub id: String,
+    pub category: String,
+    pub title: String,
+    pub detail: String,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub href: Option<String>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub command: Option<String>,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct PlatformReadiness {
+    pub status: String,
+    pub score: u8,
+    pub headline: String,
+    pub summary: String,
+    pub services_observed: usize,
+    pub mapped_services: usize,
+    pub unmapped_services: usize,
+    pub runtime_apps_detected: usize,
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    pub blockers: Vec<PlatformReadinessIssue>,
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    pub next_actions: Vec<PlatformReadinessAction>,
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    pub strengths: Vec<String>,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct TraceSummary {
     pub trace_id: String,
     pub event_count: i64,
@@ -361,6 +400,7 @@ pub struct OverviewResponse {
     pub dashboard: DashboardPayload,
     pub runtime: RuntimeContext,
     pub workspace_projects: Vec<WorkspaceProject>,
+    pub readiness: PlatformReadiness,
     pub experience: ExperiencePayload,
 }
 

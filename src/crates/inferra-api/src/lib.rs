@@ -6981,6 +6981,7 @@ redact_raw_logs = true
         assert!(overview.get("dashboard").is_some());
         assert!(overview.get("runtime").is_some());
         assert!(overview.get("workspace_projects").is_some());
+        assert!(overview.get("readiness").is_some());
         assert!(overview.get("experience").is_some());
         assert!(overview
             .get("dashboard")

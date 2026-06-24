@@ -505,6 +505,148 @@ fn workspace_map_can_disable_project_app_synthesis() {
 }
 
 #[test]
+fn platform_readiness_marks_cold_deployments_with_concrete_next_steps() {
+    let root = temp_dir("platform-readiness-cold");
+    let paths = Paths {
+        config_path: root.join("inferra.toml"),
+        data_dir: root.join("data"),
+        events_db: root.join("data").join("events.db"),
+        incidents_db: root.join("data").join("incidents.db"),
+    };
+    let config: TomlValue = "[workspace]\nenabled = true\n"
+        .parse()
+        .expect("parse config");
+    let workspace = WorkspaceMapResponse {
+        enabled: true,
+        support_layers: vec![],
+        projects: vec![],
+        runtime_apps: vec![],
+        service_mappings: vec![],
+        unmapped_services: vec![],
+        config_mappings: vec![],
+    };
+
+    let signals = OverviewRuntimeSignals::default();
+    let readiness = build_platform_readiness(PlatformReadinessInputs {
+        config: &config,
+        paths: &paths,
+        storage_ok: true,
+        ai_enabled: false,
+        runtime_signals: &signals,
+        incidents_n: 0,
+        services: &[],
+        workspace: &workspace,
+    });
+
+    assert_eq!(readiness.status, "cold");
+    assert!(readiness
+        .blockers
+        .iter()
+        .any(|item| item.id == "no-runtime-evidence"));
+    assert!(readiness
+        .blockers
+        .iter()
+        .any(|item| item.id == "no-projects"));
+    assert!(readiness
+        .next_actions
+        .iter()
+        .any(|action| action.id == "collectors-start"));
+}
+
+#[test]
+fn platform_readiness_marks_mapped_signal_flow_as_ready() {
+    let root = temp_dir("platform-readiness-ready");
+    let paths = Paths {
+        config_path: root.join("inferra.toml"),
+        data_dir: root.join("data"),
+        events_db: root.join("data").join("events.db"),
+        incidents_db: root.join("data").join("incidents.db"),
+    };
+    let config: TomlValue = "[workspace]\nenabled = true\n"
+        .parse()
+        .expect("parse config");
+    let workspace = WorkspaceMapResponse {
+        enabled: true,
+        support_layers: vec![],
+        projects: vec![WorkspaceProject {
+            path: "/code/app".into(),
+            kind: "node".into(),
+            marker: "package.json".into(),
+        }],
+        runtime_apps: vec![WorkspaceRuntimeApp {
+            pid: None,
+            name: "api".into(),
+            display_name: Some("API".into()),
+            runtime: "node".into(),
+            language: Some("typescript".into()),
+            process_kind: None,
+            framework: Some("next".into()),
+            libraries: vec![],
+            log_hints: vec![],
+            log_sources: vec![],
+            app_url: None,
+            endpoints: vec![],
+            health_endpoint: None,
+            app_location: None,
+            resources: None,
+            app_state: None,
+            context_capabilities: vec![],
+            app_structure: vec![],
+            manager: Some("workspace".into()),
+            status: Some("registered".into()),
+            cwd: None,
+            script: None,
+            command: None,
+            project_path: Some("/code/app".into()),
+            latest_trace_summary: None,
+            confidence: 1.0,
+            source: "project".into(),
+            signals: vec![],
+        }],
+        service_mappings: vec![WorkspaceMapping {
+            service_id: "api".into(),
+            project_path: "/code/app".into(),
+            confidence: 0.98,
+            source: "manual".into(),
+            notes: None,
+            signals: vec![],
+        }],
+        unmapped_services: vec![],
+        config_mappings: vec![],
+    };
+    let services = vec![ServiceRow {
+        service_id: "api".into(),
+        status: "healthy".into(),
+        event_count: Some(42),
+        error_count: Some(0),
+        error_ratio: Some(0.0),
+        last_event_at: None,
+        active_incidents: None,
+        latest_trace_summary: None,
+    }];
+
+    let signals = OverviewRuntimeSignals::default();
+    let readiness = build_platform_readiness(PlatformReadinessInputs {
+        config: &config,
+        paths: &paths,
+        storage_ok: true,
+        ai_enabled: false,
+        runtime_signals: &signals,
+        incidents_n: 0,
+        services: &services,
+        workspace: &workspace,
+    });
+
+    assert_eq!(readiness.status, "ready");
+    assert!(readiness.score >= 80);
+    assert!(readiness.blockers.is_empty());
+    assert!(readiness
+        .strengths
+        .iter()
+        .any(|item| item.contains("mapped back to workspace ownership")));
+}
+
+#[test]
 fn runtime_apps_map_to_projects_with_manager_confidence() {
     let project = WorkspaceProject {
         path: r"C:\workspace\api".into(),

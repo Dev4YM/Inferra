@@ -714,6 +714,37 @@ export type QuickAnalysis = {
   ai_role: string;
 };
 
+export type PlatformReadinessIssue = {
+  id: string;
+  category: string;
+  severity: string;
+  title: string;
+  detail: string;
+};
+
+export type PlatformReadinessAction = {
+  id: string;
+  category: string;
+  title: string;
+  detail: string;
+  href?: string | null;
+  command?: string | null;
+};
+
+export type PlatformReadiness = {
+  status: string;
+  score: number;
+  headline: string;
+  summary: string;
+  services_observed: number;
+  mapped_services: number;
+  unmapped_services: number;
+  runtime_apps_detected: number;
+  blockers: PlatformReadinessIssue[];
+  next_actions: PlatformReadinessAction[];
+  strengths: string[];
+};
+
 export type IncidentRow = {
   incident_id: string;
   state: string;
@@ -792,6 +823,7 @@ export type OverviewResponse = {
   dashboard: DashboardPayload;
   runtime: RuntimeContext;
   workspace_projects: WorkspaceProject[];
+  readiness?: PlatformReadiness;
   experience: ExperiencePayload;
 };
 

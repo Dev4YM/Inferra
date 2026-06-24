@@ -10,7 +10,8 @@ use anyhow::Result;
 use inferra_config::{experience_from_config, Paths};
 use inferra_contracts::{
     AiStatusResponse, DashboardHealth, DashboardPayload, EventRow, IncidentRow, OverviewResponse,
-    QuickAnalysis, RuntimeContainer, RuntimeContext, RuntimeProcess, ServiceRow, SeverityValue,
+    PlatformReadiness, PlatformReadinessAction, PlatformReadinessIssue, QuickAnalysis,
+    RuntimeContainer, RuntimeContext, RuntimeProcess, ServiceRow, SeverityValue,
     WorkspaceAppCapability, WorkspaceAppEndpoint, WorkspaceAppLocation, WorkspaceAppResources,
     WorkspaceAppState, WorkspaceAppStructureItem, WorkspaceLogSource, WorkspaceMapResponse,
     WorkspaceMapping, WorkspaceMappingSignal, WorkspaceProject, WorkspaceRuntimeApp,
@@ -463,14 +464,26 @@ pub fn build_overview_with_runtime_signals(
         processes: Some(processes),
     };
 
-    let scan_root = paths.config_path.parent().unwrap_or(Path::new("."));
-    let projects = discover_projects(config, scan_root);
+    let workspace = build_workspace_map(config, paths)?;
+    let projects = workspace.projects.clone();
+    let readiness = build_platform_readiness(PlatformReadinessInputs {
+        config,
+        paths,
+        storage_ok,
+        ai_enabled,
+        runtime_signals: &runtime_signals,
+        incidents_n: active_n,
+        services: &services,
+        workspace: &workspace,
+    });
 
     let incidents_n = active_n;
     let degraded = !storage_ok || !degraded_reasons.is_empty();
     let mut summary_parts: Vec<String> = Vec::new();
     if incidents_n > 0 {
         summary_parts.push(format!("{incidents_n} active incident(s)."));
+    } else if readiness.status != "ready" {
+        summary_parts.push(readiness.headline.clone());
     } else {
         summary_parts.push("No active incidents.".into());
     }
@@ -543,8 +556,324 @@ pub fn build_overview_with_runtime_signals(
         dashboard,
         runtime,
         workspace_projects: projects,
+        readiness,
         experience,
     })
+}
+
+fn build_platform_readiness(inputs: PlatformReadinessInputs<'_>) -> PlatformReadiness {
+    let PlatformReadinessInputs {
+        config,
+        paths,
+        storage_ok,
+        ai_enabled,
+        runtime_signals,
+        incidents_n,
+        services,
+        workspace,
+    } = inputs;
+    let mut score: i32 = 100;
+    let mut blockers = Vec::new();
+    let mut next_actions = Vec::new();
+    let mut strengths = Vec::new();
+
+    let services_observed = services.len();
+    let runtime_apps_detected = workspace.runtime_apps.len();
+    let mapped_services = workspace.service_mappings.len();
+    let unmapped_services = workspace
+        .unmapped_services
+        .iter()
+        .filter(|service_id| !is_infrastructure_service_id(service_id))
+        .count();
+    let workspace_is_enabled = workspace_enabled(config);
+    let projects_detected = workspace.projects.len();
+    let has_events = services_observed > 0;
+    let has_context = projects_detected > 0 || runtime_apps_detected > 0;
+    let has_service_ownership = mapped_services > 0 || unmapped_services == 0;
+
+    if !storage_ok {
+        score -= 35;
+        blockers.push(readiness_issue(
+            "storage-missing",
+            "runtime",
+            "critical",
+            "Storage is not ready",
+            "Inferra cannot keep evidence or incidents durable until the configured data directory exists.",
+        ));
+        next_actions.push(readiness_action(
+            "storage-init",
+            "runtime",
+            "Initialize storage",
+            "Create the configured databases and verify the data directory before trusting the dashboard state.",
+            Some("/settings"),
+            Some(format!(
+                "inferra --config \"{}\" init-db",
+                paths.config_path.display()
+            )),
+        ));
+    } else {
+        strengths.push("Storage is writable.".into());
+    }
+
+    if !workspace_is_enabled {
+        score -= 20;
+        blockers.push(readiness_issue(
+            "workspace-disabled",
+            "workspace",
+            "warning",
+            "Workspace discovery is disabled",
+            "Inferra can observe runtime signals, but it cannot attach ownership or code context while workspace discovery is off.",
+        ));
+        next_actions.push(readiness_action(
+            "workspace-enable",
+            "workspace",
+            "Enable workspace discovery",
+            "Turn on workspace scanning so services and apps can map back to code projects.",
+            Some("/settings"),
+            Some("inferra config set workspace.enabled true".into()),
+        ));
+    }
+
+    if !has_events {
+        score -= 30;
+        blockers.push(readiness_issue(
+            "no-runtime-evidence",
+            "collectors",
+            "critical",
+            "No runtime evidence is reaching Inferra",
+            "The platform is online, but it has not observed enough services or events to produce incidents, ownership, or timelines.",
+        ));
+        next_actions.push(readiness_action(
+            "collectors-start",
+            "collectors",
+            "Start collectors",
+            "Start the configured collectors or emit app/OTLP events so Inferra has evidence to analyze.",
+            Some("/control"),
+            Some("inferra collectors start".into()),
+        ));
+    } else {
+        strengths.push(format!(
+            "{services_observed} service(s) already emitting evidence."
+        ));
+    }
+
+    if projects_detected == 0 {
+        score -= if has_events { 25 } else { 15 };
+        let detail = if workspace_has_explicit_roots(config) {
+            "Configured workspace roots did not resolve into supported project markers. Check the roots and project manifests."
+        } else {
+            "Inferra has not found any local code projects yet, so incidents cannot be tied back to code owners or app folders."
+        };
+        blockers.push(readiness_issue(
+            "no-projects",
+            "workspace",
+            if has_events { "warning" } else { "info" },
+            "No workspace projects detected",
+            detail,
+        ));
+        next_actions.push(readiness_action(
+            "workspace-roots",
+            "workspace",
+            "Point Inferra at your code",
+            "Add `workspace.roots` or `workspace.home_roots`, then rescan so runtime signals can be attached to real projects.",
+            Some("/workspace"),
+            None,
+        ));
+    } else {
+        strengths.push(format!(
+            "{projects_detected} workspace project(s) discovered."
+        ));
+    }
+
+    if runtime_apps_detected == 0 && has_context {
+        score -= 10;
+        blockers.push(readiness_issue(
+            "no-runtime-apps",
+            "workspace",
+            "info",
+            "No running apps have been attached to the workspace yet",
+            "Project files are visible, but Inferra has not resolved active app processes or endpoints from them yet.",
+        ));
+        next_actions.push(readiness_action(
+            "runtime-apps",
+            "workspace",
+            "Start a local app and rescan",
+            "Running one of the mapped applications gives Inferra richer app context, endpoints, and process ownership.",
+            Some("/workspace"),
+            Some("inferra workspace map".into()),
+        ));
+    }
+
+    if has_events && mapped_services == 0 && unmapped_services > 0 {
+        score -= 20;
+        blockers.push(readiness_issue(
+            "no-service-ownership",
+            "mapping",
+            "warning",
+            "Observed services do not map back to projects yet",
+            "Inferra is collecting evidence, but it still lacks service ownership, which weakens incident routing, graph explanations, and app drill-downs.",
+        ));
+        next_actions.push(readiness_action(
+            "map-services",
+            "mapping",
+            "Map observed services",
+            "Use the workspace and systems views to connect service ids to real projects before the next incident.",
+            Some("/systems"),
+            Some("inferra workspace services".into()),
+        ));
+    } else if unmapped_services > 0 {
+        score -= 8;
+        blockers.push(readiness_issue(
+            "partial-service-ownership",
+            "mapping",
+            "info",
+            "Some services still have no project owner",
+            "The platform is usable, but a subset of observed services still lack workspace ownership.",
+        ));
+    } else if has_events && has_service_ownership {
+        strengths.push("Observed services are mapped back to workspace ownership.".into());
+    }
+
+    if runtime_signals.collector_errors.unwrap_or_default() > 0 {
+        score -= 12;
+        blockers.push(readiness_issue(
+            "collector-errors",
+            "collectors",
+            "warning",
+            "Collector errors are degrading signal quality",
+            "At least one active collector is reporting errors, which can leave gaps in evidence or stale health status.",
+        ));
+        next_actions.push(readiness_action(
+            "collector-diagnostics",
+            "collectors",
+            "Inspect collector diagnostics",
+            "Review collector state, last errors, and host-specific hints before expanding scope.",
+            Some("/control"),
+            Some("inferra collectors status".into()),
+        ));
+    }
+
+    if ai_enabled && runtime_signals.ai_available == Some(false) {
+        score -= 8;
+        blockers.push(readiness_issue(
+            "ai-unavailable",
+            "ai",
+            "info",
+            "AI investigator is configured but unavailable",
+            "The core platform still works, but guided investigation and narrative summaries will stay degraded until the provider is reachable.",
+        ));
+        next_actions.push(readiness_action(
+            "ai-settings",
+            "ai",
+            "Fix AI provider settings",
+            "Verify provider reachability, model settings, and authentication before enabling operator workflows that depend on AI.",
+            Some("/settings"),
+            None,
+        ));
+    } else if ai_enabled {
+        strengths.push("AI investigator is configured and reachable.".into());
+    }
+
+    if incidents_n > 0 {
+        strengths.push(format!(
+            "{incidents_n} active incident(s) already available for investigation."
+        ));
+    } else if has_events {
+        strengths.push("Runtime evidence is already flowing, so new incidents can be created from real signals.".into());
+    }
+
+    let status = if !storage_ok {
+        "blocked"
+    } else if !has_events {
+        "cold"
+    } else if projects_detected == 0 || mapped_services == 0 || unmapped_services > 0 {
+        "partial"
+    } else {
+        "ready"
+    };
+
+    let headline = match status {
+        "blocked" => "Inferra needs storage setup before its analysis can be trusted.".to_string(),
+        "cold" => "Inferra is online, but it is not receiving enough evidence to be useful yet.".to_string(),
+        "partial" if !has_context => {
+            "Inferra sees runtime signals, but it still lacks code context and ownership.".to_string()
+        }
+        "partial" => {
+            "Inferra has partial signal coverage, but ownership and app context still need work.".to_string()
+        }
+        _ if incidents_n > 0 => {
+            "Inferra has enough context to investigate live incidents and trace them back to owned systems.".to_string()
+        }
+        _ => {
+            "Inferra has enough context to relate runtime evidence, services, and workspace ownership.".to_string()
+        }
+    };
+
+    let summary = match status {
+        "blocked" => "Fix storage first, then verify collectors and workspace mapping so evidence persists and can be investigated.".to_string(),
+        "cold" => "Bring in runtime evidence with collectors or app ingestion, then attach that signal to projects.".to_string(),
+        "partial" if projects_detected == 0 => {
+            "Evidence is arriving, but project discovery is still empty, so the platform cannot tell you which codebase owns what it sees.".to_string()
+        }
+        "partial" if mapped_services == 0 || unmapped_services > 0 => {
+            "The platform is collecting useful signals, but service-to-project ownership is incomplete, so incidents remain harder to route and explain.".to_string()
+        }
+        "partial" => {
+            "Core runtime signal flow works, but one or more setup layers still limit how actionable the output is.".to_string()
+        }
+        _ => "The main setup layers are present: evidence is flowing, projects are visible, and service ownership is available.".to_string(),
+    };
+
+    score = score.clamp(0, 100);
+    next_actions.truncate(4);
+
+    PlatformReadiness {
+        status: status.into(),
+        score: score as u8,
+        headline,
+        summary,
+        services_observed,
+        mapped_services,
+        unmapped_services,
+        runtime_apps_detected,
+        blockers,
+        next_actions,
+        strengths,
+    }
+}
+
+fn readiness_issue(
+    id: &str,
+    category: &str,
+    severity: &str,
+    title: &str,
+    detail: &str,
+) -> PlatformReadinessIssue {
+    PlatformReadinessIssue {
+        id: id.into(),
+        category: category.into(),
+        severity: severity.into(),
+        title: title.into(),
+        detail: detail.into(),
+    }
+}
+
+fn readiness_action(
+    id: &str,
+    category: &str,
+    title: &str,
+    detail: &str,
+    href: Option<&str>,
+    command: Option<String>,
+) -> PlatformReadinessAction {
+    PlatformReadinessAction {
+        id: id.into(),
+        category: category.into(),
+        title: title.into(),
+        detail: detail.into(),
+        href: href.map(str::to_string),
+        command,
+    }
 }
 
 fn is_infrastructure_service_id(service_id: &str) -> bool {
@@ -8468,6 +8797,17 @@ struct WorkspaceLogSourceInput<'a> {
     cwd: Option<&'a str>,
     script: Option<&'a str>,
     pm2_env: Option<&'a serde_json::Value>,
+}
+
+struct PlatformReadinessInputs<'a> {
+    config: &'a TomlValue,
+    paths: &'a Paths,
+    storage_ok: bool,
+    ai_enabled: bool,
+    runtime_signals: &'a OverviewRuntimeSignals,
+    incidents_n: usize,
+    services: &'a [ServiceRow],
+    workspace: &'a WorkspaceMapResponse,
 }
 
 fn discover_projects(config: &TomlValue, root: &Path) -> Vec<WorkspaceProject> {
