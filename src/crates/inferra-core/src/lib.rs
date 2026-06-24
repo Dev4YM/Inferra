@@ -8364,11 +8364,9 @@ pub fn service_row_for_id(
         .next())
 }
 
-const WORKSPACE_PROJECT_MARKERS: &[(&str, &str)] = &[
+const STRONG_WORKSPACE_PROJECT_MARKERS: &[(&str, &str)] = &[
     ("pnpm-workspace.yaml", "pnpm_workspace"),
     ("package.json", "node"),
-    ("yarn.lock", "yarn"),
-    ("package-lock.json", "npm"),
     ("pyproject.toml", "python"),
     ("requirements.txt", "python"),
     ("setup.py", "python"),
@@ -8383,6 +8381,12 @@ const WORKSPACE_PROJECT_MARKERS: &[(&str, &str)] = &[
     ("build.gradle.kts", "gradle"),
     ("*.csproj", "dotnet"),
     ("*.sln", "dotnet"),
+    ("pubspec.yaml", "flutter"),
+];
+
+const WEAK_WORKSPACE_PROJECT_MARKERS: &[(&str, &str)] = &[
+    ("yarn.lock", "yarn"),
+    ("package-lock.json", "npm"),
     ("Makefile", "make"),
     ("compose.yaml", "compose"),
     ("compose.yml", "compose"),
@@ -8415,19 +8419,16 @@ fn discover_projects(config: &TomlValue, root: &Path) -> Vec<WorkspaceProject> {
             if !should_accept_workspace_project(path) {
                 continue;
             }
-            for (name, kind) in WORKSPACE_PROJECT_MARKERS {
-                if workspace_marker_exists(path, name) {
-                    let rel = display_path(path);
-                    if out.iter().any(|p: &WorkspaceProject| p.path == rel) {
-                        break;
-                    }
-                    out.push(WorkspaceProject {
-                        path: rel,
-                        kind: (*kind).into(),
-                        marker: (*name).into(),
-                    });
-                    break;
+            if let Some((marker, kind)) = workspace_project_marker(path) {
+                let rel = display_path(path);
+                if out.iter().any(|p: &WorkspaceProject| p.path == rel) {
+                    continue;
                 }
+                out.push(WorkspaceProject {
+                    path: rel,
+                    kind: kind.into(),
+                    marker: marker.into(),
+                });
             }
         }
         if out.len() >= max_results {
@@ -8639,16 +8640,11 @@ fn workspace_project_from_path(path: &Path) -> Option<WorkspaceProject> {
     if !should_accept_workspace_project(&root) {
         return None;
     }
-    for (marker, kind) in WORKSPACE_PROJECT_MARKERS {
-        if workspace_marker_exists(&root, marker) {
-            return Some(WorkspaceProject {
-                path: display_path(&root),
-                kind: (*kind).into(),
-                marker: (*marker).into(),
-            });
-        }
-    }
-    None
+    workspace_project_marker(&root).map(|(marker, kind)| WorkspaceProject {
+        path: display_path(&root),
+        kind: kind.into(),
+        marker: marker.into(),
+    })
 }
 
 fn should_accept_workspace_project(path: &Path) -> bool {
@@ -8662,13 +8658,7 @@ fn should_accept_workspace_project(path: &Path) -> bool {
         .to_string_lossy()
         .replace('/', "\\")
         .to_ascii_lowercase();
-    if std::env::var_os("USERPROFILE")
-        .or_else(|| std::env::var_os("HOME"))
-        .map(PathBuf::from)
-        .and_then(|home| home.canonicalize().ok())
-        .map(|home| home == path.canonicalize().unwrap_or_else(|_| path.to_path_buf()))
-        .unwrap_or(false)
-    {
+    if is_user_profile_root(path) {
         return false;
     }
     if rendered.contains("\\windows\\")
@@ -8680,6 +8670,68 @@ fn should_accept_workspace_project(path: &Path) -> bool {
         return false;
     }
     true
+}
+
+fn workspace_project_marker(path: &Path) -> Option<(&'static str, &'static str)> {
+    for (marker, kind) in STRONG_WORKSPACE_PROJECT_MARKERS {
+        if workspace_marker_exists(path, marker) {
+            return Some((marker, kind));
+        }
+    }
+    for (marker, kind) in WEAK_WORKSPACE_PROJECT_MARKERS {
+        if workspace_marker_exists(path, marker) && weak_workspace_marker_allowed(path, marker) {
+            return Some((marker, kind));
+        }
+    }
+    None
+}
+
+fn weak_workspace_marker_allowed(path: &Path, marker: &str) -> bool {
+    has_workspace_registration(path)
+        || STRONG_WORKSPACE_PROJECT_MARKERS
+            .iter()
+            .any(|(candidate, _)| *candidate != marker && workspace_marker_exists(path, candidate))
+        || has_workspace_source_evidence(path)
+}
+
+fn has_workspace_registration(path: &Path) -> bool {
+    path.join(".inferra").join("app.toml").exists()
+        || path.join(".inferra").join("inferra.toml").exists()
+        || path.join(".inferra").join("workspace.toml").exists()
+}
+
+fn has_workspace_source_evidence(path: &Path) -> bool {
+    [
+        "src", "app", "lib", "cmd", "pkg", "internal", "services", "server", "client", "frontend",
+        "backend",
+    ]
+    .iter()
+    .any(|name| path.join(name).is_dir())
+}
+
+fn is_user_profile_root(path: &Path) -> bool {
+    let windows = clean_display_path(&path.to_string_lossy())
+        .replace('/', "\\")
+        .trim_end_matches('\\')
+        .to_ascii_lowercase();
+    let windows_segments: Vec<&str> = windows
+        .split('\\')
+        .filter(|segment| !segment.is_empty())
+        .collect();
+    if windows_segments.len() == 3
+        && matches!(windows_segments[1], "users" | "documents and settings")
+    {
+        return true;
+    }
+
+    let unix = clean_display_path(&path.to_string_lossy())
+        .trim_end_matches('/')
+        .to_ascii_lowercase();
+    let unix_segments: Vec<&str> = unix
+        .split('/')
+        .filter(|segment| !segment.is_empty())
+        .collect();
+    unix_segments.len() == 2 && matches!(unix_segments[0], "home" | "users")
 }
 
 fn discover_nearest_workspace_project(path: &Path) -> Option<WorkspaceProject> {
@@ -9513,8 +9565,26 @@ fn discover_process_runtime_apps(projects: &[WorkspaceProject]) -> Vec<Workspace
         else {
             continue;
         };
-        let app_name = runtime_app_name(&name, script.as_deref(), project_path.as_deref());
         let framework = detect_framework(&command, script.as_deref());
+        let endpoints = workspace_app_endpoints(
+            Some(&command),
+            framework.as_deref(),
+            project_path.as_deref(),
+            None,
+        );
+        if !should_keep_process_runtime_app(
+            &name,
+            &command,
+            project_path.as_deref(),
+            cwd.as_deref(),
+            script.as_deref(),
+            exe.as_deref(),
+            framework.as_deref(),
+            &endpoints,
+        ) {
+            continue;
+        }
+        let app_name = runtime_app_name(&name, script.as_deref(), project_path.as_deref());
         let libraries = detect_libraries(&command, script.as_deref());
         let log_hints = runtime_log_hints(&runtime, framework.as_deref(), &libraries, None);
         let mut confidence = if project_path.is_some() { 0.72 } else { 0.45 };
@@ -9539,12 +9609,22 @@ fn discover_process_runtime_apps(projects: &[WorkspaceProject]) -> Vec<Workspace
                 detail: "Process cwd/script/executable is inside a detected project".into(),
             });
         }
-        let endpoints = workspace_app_endpoints(
-            Some(&command),
-            framework.as_deref(),
-            project_path.as_deref(),
-            None,
-        );
+        if framework.is_some() {
+            confidence = confidence.max(0.58);
+            signals.push(WorkspaceMappingSignal {
+                name: "process_framework".into(),
+                confidence: 0.58,
+                detail: "Command line suggests a recognized app framework".into(),
+            });
+        }
+        if !endpoints.is_empty() {
+            confidence = confidence.max(0.62);
+            signals.push(WorkspaceMappingSignal {
+                name: "process_endpoint".into(),
+                confidence: 0.62,
+                detail: "Command line or framework exposed a likely app endpoint".into(),
+            });
+        }
         let app_url = primary_app_url(&endpoints);
         let log_sources = workspace_log_sources(
             None,
@@ -9642,6 +9722,145 @@ fn discover_process_runtime_apps(projects: &[WorkspaceProject]) -> Vec<Workspace
         upsert_runtime_app(&mut apps, app);
     }
     apps
+}
+
+fn should_keep_process_runtime_app(
+    process_name: &str,
+    command: &str,
+    project_path: Option<&str>,
+    cwd: Option<&str>,
+    script: Option<&str>,
+    executable: Option<&str>,
+    framework: Option<&str>,
+    endpoints: &[WorkspaceAppEndpoint],
+) -> bool {
+    let script_in_project = path_is_within_project(project_path, script);
+    let executable_in_project = path_is_within_project(project_path, executable);
+    let cwd_in_project = path_is_within_project(project_path, cwd);
+    let script_app_signal = script_supports_runtime_app(script);
+
+    if script_in_project || executable_in_project {
+        return true;
+    }
+    if is_utility_process(process_name, command, script, executable) {
+        return script_app_signal;
+    }
+    if framework.is_some() || !endpoints.is_empty() {
+        return true;
+    }
+    script_app_signal && !cwd_in_project
+}
+
+fn path_is_within_project(project_path: Option<&str>, candidate: Option<&str>) -> bool {
+    let (Some(project_path), Some(candidate)) = (project_path, candidate) else {
+        return false;
+    };
+    let project = PathBuf::from(project_path)
+        .canonicalize()
+        .unwrap_or_else(|_| PathBuf::from(project_path));
+    let candidate = PathBuf::from(candidate)
+        .canonicalize()
+        .unwrap_or_else(|_| PathBuf::from(candidate));
+    candidate.starts_with(project)
+}
+
+fn is_utility_process(
+    process_name: &str,
+    command: &str,
+    script: Option<&str>,
+    executable: Option<&str>,
+) -> bool {
+    let name = process_name.to_ascii_lowercase();
+    let command = command.to_ascii_lowercase();
+    let script = script
+        .unwrap_or_default()
+        .replace('/', "\\")
+        .to_ascii_lowercase();
+    let executable = executable
+        .and_then(|value| Path::new(value).file_name())
+        .and_then(|value| value.to_str())
+        .unwrap_or_default()
+        .to_ascii_lowercase();
+
+    if matches!(
+        name.as_str(),
+        "git"
+            | "git.exe"
+            | "cmd"
+            | "cmd.exe"
+            | "powershell"
+            | "powershell.exe"
+            | "pwsh"
+            | "pwsh.exe"
+            | "bash"
+            | "bash.exe"
+            | "sh"
+            | "zsh"
+            | "nu"
+            | "nu.exe"
+            | "cargo"
+            | "cargo.exe"
+            | "npm"
+            | "npm.cmd"
+            | "npx"
+            | "npx.cmd"
+            | "pnpm"
+            | "pnpm.cmd"
+            | "yarn"
+            | "yarn.cmd"
+    ) {
+        return true;
+    }
+
+    if matches!(
+        executable.as_str(),
+        "git.exe"
+            | "cmd.exe"
+            | "powershell.exe"
+            | "pwsh.exe"
+            | "bash.exe"
+            | "cargo.exe"
+            | "npm.cmd"
+            | "npx.cmd"
+            | "pnpm.cmd"
+            | "yarn.cmd"
+    ) {
+        return true;
+    }
+
+    command.contains(" git ")
+        || command.contains(" status --porcelain")
+        || script.contains("\\node_modules\\pm2\\lib\\daemon.js")
+        || script.ends_with("\\npm-cli.js")
+        || script.ends_with("\\npx-cli.js")
+        || script.ends_with("\\pnpm.cjs")
+        || script.ends_with("\\yarn.js")
+}
+
+fn script_supports_runtime_app(script: Option<&str>) -> bool {
+    let Some(script) = script else {
+        return false;
+    };
+    let normalized = script.replace('/', "\\").to_ascii_lowercase();
+    if script.contains(std::path::MAIN_SEPARATOR) || script.contains('/') || script.contains('\\') {
+        return looks_like_script_path(&normalized)
+            && !is_utility_process("", "", Some(script), None);
+    }
+    matches!(
+        normalized.as_str(),
+        "uvicorn"
+            | "gunicorn"
+            | "daphne"
+            | "celery"
+            | "flask"
+            | "django"
+            | "vite"
+            | "next"
+            | "nuxt"
+            | "nest"
+            | "tsx"
+            | "ts-node"
+    )
 }
 
 fn runtime_app_runtime(

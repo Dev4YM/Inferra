@@ -7,12 +7,12 @@ import {
   Cell,
   Pie,
   PieChart,
-  ResponsiveContainer,
   Tooltip,
   XAxis,
   YAxis,
 } from "recharts";
 
+import { ResponsiveChartFrame } from "@/components/inferra/responsive-chart-frame";
 import { formatDisplayValue } from "@/lib/format";
 
 export type TimelinePoint = {
@@ -43,9 +43,9 @@ export function SeverityDistribution({ counts }: { counts: Record<string, number
 
   return (
     <div className="grid gap-4 md:grid-cols-[160px_minmax(0,1fr)]">
-      <div className="h-40">
-        <ResponsiveContainer width="100%" height="100%">
-          <PieChart>
+      <ResponsiveChartFrame className="h-40">
+        {({ width, height }) => (
+          <PieChart width={width} height={height}>
             <Pie data={data} dataKey="value" nameKey="name" innerRadius={44} outerRadius={68} paddingAngle={2} stroke="var(--card)">
               {data.map((entry) => (
                 <Cell key={entry.key} fill={CHART_COLORS[entry.key as keyof typeof CHART_COLORS] ?? CHART_COLORS.info} />
@@ -53,8 +53,8 @@ export function SeverityDistribution({ counts }: { counts: Record<string, number
             </Pie>
             <Tooltip content={<ChartTooltip />} />
           </PieChart>
-        </ResponsiveContainer>
-      </div>
+        )}
+      </ResponsiveChartFrame>
       <div className="space-y-1">
         {data.map((item) => (
           <div key={item.key} className="flex items-center justify-between gap-3 border-b border-border py-1.5 text-sm last:border-b-0">
@@ -81,9 +81,9 @@ export function EventRateBars({ points }: { points: TimelinePoint[] }) {
   }
 
   return (
-    <div className="h-56">
-      <ResponsiveContainer width="100%" height="100%">
-        <AreaChart data={data} margin={{ left: -16, right: 8, top: 4, bottom: 0 }}>
+    <ResponsiveChartFrame className="h-56">
+      {({ width, height }) => (
+        <AreaChart width={width} height={height} data={data} margin={{ left: -16, right: 8, top: 4, bottom: 0 }}>
           <CartesianGrid stroke="var(--border)" strokeDasharray="2 4" vertical={false} />
           <XAxis dataKey="label" tickLine={false} axisLine={false} tick={{ fontSize: 10, fill: "var(--muted-foreground)", fontFamily: "var(--font-mono)" }} minTickGap={28} />
           <YAxis tickLine={false} axisLine={false} tick={{ fontSize: 10, fill: "var(--muted-foreground)", fontFamily: "var(--font-mono)" }} allowDecimals={false} width={28} />
@@ -93,8 +93,8 @@ export function EventRateBars({ points }: { points: TimelinePoint[] }) {
           <Area type="monotone" dataKey="error" name="Errors" stroke={CHART_COLORS.error} fill="transparent" strokeWidth={1.25} dot={false} />
           <Area type="monotone" dataKey="warn" name="Warnings" stroke={CHART_COLORS.warn} fill="transparent" strokeWidth={1.25} dot={false} />
         </AreaChart>
-      </ResponsiveContainer>
-    </div>
+      )}
+    </ResponsiveChartFrame>
   );
 }
 
@@ -110,13 +110,13 @@ export function Sparkline({ values, tone = "primary" }: { values: number[]; tone
   const data = values.slice(-12).map((value, index) => ({ index: String(index + 1), value }));
 
   return (
-    <div className="h-10">
-      <ResponsiveContainer width="100%" height="100%">
-        <BarChart data={data} margin={{ top: 2, right: 0, bottom: 0, left: 0 }}>
+    <ResponsiveChartFrame className="h-10">
+      {({ width, height }) => (
+        <BarChart width={width} height={height} data={data} margin={{ top: 2, right: 0, bottom: 0, left: 0 }}>
           <Bar dataKey="value" radius={[1, 1, 0, 0]} fill={color} opacity={0.85} />
         </BarChart>
-      </ResponsiveContainer>
-    </div>
+      )}
+    </ResponsiveChartFrame>
   );
 }
 

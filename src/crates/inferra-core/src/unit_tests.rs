@@ -126,6 +126,46 @@ roots = ["extra-root"]
 }
 
 #[test]
+fn discover_projects_prefers_framework_marker_over_git() {
+    let root = temp_dir("workspace-framework-marker-preferred");
+    let flutter = root.join("givity_customer_app");
+    fs::create_dir_all(flutter.join(".git")).expect("create git dir");
+    fs::write(flutter.join("pubspec.yaml"), "name: givity_customer_app\n").expect("write pubspec");
+
+    let config: TomlValue = "[workspace]\nmax_depth = 3\nmax_results = 10\n"
+        .parse()
+        .expect("parse config");
+    let projects = discover_projects(&config, &root);
+    let project = projects
+        .iter()
+        .find(|project| project.path.contains("givity_customer_app"))
+        .expect("flutter project discovered");
+
+    assert_eq!(project.kind, "flutter");
+    assert_eq!(project.marker, "pubspec.yaml");
+
+    let _ = fs::remove_dir_all(&root);
+}
+
+#[test]
+fn discover_projects_skips_bare_git_checkout_without_source_evidence() {
+    let root = temp_dir("workspace-bare-git-filter");
+    let repo = root.join("notes-repo");
+    fs::create_dir_all(repo.join(".git")).expect("create git dir");
+
+    let config: TomlValue = "[workspace]\nmax_depth = 3\nmax_results = 10\n"
+        .parse()
+        .expect("parse config");
+    let projects = discover_projects(&config, &root);
+
+    assert!(!projects
+        .iter()
+        .any(|project| project.path.contains("notes-repo")));
+
+    let _ = fs::remove_dir_all(&root);
+}
+
+#[test]
 fn runtime_apps_map_to_projects_with_manager_confidence() {
     let project = WorkspaceProject {
         path: r"C:\workspace\api".into(),
@@ -190,6 +230,126 @@ fn port_from_command_ignores_node_print_flag() {
         port_from_command("uvicorn app:app --host 0.0.0.0 --port=8000"),
         Some(8000)
     );
+}
+
+#[test]
+fn process_runtime_apps_without_project_need_real_app_signals() {
+    let endpoints = vec![WorkspaceAppEndpoint {
+        url: "http://127.0.0.1:3000".into(),
+        host: Some("127.0.0.1".into()),
+        port: Some(3000),
+        protocol: "http".into(),
+        source: "command".into(),
+        confidence: 0.72,
+    }];
+
+    assert!(should_keep_process_runtime_app(
+        "node",
+        "node C:\\apps\\api\\server.js",
+        None,
+        None,
+        Some(r"C:\apps\api\server.js"),
+        Some(r"C:\Program Files\nodejs\node.exe"),
+        None,
+        &[],
+    ));
+    assert!(should_keep_process_runtime_app(
+        "node",
+        "node_modules/.bin/vite",
+        None,
+        None,
+        None,
+        Some(r"C:\Program Files\nodejs\node.exe"),
+        Some("vite"),
+        &[],
+    ));
+    assert!(should_keep_process_runtime_app(
+        "node",
+        "node server.js --port 3000",
+        None,
+        None,
+        None,
+        Some(r"C:\Program Files\nodejs\node.exe"),
+        None,
+        &endpoints,
+    ));
+    assert!(!should_keep_process_runtime_app(
+        "git",
+        "git status --porcelain",
+        Some(r"D:\MYFiles\Projects\py\Inferra"),
+        Some(r"D:\MYFiles\Projects\py\Inferra"),
+        None,
+        Some(r"C:\Program Files\Git\mingw64\bin\git.exe"),
+        None,
+        &[],
+    ));
+    assert!(!should_keep_process_runtime_app(
+        "node",
+        r#"node C:\Users\User\AppData\Local\nvm\v20.20.0\node_modules\pm2\lib\Daemon.js"#,
+        Some(r"D:\MYFiles\Projects\py\Inferra\src\crates\inferra-api"),
+        Some(r"D:\MYFiles\Projects\py\Inferra\src\crates\inferra-api"),
+        Some(r"C:\Users\User\AppData\Local\nvm\v20.20.0\node_modules\pm2\lib\Daemon.js"),
+        Some(r"C:\Users\User\AppData\Local\nvm\v20.20.0\node.exe"),
+        None,
+        &[],
+    ));
+    assert!(!should_keep_process_runtime_app(
+        "npm",
+        "npm run dev -- --port 3000",
+        Some(r"D:\MYFiles\Projects\py\Inferra\src\web\frontend"),
+        Some(r"D:\MYFiles\Projects\py\Inferra\src\web\frontend"),
+        Some(r"C:\Program Files\nodejs\node_modules\npm\bin\npm-cli.js"),
+        Some(r"C:\Program Files\nodejs\npm.cmd"),
+        Some("vite"),
+        &endpoints,
+    ));
+    assert!(!should_keep_process_runtime_app(
+        "powershell",
+        "powershell -noexit",
+        Some(r"D:\MYFiles\Projects\Server\EECP"),
+        Some(r"D:\MYFiles\Projects\Server\EECP"),
+        None,
+        Some(r"C:\Windows\System32\WindowsPowerShell\v1.0\powershell.exe"),
+        None,
+        &[],
+    ));
+    assert!(!should_keep_process_runtime_app(
+        "cmd",
+        "cmd.exe",
+        None,
+        None,
+        None,
+        Some(r"C:\Windows\System32\cmd.exe"),
+        None,
+        &[],
+    ));
+    assert!(should_keep_process_runtime_app(
+        "cmd",
+        "cmd.exe /d /s /c next start -p 81",
+        Some(r"D:\MYFiles\Projects\Next.js\main"),
+        Some(r"D:\MYFiles\Projects\Next.js\main"),
+        Some("next"),
+        Some(r"C:\Windows\System32\cmd.exe"),
+        Some("next"),
+        &[WorkspaceAppEndpoint {
+            url: "http://127.0.0.1:81".into(),
+            host: Some("127.0.0.1".into()),
+            port: Some(81),
+            protocol: "http".into(),
+            source: "command".into(),
+            confidence: 0.72,
+        }],
+    ));
+    assert!(!should_keep_process_runtime_app(
+        "powershell",
+        "powershell -File D:\\MYFiles\\Projects\\py\\Inferra\\scripts\\serve.ps1",
+        Some(r"D:\MYFiles\Projects\py\Inferra"),
+        Some(r"D:\MYFiles\Projects\py\Inferra"),
+        Some(r"D:\MYFiles\Projects\py\Inferra\scripts\serve.ps1"),
+        Some(r"C:\Windows\System32\WindowsPowerShell\v1.0\powershell.exe"),
+        None,
+        &[],
+    ));
 }
 
 #[test]
@@ -445,6 +605,15 @@ fn workspace_project_acceptance_skips_installed_packages_unless_registered() {
     assert!(should_accept_workspace_project(&package));
 
     let _ = fs::remove_dir_all(&root);
+}
+
+#[test]
+fn workspace_project_acceptance_rejects_user_profile_roots() {
+    assert!(!should_accept_workspace_project(Path::new(
+        r"C:\Users\User"
+    )));
+    assert!(!should_accept_workspace_project(Path::new("/Users/user")));
+    assert!(!should_accept_workspace_project(Path::new("/home/user")));
 }
 
 #[test]

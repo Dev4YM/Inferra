@@ -809,7 +809,7 @@ dependencies = [
 
 [[package]]
 name = "inferra-api"
-version = "0.2.0"
+version = "0.3.0"
 dependencies = [
  "anyhow",
  "async-stream",
@@ -840,7 +840,7 @@ dependencies = [
 
 [[package]]
 name = "inferra-cli"
-version = "0.2.0"
+version = "0.3.0"
 dependencies = [
  "anyhow",
  "clap",
@@ -864,7 +864,7 @@ dependencies = [
 
 [[package]]
 name = "inferra-collectors"
-version = "0.2.0"
+version = "0.3.0"
 dependencies = [
  "anyhow",
  "axum",
@@ -884,7 +884,7 @@ dependencies = [
 
 [[package]]
 name = "inferra-config"
-version = "0.2.0"
+version = "0.3.0"
 dependencies = [
  "anyhow",
  "inferra-contracts",
@@ -896,7 +896,7 @@ dependencies = [
 
 [[package]]
 name = "inferra-contracts"
-version = "0.2.0"
+version = "0.3.0"
 dependencies = [
  "serde",
  "serde_json",
@@ -904,7 +904,7 @@ dependencies = [
 
 [[package]]
 name = "inferra-core"
-version = "0.2.0"
+version = "0.3.0"
 dependencies = [
  "anyhow",
  "bytes",
@@ -924,7 +924,7 @@ dependencies = [
 
 [[package]]
 name = "inferra-storage"
-version = "0.2.0"
+version = "0.3.0"
 dependencies = [
  "anyhow",
  "inferra-contracts",
@@ -935,7 +935,7 @@ dependencies = [
 
 [[package]]
 name = "inferra-windows-service"
-version = "0.2.0"
+version = "0.3.0"
 dependencies = [
  "anyhow",
  "inferra-api",

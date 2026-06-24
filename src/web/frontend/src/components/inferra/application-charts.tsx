@@ -10,7 +10,6 @@ import {
   PieChart,
   RadialBar,
   RadialBarChart,
-  ResponsiveContainer,
   Tooltip,
   XAxis,
   YAxis,
@@ -18,6 +17,7 @@ import {
 
 import type { EventRow } from "@/api";
 import type { TimelinePoint } from "@/components/inferra/charts";
+import { ResponsiveChartFrame } from "@/components/inferra/responsive-chart-frame";
 import { cn } from "@/lib/utils";
 
 const CHART = {
@@ -141,21 +141,25 @@ export function AppCpuChart({ percent }: { percent: number | null | undefined })
       value={`${value.toFixed(1)}%`}
       footer={value < 1 ? "Process idle" : "Processor share"}
     >
-      <ResponsiveContainer width="100%" height="100%">
-        <RadialBarChart
-          data={data}
-          innerRadius="58%"
-          outerRadius="88%"
-          startAngle={200}
-          endAngle={-20}
-          barSize={6}
-          cx="50%"
-          cy="72%"
-        >
-          <RadialBar background={{ fill: CHART.track }} dataKey="value" cornerRadius={4} />
-          <Tooltip content={<MiniTooltip />} />
-        </RadialBarChart>
-      </ResponsiveContainer>
+      <ResponsiveChartFrame>
+        {({ width, height }) => (
+          <RadialBarChart
+            width={width}
+            height={height}
+            data={data}
+            innerRadius="58%"
+            outerRadius="88%"
+            startAngle={200}
+            endAngle={-20}
+            barSize={6}
+            cx="50%"
+            cy="72%"
+          >
+            <RadialBar background={{ fill: CHART.track }} dataKey="value" cornerRadius={4} />
+            <Tooltip content={<MiniTooltip />} />
+          </RadialBarChart>
+        )}
+      </ResponsiveChartFrame>
     </ChartShell>
   );
 }
@@ -179,25 +183,27 @@ export function AppMemoryChart({
       subvalue={virtual > rss ? `${formatMemoryMb(virtual)} virtual` : "RSS"}
       footer="Resident set vs address space"
     >
-      <ResponsiveContainer width="100%" height="100%">
-        <BarChart data={data} layout="vertical" margin={{ top: 14, right: 0, bottom: 14, left: 0 }}>
-          <XAxis type="number" domain={[0, 100]} hide />
-          <YAxis type="category" dataKey="label" hide />
-          <Tooltip
-            content={({ active }) =>
-              active ? (
-                <div className="rounded-sm border border-border bg-popover px-2 py-1 text-[10px] shadow-sm">
-                  <p>RSS: {formatMemoryMb(rss)}</p>
-                  {virtual > rss ? <p>Virtual: {formatMemoryMb(virtual)}</p> : null}
-                </div>
-              ) : null
-            }
-            cursor={false}
-          />
-          <Bar dataKey="rss" stackId="m" fill={CHART.accent} radius={[3, 0, 0, 3]} barSize={12} name="RSS" />
-          <Bar dataKey="headroom" stackId="m" fill={CHART.track} radius={[0, 3, 3, 0]} barSize={12} name="Virtual" />
-        </BarChart>
-      </ResponsiveContainer>
+      <ResponsiveChartFrame>
+        {({ width, height }) => (
+          <BarChart width={width} height={height} data={data} layout="vertical" margin={{ top: 14, right: 0, bottom: 14, left: 0 }}>
+            <XAxis type="number" domain={[0, 100]} hide />
+            <YAxis type="category" dataKey="label" hide />
+            <Tooltip
+              content={({ active }) =>
+                active ? (
+                  <div className="rounded-sm border border-border bg-popover px-2 py-1 text-[10px] shadow-sm">
+                    <p>RSS: {formatMemoryMb(rss)}</p>
+                    {virtual > rss ? <p>Virtual: {formatMemoryMb(virtual)}</p> : null}
+                  </div>
+                ) : null
+              }
+              cursor={false}
+            />
+            <Bar dataKey="rss" stackId="m" fill={CHART.accent} radius={[3, 0, 0, 3]} barSize={12} name="RSS" />
+            <Bar dataKey="headroom" stackId="m" fill={CHART.track} radius={[0, 3, 3, 0]} barSize={12} name="Virtual" />
+          </BarChart>
+        )}
+      </ResponsiveChartFrame>
     </ChartShell>
   );
 }
@@ -230,16 +236,18 @@ export function AppErrorChart({
       subvalue={total ? `${rate}% rate` : "none ingested"}
       footer={total ? `${total} attributed events` : "Waiting for log signals"}
     >
-      <ResponsiveContainer width="100%" height="100%">
-        <PieChart>
-          <Pie data={data} dataKey="value" nameKey="name" innerRadius={17} outerRadius={28} paddingAngle={total ? 3 : 0} stroke="var(--card)">
-            {data.map((entry) => (
-              <Cell key={entry.name} fill={entry.fill} />
-            ))}
-          </Pie>
-          <Tooltip content={<MiniTooltip />} />
-        </PieChart>
-      </ResponsiveContainer>
+      <ResponsiveChartFrame>
+        {({ width, height }) => (
+          <PieChart width={width} height={height}>
+            <Pie data={data} dataKey="value" nameKey="name" innerRadius={17} outerRadius={28} paddingAngle={total ? 3 : 0} stroke="var(--card)">
+              {data.map((entry) => (
+                <Cell key={entry.name} fill={entry.fill} />
+              ))}
+            </Pie>
+            <Tooltip content={<MiniTooltip />} />
+          </PieChart>
+        )}
+      </ResponsiveChartFrame>
       <div className="pointer-events-none absolute inset-0 flex items-center justify-center">
         <span className={cn("font-data text-[10px] font-semibold uppercase tracking-wide", !total || errors === 0 ? "text-success" : "text-critical")}>
           {!total ? "ok" : errors === 0 ? "clean" : `${rate}%`}
@@ -289,47 +297,49 @@ export function AppActivityChart({
       subvalue={hasSeries ? "recent window" : mapped ? "no samples" : "unmapped"}
       footer={footer}
     >
-      <ResponsiveContainer width="100%" height="100%">
-        <AreaChart data={data} margin={{ top: 4, right: 2, left: -28, bottom: 0 }}>
-          <defs>
-            <linearGradient id={gradientId} x1="0" y1="0" x2="0" y2="1">
-              <stop offset="0%" stopColor="var(--accent)" stopOpacity={0.4} />
-              <stop offset="100%" stopColor="var(--accent)" stopOpacity={0.03} />
-            </linearGradient>
-          </defs>
-          <CartesianGrid stroke={CHART.track} strokeDasharray="3 3" vertical={false} />
-          <XAxis dataKey="label" hide />
-          <YAxis domain={[0, peak]} hide />
-          <Tooltip content={<MiniTooltip />} />
-          {hasSeries ? (
-            <>
-              <Area type="monotone" dataKey="warn" stackId="sev" name="Warn" stroke="transparent" fill={CHART.warn} fillOpacity={0.12} />
-              <Area type="monotone" dataKey="error" stackId="sev" name="Errors" stroke="transparent" fill={CHART.critical} fillOpacity={0.18} />
+      <ResponsiveChartFrame>
+        {({ width, height }) => (
+          <AreaChart width={width} height={height} data={data} margin={{ top: 4, right: 2, left: -28, bottom: 0 }}>
+            <defs>
+              <linearGradient id={gradientId} x1="0" y1="0" x2="0" y2="1">
+                <stop offset="0%" stopColor="var(--accent)" stopOpacity={0.4} />
+                <stop offset="100%" stopColor="var(--accent)" stopOpacity={0.03} />
+              </linearGradient>
+            </defs>
+            <CartesianGrid stroke={CHART.track} strokeDasharray="3 3" vertical={false} />
+            <XAxis dataKey="label" hide />
+            <YAxis domain={[0, peak]} hide />
+            <Tooltip content={<MiniTooltip />} />
+            {hasSeries ? (
+              <>
+                <Area type="monotone" dataKey="warn" stackId="sev" name="Warn" stroke="transparent" fill={CHART.warn} fillOpacity={0.12} />
+                <Area type="monotone" dataKey="error" stackId="sev" name="Errors" stroke="transparent" fill={CHART.critical} fillOpacity={0.18} />
+                <Area
+                  type="monotone"
+                  dataKey="total"
+                  name="Events"
+                  stroke={CHART.accent}
+                  fill={`url(#${gradientId})`}
+                  strokeWidth={1.5}
+                  dot={false}
+                  activeDot={{ r: 2.5, fill: CHART.accent }}
+                />
+              </>
+            ) : (
               <Area
                 type="monotone"
                 dataKey="total"
                 name="Events"
-                stroke={CHART.accent}
-                fill={`url(#${gradientId})`}
-                strokeWidth={1.5}
+                stroke={CHART.track}
+                fill="transparent"
+                strokeWidth={1}
+                strokeDasharray="4 4"
                 dot={false}
-                activeDot={{ r: 2.5, fill: CHART.accent }}
               />
-            </>
-          ) : (
-            <Area
-              type="monotone"
-              dataKey="total"
-              name="Events"
-              stroke={CHART.track}
-              fill="transparent"
-              strokeWidth={1}
-              strokeDasharray="4 4"
-              dot={false}
-            />
-          )}
-        </AreaChart>
-      </ResponsiveContainer>
+            )}
+          </AreaChart>
+        )}
+      </ResponsiveChartFrame>
     </ChartShell>
   );
 }
