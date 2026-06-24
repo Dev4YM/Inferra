@@ -37,9 +37,8 @@ use inferra_core::{
     build_overview, build_overview_with_runtime_signals, build_workspace_map,
     collect_host_resources_snapshot, collect_runtime_monitor_window,
     enrich_incident_rows_with_latest_traces, refresh_incident_reasoning, service_row_for_id,
-    try_collect_gpu_summary,
-    workspace_app_live_resources, AdaptiveArtifactSelection, AdaptiveSavedReviewViewDraft,
-    OverviewRuntimeSignals,
+    try_collect_gpu_summary, workspace_app_live_resources, AdaptiveArtifactSelection,
+    AdaptiveSavedReviewViewDraft, OverviewRuntimeSignals,
 };
 use inferra_storage::{
     initialize_databases, AdaptiveLearningAuditQuery, AdaptiveLearningHistoryQuery, EventsStore,
@@ -1739,15 +1738,10 @@ async fn api_service_detail(
     let cfg = state.config.read().await.clone();
     let overview = build_overview(&cfg, state.paths.as_ref())
         .map_err(|e| (StatusCode::INTERNAL_SERVER_ERROR, e.to_string()))?;
-    let overview_incidents: Vec<IncidentRow> = overview
-        .dashboard
-        .incidents
-        .clone()
-        .unwrap_or_default();
+    let overview_incidents: Vec<IncidentRow> =
+        overview.dashboard.incidents.clone().unwrap_or_default();
     let services = overview.dashboard.services.unwrap_or_default();
-    let service = if let Some(service) = services
-        .iter()
-        .find(|item| item.service_id == service_id)
+    let service = if let Some(service) = services.iter().find(|item| item.service_id == service_id)
     {
         service.clone()
     } else {
@@ -2458,7 +2452,9 @@ async fn api_collectors(State(state): State<AppState>) -> Json<CollectorsRespons
                 let is_running = runtime.map(|row| row.is_running);
                 CollectorRow {
                     collector_id: c.collector_id.clone(),
-                    status: runtime.map(|row| row.status.clone()).or(Some(configured_status.clone())),
+                    status: runtime
+                        .map(|row| row.status.clone())
+                        .or(Some(configured_status.clone())),
                     source_type: Some(source_type.clone()),
                     is_running,
                     events_emitted: runtime.map(|row| row.events_emitted),
@@ -3267,10 +3263,7 @@ async fn api_workspace_app_resources(
         .map(|item| item.name.clone())
         .unwrap_or_else(|| app_name.clone());
     if app.is_none() && pid.is_none() {
-        return Err((
-            StatusCode::NOT_FOUND,
-            "workspace app not found".to_string(),
-        ));
+        return Err((StatusCode::NOT_FOUND, "workspace app not found".to_string()));
     }
     let live_resources = tokio::task::spawn_blocking(move || {
         workspace_app_live_resources(pid, Some(lookup_name.as_str()))

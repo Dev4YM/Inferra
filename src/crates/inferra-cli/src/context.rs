@@ -175,10 +175,7 @@ mod tests {
 
     #[test]
     fn ui_dist_candidates_cover_bin_and_sibling_layouts() {
-        let exe = Path::new("opt")
-            .join("inferra")
-            .join("bin")
-            .join("inferra");
+        let exe = Path::new("opt").join("inferra").join("bin").join("inferra");
         let candidates = ui_dist_candidates_from_executable(&exe);
         assert_eq!(
             candidates[0],

@@ -72,7 +72,7 @@ spec:
           {{ if .Values.probes.liveness.enabled }}
           livenessProbe:
             httpGet:
-              path: {{ .Values.probes.liveness.path | quote }}
+              path: {{ default "/healthz" .Values.probes.liveness.path | quote }}
               port: http
             initialDelaySeconds: {{ .Values.probes.liveness.initialDelaySeconds }}
             periodSeconds: {{ .Values.probes.liveness.periodSeconds }}
@@ -82,7 +82,7 @@ spec:
           {{ if .Values.probes.readiness.enabled }}
           readinessProbe:
             httpGet:
-              path: {{ .Values.probes.readiness.path | quote }}
+              path: {{ default "/readyz" .Values.probes.readiness.path | quote }}
               port: http
             initialDelaySeconds: {{ .Values.probes.readiness.initialDelaySeconds }}
             periodSeconds: {{ .Values.probes.readiness.periodSeconds }}
@@ -92,7 +92,7 @@ spec:
           {{ if .Values.probes.startup.enabled }}
           startupProbe:
             httpGet:
-              path: {{ .Values.probes.startup.path | quote }}
+              path: {{ default "/readyz" .Values.probes.startup.path | quote }}
               port: http
             periodSeconds: {{ .Values.probes.startup.periodSeconds }}
             timeoutSeconds: {{ .Values.probes.startup.timeoutSeconds }}

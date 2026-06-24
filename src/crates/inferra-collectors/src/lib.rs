@@ -3534,9 +3534,8 @@ fn collect_windows_service_events(
             continue;
         }
         if automatic_stopped
-            && previous_snapshot.is_some_and(|previous| {
-                previous.is_automatic() && !previous.is_healthy_running()
-            })
+            && previous_snapshot
+                .is_some_and(|previous| previous.is_automatic() && !previous.is_healthy_running())
         {
             continue;
         }
