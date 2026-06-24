@@ -458,6 +458,62 @@ fn port_from_command_ignores_node_print_flag() {
         port_from_command("uvicorn app:app --host 0.0.0.0 --port=8000"),
         Some(8000)
     );
+    assert_eq!(
+        port_from_command("python manage.py runserver 0.0.0.0:9000"),
+        Some(9000)
+    );
+}
+
+#[test]
+fn workspace_app_endpoints_normalize_wildcard_hosts_from_commands() {
+    let endpoints = workspace_app_endpoints(
+        Some("uvicorn app:app --host 0.0.0.0 --port=8000"),
+        Some("uvicorn"),
+        None,
+        None,
+    );
+    assert_eq!(endpoints.len(), 1);
+    assert_eq!(endpoints[0].url, "http://127.0.0.1:8000");
+    assert_eq!(endpoints[0].host.as_deref(), Some("127.0.0.1"));
+}
+
+#[test]
+fn workspace_app_endpoints_support_https_and_ipv6_commands() {
+    let endpoints = workspace_app_endpoints(
+        Some("vite --host :: --port 5173 --https"),
+        Some("vite"),
+        None,
+        None,
+    );
+    assert_eq!(endpoints.len(), 1);
+    assert_eq!(endpoints[0].url, "https://[::1]:5173");
+    assert_eq!(endpoints[0].host.as_deref(), Some("::1"));
+    assert_eq!(endpoints[0].protocol, "https");
+}
+
+#[test]
+fn workspace_app_endpoints_parse_django_runserver_bind_targets() {
+    let endpoints = workspace_app_endpoints(
+        Some("python manage.py runserver 0.0.0.0:9000"),
+        Some("django"),
+        None,
+        None,
+    );
+    assert_eq!(endpoints.len(), 1);
+    assert_eq!(endpoints[0].url, "http://127.0.0.1:9000");
+}
+
+#[test]
+fn workspace_app_endpoints_ignore_hostname_as_bind_host() {
+    let env = serde_json::json!({
+        "env": {
+            "PORT": "3000",
+            "HOSTNAME": "workstation-dev",
+        }
+    });
+    let endpoints = workspace_app_endpoints(None, Some("nextjs"), None, Some(&env));
+    assert_eq!(endpoints.len(), 1);
+    assert_eq!(endpoints[0].url, "http://127.0.0.1:3000");
 }
 
 #[test]

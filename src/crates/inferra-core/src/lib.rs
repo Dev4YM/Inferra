@@ -10807,20 +10807,28 @@ fn workspace_app_endpoints(
             endpoints.push(endpoint_from_url(&url, "env", 0.92));
         }
         if let Some(port) = env_port(env) {
-            let host = env_value(env, &["HOST", "HOSTNAME"]).unwrap_or_else(|| "127.0.0.1".into());
-            endpoints.push(endpoint_from_host_port(&host, port, "env", 0.86));
+            let host = env_host(env).unwrap_or_else(|| "127.0.0.1".into());
+            let protocol = env_protocol(env);
+            endpoints.push(endpoint_from_host_port_protocol(
+                &host,
+                port,
+                protocol.as_deref(),
+                "env",
+                0.86,
+            ));
         }
     }
     if let Some(command) = command {
-        if let Some(port) = port_from_command(command) {
-            endpoints.push(endpoint_from_host_port("127.0.0.1", port, "command", 0.72));
+        if let Some(endpoint) = endpoint_from_command(command) {
+            endpoints.push(endpoint);
         }
     }
     if endpoints.is_empty() {
         if let Some(port) = default_port_for_framework(framework, project_path) {
-            endpoints.push(endpoint_from_host_port(
+            endpoints.push(endpoint_from_host_port_protocol(
                 "127.0.0.1",
                 port,
+                None,
                 "framework_default",
                 0.45,
             ));
@@ -10862,18 +10870,43 @@ fn endpoint_from_host_port(
     source: &str,
     confidence: f64,
 ) -> WorkspaceAppEndpoint {
-    let host = if host.trim().is_empty() {
-        "127.0.0.1"
+    endpoint_from_host_port_protocol(host, port, None, source, confidence)
+}
+
+fn endpoint_from_host_port_protocol(
+    host: &str,
+    port: u16,
+    protocol: Option<&str>,
+    source: &str,
+    confidence: f64,
+) -> WorkspaceAppEndpoint {
+    let host = normalize_client_host(host);
+    let protocol = protocol
+        .map(str::trim)
+        .filter(|value| !value.is_empty())
+        .unwrap_or("http")
+        .to_ascii_lowercase();
+    let url_host = if host.contains(':') && !host.starts_with('[') {
+        format!("[{host}]")
     } else {
-        host.trim()
+        host.clone()
     };
     WorkspaceAppEndpoint {
-        url: format!("http://{host}:{port}"),
-        host: Some(host.into()),
+        url: format!("{protocol}://{url_host}:{port}"),
+        host: Some(host),
         port: Some(port),
-        protocol: "http".into(),
+        protocol,
         source: source.into(),
         confidence,
+    }
+}
+
+fn normalize_client_host(host: &str) -> String {
+    match host.trim() {
+        "" | "0.0.0.0" | "*" => "127.0.0.1".to_string(),
+        "::" | "[::]" => "::1".to_string(),
+        "[::1]" => "::1".to_string(),
+        other => other.trim_matches(['[', ']']).to_string(),
     }
 }
 
@@ -10895,6 +10928,23 @@ fn env_value(env: &serde_json::Value, keys: &[&str]) -> Option<String> {
         }
     }
     None
+}
+
+fn env_host(env: &serde_json::Value) -> Option<String> {
+    env_value(
+        env,
+        &[
+            "HOST",
+            "BIND",
+            "BIND_HOST",
+            "APP_HOST",
+            "SERVER_HOST",
+            "VITE_HOST",
+            "NEXT_HOST",
+            "FLASK_RUN_HOST",
+            "UVICORN_HOST",
+        ],
+    )
 }
 
 fn env_port(env: &serde_json::Value) -> Option<u16> {
@@ -10924,13 +10974,77 @@ fn env_port(env: &serde_json::Value) -> Option<u16> {
     None
 }
 
+fn env_protocol(env: &serde_json::Value) -> Option<String> {
+    if let Some(value) = env_value(env, &["APP_PROTOCOL", "PROTOCOL", "SCHEME"]) {
+        let lower = value.to_ascii_lowercase();
+        if matches!(lower.as_str(), "http" | "https") {
+            return Some(lower);
+        }
+    }
+    for key in ["HTTPS", "SSL"] {
+        if let Some(value) = env
+            .get(key)
+            .or_else(|| env.get("env").and_then(|inner| inner.get(key)))
+        {
+            if value.as_bool().unwrap_or(false) {
+                return Some("https".into());
+            }
+            if let Some(raw) = value.as_str() {
+                let lower = raw.trim().to_ascii_lowercase();
+                if matches!(lower.as_str(), "1" | "true" | "yes" | "on") {
+                    return Some("https".into());
+                }
+            }
+        }
+    }
+    None
+}
+
+fn endpoint_from_command(command: &str) -> Option<WorkspaceAppEndpoint> {
+    let parts = split_command_like(command);
+    let protocol = command_protocol(&parts);
+    if let Some((host, port, token_protocol)) = explicit_endpoint_from_parts(&parts) {
+        return Some(endpoint_from_host_port_protocol(
+            &host,
+            port,
+            token_protocol.as_deref().or(protocol.as_deref()),
+            "command",
+            0.78,
+        ));
+    }
+    let port = port_from_parts(&parts)?;
+    let host = host_from_parts(&parts).unwrap_or_else(|| "127.0.0.1".into());
+    Some(endpoint_from_host_port_protocol(
+        &host,
+        port,
+        protocol.as_deref(),
+        "command",
+        0.72,
+    ))
+}
+
+#[cfg(test)]
 fn port_from_command(command: &str) -> Option<u16> {
     let parts = split_command_like(command);
+    port_from_parts(&parts)
+}
+
+fn port_from_parts(parts: &[String]) -> Option<u16> {
     for (idx, part) in parts.iter().enumerate() {
         let lower = part.to_ascii_lowercase();
         if matches!(lower.as_str(), "--port" | "--http-port" | "--listen") {
             if let Some(port) = parts.get(idx + 1).and_then(|next| parse_port_token(next)) {
                 return Some(port);
+            }
+        }
+        if matches!(lower.as_str(), "runserver" | "server" | "serve") {
+            if let Some(token) = parts.get(idx + 1) {
+                if let Some((_, port, _)) = parse_explicit_endpoint_token(token) {
+                    return Some(port);
+                }
+                if let Some(port) = parse_port_token(token) {
+                    return Some(port);
+                }
             }
         }
         if let Some(raw) = lower
@@ -10941,8 +11055,10 @@ fn port_from_command(command: &str) -> Option<u16> {
                 return Some(port);
             }
         }
-        if let Some(port) = parse_host_port_token(&lower) {
-            return Some(port);
+        if let Some((_, port, _)) = parse_explicit_endpoint_token(&lower) {
+            if port >= 1024 || matches!(port, 80 | 443) {
+                return Some(port);
+            }
         }
     }
     None
@@ -10964,16 +11080,110 @@ fn parse_port_token(token: &str) -> Option<u16> {
         .and_then(|part| part.parse::<u16>().ok())
 }
 
-fn parse_host_port_token(token: &str) -> Option<u16> {
-    if !(token.starts_with("http://")
-        || token.starts_with("https://")
-        || token.starts_with("localhost:")
-        || token.starts_with("127.0.0.1:"))
-    {
+fn host_from_parts(parts: &[String]) -> Option<String> {
+    for (idx, part) in parts.iter().enumerate() {
+        let lower = part.to_ascii_lowercase();
+        let is_host_flag = matches!(
+            lower.as_str(),
+            "--host" | "--hostname" | "--bind" | "--address" | "--addr" | "-b"
+        ) || part == "-H";
+        if is_host_flag {
+            if let Some(host) = parts
+                .get(idx + 1)
+                .and_then(|value| parse_bind_host_token(value))
+            {
+                return Some(host);
+            }
+        }
+        if matches!(lower.as_str(), "runserver" | "server" | "serve") {
+            if let Some(host) = parts
+                .get(idx + 1)
+                .and_then(|value| parse_explicit_endpoint_token(value).map(|(host, _, _)| host))
+            {
+                return Some(host);
+            }
+        }
+        if let Some(raw) = lower
+            .strip_prefix("--host=")
+            .or_else(|| lower.strip_prefix("--hostname="))
+            .or_else(|| lower.strip_prefix("--bind="))
+            .or_else(|| lower.strip_prefix("--address="))
+            .or_else(|| lower.strip_prefix("--addr="))
+        {
+            if let Some(host) = parse_bind_host_token(raw) {
+                return Some(host);
+            }
+        }
+    }
+    None
+}
+
+fn command_protocol(parts: &[String]) -> Option<String> {
+    for part in parts {
+        let lower = part.to_ascii_lowercase();
+        if lower == "--https" || lower == "--ssl" {
+            return Some("https".into());
+        }
+        if let Some(raw) = lower.strip_prefix("--protocol=") {
+            if matches!(raw, "http" | "https") {
+                return Some(raw.to_string());
+            }
+        }
+        if lower.starts_with("https://") {
+            return Some("https".into());
+        }
+    }
+    None
+}
+
+fn explicit_endpoint_from_parts(parts: &[String]) -> Option<(String, u16, Option<String>)> {
+    parts
+        .iter()
+        .filter_map(|part| parse_explicit_endpoint_token(part))
+        .find(|(_, port, _)| *port >= 1024 || matches!(*port, 80 | 443))
+}
+
+fn parse_explicit_endpoint_token(token: &str) -> Option<(String, u16, Option<String>)> {
+    let trimmed = token.trim().trim_matches('"').trim_matches('\'');
+    if trimmed.is_empty() {
         return None;
     }
-    let pos = token.rfind(':')?;
-    parse_port_token(&token[pos + 1..]).filter(|port| *port >= 1024 || matches!(*port, 80 | 443))
+    let (protocol, remainder) = if let Some(value) = trimmed.strip_prefix("http://") {
+        (Some("http".to_string()), value)
+    } else if let Some(value) = trimmed.strip_prefix("https://") {
+        (Some("https".to_string()), value)
+    } else {
+        (None, trimmed)
+    };
+    if let Some(rest) = remainder.strip_prefix('[') {
+        let end = rest.find(']')?;
+        let host = &rest[..end];
+        let port = rest[end + 1..]
+            .strip_prefix(':')
+            .and_then(parse_port_token)?;
+        return Some((normalize_client_host(host), port, protocol));
+    }
+    let pos = remainder.rfind(':')?;
+    let host = &remainder[..pos];
+    if host.len() == 1 && host.as_bytes()[0].is_ascii_alphabetic() {
+        return None;
+    }
+    let port = parse_port_token(&remainder[pos + 1..])?;
+    if host.is_empty() {
+        return None;
+    }
+    Some((normalize_client_host(host), port, protocol))
+}
+
+fn parse_bind_host_token(token: &str) -> Option<String> {
+    let trimmed = token.trim().trim_matches('"').trim_matches('\'');
+    if trimmed.is_empty() {
+        return None;
+    }
+    if let Some((host, _, _)) = parse_explicit_endpoint_token(trimmed) {
+        return Some(host);
+    }
+    Some(normalize_client_host(trimmed))
 }
 
 fn default_port_for_framework(framework: Option<&str>, project_path: Option<&str>) -> Option<u16> {
