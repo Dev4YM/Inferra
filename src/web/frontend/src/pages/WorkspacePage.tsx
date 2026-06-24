@@ -144,7 +144,7 @@ export function WorkspacePage({ mode }: { mode: Mode }) {
           <CardContent className="space-y-3 text-sm text-muted-foreground">
             <p>Inferra maps services to projects so incidents and graphs have an owner. Try these steps:</p>
             <ol className="list-decimal space-y-2 pl-5">
-              <li>Point <code className="font-data">workspace.scan_roots</code> at your code folders in inferra.toml.</li>
+              <li>Point <code className="font-data">workspace.roots</code> or <code className="font-data">workspace.home_roots</code> at your code folders in inferra.toml.</li>
               <li>Run <strong>Force scan</strong> above or start your dev apps so runtime detection can see them.</li>
               <li>Add manual mappings from Systems or map noisy unmapped services first.</li>
               <li>Confirm collectors are running from Control so service ids appear in evidence.</li>

@@ -272,6 +272,20 @@ enabled = false
 }
 
 #[test]
+fn collector_supported_on_host_marks_os_specific_collectors() {
+    assert!(collector_supported_on_host("host_metrics"));
+    assert!(collector_supported_on_host("process"));
+    assert_eq!(
+        collector_supported_on_host("journald"),
+        cfg!(target_os = "linux")
+    );
+    assert_eq!(
+        collector_supported_on_host("windows_eventlog"),
+        cfg!(target_os = "windows")
+    );
+}
+
+#[test]
 fn string_array_extracts_values_from_toml_array() {
     let config: TomlValue = r#"
 values = ["a", "b", "c"]

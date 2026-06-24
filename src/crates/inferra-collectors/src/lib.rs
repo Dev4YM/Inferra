@@ -1232,6 +1232,14 @@ pub fn configured_collectors(config: &TomlValue) -> Vec<CollectorHealth> {
     }
 }
 
+pub fn collector_supported_on_host(collector_id: &str) -> bool {
+    match collector_id {
+        "journald" | "linux_syslog" => cfg!(target_os = "linux"),
+        "windows_eventlog" | "windows_service" => cfg!(target_os = "windows"),
+        _ => true,
+    }
+}
+
 fn collector_specs(config: &TomlValue) -> Vec<CollectorSpec> {
     let Some(collectors) = config.get("collectors").and_then(TomlValue::as_table) else {
         return vec![];

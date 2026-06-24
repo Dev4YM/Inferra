@@ -12,8 +12,8 @@ use axum::{
 };
 use futures_util::Stream;
 use inferra_collectors::{
-    active_collector_ids, configured_collectors, normalize_otlp_logs_protobuf_request,
-    CollectorRuntime,
+    active_collector_ids, collector_supported_on_host, configured_collectors,
+    normalize_otlp_logs_protobuf_request, CollectorRuntime,
 };
 use inferra_config::{
     apply_config_put, config_to_json, experience_from_config, load_merged_config,
@@ -2449,6 +2449,7 @@ async fn api_collectors(State(state): State<AppState>) -> Json<CollectorsRespons
             .map(|c| {
                 let configured_status = c.status.clone();
                 let runtime = runtime_by_id.get(&c.collector_id);
+                let supported_on_host = collector_supported_on_host(&c.collector_id);
                 let source_type = runtime
                     .map(|row| row.source_type.clone())
                     .unwrap_or_else(|| c.source_type.clone());
@@ -2456,9 +2457,12 @@ async fn api_collectors(State(state): State<AppState>) -> Json<CollectorsRespons
                 let is_running = runtime.map(|row| row.is_running);
                 CollectorRow {
                     collector_id: c.collector_id.clone(),
-                    status: runtime
-                        .map(|row| row.status.clone())
-                        .or(Some(configured_status.clone())),
+                    status: Some(collector_status(
+                        configured_status.as_str(),
+                        runtime.map(|row| row.status.as_str()),
+                        supported_on_host,
+                    )),
+                    supported_on_host: Some(supported_on_host),
                     source_type: Some(source_type.clone()),
                     is_running,
                     events_emitted: runtime.map(|row| row.events_emitted),
@@ -2477,6 +2481,7 @@ async fn api_collectors(State(state): State<AppState>) -> Json<CollectorsRespons
                         &c.collector_id,
                         configured_status.as_str(),
                         is_running,
+                        supported_on_host,
                         active_ids.contains(&c.collector_id),
                     ),
                     log_query: Some(format!("/api/logs?search={}&limit=100", c.collector_id)),
@@ -2503,10 +2508,25 @@ async fn api_collectors(State(state): State<AppState>) -> Json<CollectorsRespons
     Json(response)
 }
 
+fn collector_status(
+    configured_status: &str,
+    runtime_status: Option<&str>,
+    supported_on_host: bool,
+) -> String {
+    if configured_status == "disabled" {
+        return "disabled".into();
+    }
+    if !supported_on_host {
+        return "unsupported".into();
+    }
+    runtime_status.unwrap_or(configured_status).to_string()
+}
+
 fn collector_idle_hint(
     collector_id: &str,
     configured_status: &str,
     is_running: Option<bool>,
+    supported_on_host: bool,
     active_on_host: bool,
 ) -> Option<String> {
     if configured_status == "disabled" {
@@ -2515,21 +2535,22 @@ fn collector_idle_hint(
     if is_running == Some(true) {
         return None;
     }
-    if !active_on_host {
+    if !supported_on_host {
         return Some(match collector_id {
-            "journald" | "linux_syslog" => {
-                "Linux-only collector — not started on this host OS.".into()
-            }
+            "journald" | "linux_syslog" => "Linux-only collector - not started on this host OS.".into(),
             "windows_eventlog" | "windows_service" => {
-                "Windows-only collector — not started on this host OS.".into()
+                "Windows-only collector - not started on this host OS.".into()
             }
             _ => format!(
-                "Configured but inactive on this host — {collector_id} is not spawned for the current platform."
+                "Configured but inactive on this host - {collector_id} is not spawned for the current platform."
             ),
         });
     }
+    if !active_on_host {
+        return Some("Collector is enabled but currently not scheduled on this host.".into());
+    }
     Some(
-        "Configured for this host but not running — start collectors from Control or set `collectors.auto_start = true`."
+        "Configured for this host but not running - start collectors from Control or set `collectors.auto_start = true`."
             .into(),
     )
 }
@@ -8492,6 +8513,31 @@ roots = ["{}"]
             .iter()
             .all(|row| row.get("is_running") == Some(&JsonValue::Bool(false)));
         assert!(statuses);
+    }
+
+    #[test]
+    fn collector_status_surfaces_unsupported_host_collectors() {
+        assert_eq!(collector_status("configured", None, false), "unsupported");
+        assert_eq!(collector_status("disabled", None, false), "disabled");
+        assert_eq!(
+            collector_status("configured", Some("running"), true),
+            "running"
+        );
+    }
+
+    #[test]
+    fn collector_idle_hint_distinguishes_unsupported_from_stopped() {
+        assert_eq!(
+            collector_idle_hint("journald", "configured", Some(false), false, false),
+            Some("Linux-only collector - not started on this host OS.".into())
+        );
+        assert_eq!(
+            collector_idle_hint("process", "configured", Some(false), true, true),
+            Some(
+                "Configured for this host but not running - start collectors from Control or set `collectors.auto_start = true`."
+                    .into()
+            )
+        );
     }
 
     #[test]

@@ -263,6 +263,117 @@ fn workspace_roots_support_explicit_home_roots_without_hybrid_mode() {
 }
 
 #[test]
+fn workspace_roots_auto_bootstrap_home_candidates_for_managed_install_roots() {
+    let _guard = env_lock()
+        .lock()
+        .unwrap_or_else(|poisoned| poisoned.into_inner());
+    let root = temp_dir("workspace-roots-bootstrap-auto");
+    let managed_root = root.join("ProgramData");
+    let base = managed_root.join("Inferra");
+    let home = root.join("home");
+    fs::create_dir_all(&base).expect("create base");
+    fs::create_dir_all(home.join("Projects")).expect("create home projects");
+
+    let old_home = std::env::var_os("HOME");
+    let old_userprofile = std::env::var_os("USERPROFILE");
+    let old_programdata = std::env::var_os("PROGRAMDATA");
+    let old_allusersprofile = std::env::var_os("ALLUSERSPROFILE");
+    unsafe {
+        std::env::set_var("HOME", &home);
+        std::env::set_var("USERPROFILE", &home);
+        std::env::set_var("PROGRAMDATA", &managed_root);
+        std::env::set_var("ALLUSERSPROFILE", &managed_root);
+    }
+
+    let config: TomlValue = "[workspace]\n".parse().expect("parse config");
+    let roots = workspace_roots(&config, &base);
+
+    unsafe {
+        if let Some(value) = old_home {
+            std::env::set_var("HOME", value);
+        } else {
+            std::env::remove_var("HOME");
+        }
+        if let Some(value) = old_userprofile {
+            std::env::set_var("USERPROFILE", value);
+        } else {
+            std::env::remove_var("USERPROFILE");
+        }
+        if let Some(value) = old_programdata {
+            std::env::set_var("PROGRAMDATA", value);
+        } else {
+            std::env::remove_var("PROGRAMDATA");
+        }
+        if let Some(value) = old_allusersprofile {
+            std::env::set_var("ALLUSERSPROFILE", value);
+        } else {
+            std::env::remove_var("ALLUSERSPROFILE");
+        }
+    }
+
+    assert!(roots.iter().any(|path| path.ends_with("Projects")));
+
+    let _ = fs::remove_dir_all(&root);
+}
+
+#[test]
+fn workspace_roots_can_disable_auto_home_bootstrap() {
+    let _guard = env_lock()
+        .lock()
+        .unwrap_or_else(|poisoned| poisoned.into_inner());
+    let root = temp_dir("workspace-roots-bootstrap-never");
+    let managed_root = root.join("ProgramData");
+    let base = managed_root.join("Inferra");
+    let home = root.join("home");
+    fs::create_dir_all(&base).expect("create base");
+    fs::create_dir_all(home.join("Projects")).expect("create home projects");
+
+    let old_home = std::env::var_os("HOME");
+    let old_userprofile = std::env::var_os("USERPROFILE");
+    let old_programdata = std::env::var_os("PROGRAMDATA");
+    let old_allusersprofile = std::env::var_os("ALLUSERSPROFILE");
+    unsafe {
+        std::env::set_var("HOME", &home);
+        std::env::set_var("USERPROFILE", &home);
+        std::env::set_var("PROGRAMDATA", &managed_root);
+        std::env::set_var("ALLUSERSPROFILE", &managed_root);
+    }
+
+    let config: TomlValue = "[workspace]\nhome_bootstrap_mode = \"never\"\n"
+        .parse()
+        .expect("parse config");
+    let roots = workspace_roots(&config, &base);
+
+    unsafe {
+        if let Some(value) = old_home {
+            std::env::set_var("HOME", value);
+        } else {
+            std::env::remove_var("HOME");
+        }
+        if let Some(value) = old_userprofile {
+            std::env::set_var("USERPROFILE", value);
+        } else {
+            std::env::remove_var("USERPROFILE");
+        }
+        if let Some(value) = old_programdata {
+            std::env::set_var("PROGRAMDATA", value);
+        } else {
+            std::env::remove_var("PROGRAMDATA");
+        }
+        if let Some(value) = old_allusersprofile {
+            std::env::set_var("ALLUSERSPROFILE", value);
+        } else {
+            std::env::remove_var("ALLUSERSPROFILE");
+        }
+    }
+
+    assert_eq!(roots.len(), 1);
+    assert_eq!(roots[0], base.canonicalize().expect("canonical base"));
+
+    let _ = fs::remove_dir_all(&root);
+}
+
+#[test]
 fn discover_projects_prefers_framework_marker_over_git() {
     let root = temp_dir("workspace-framework-marker-preferred");
     let flutter = root.join("givity_customer_app");

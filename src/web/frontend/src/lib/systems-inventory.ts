@@ -37,7 +37,7 @@ export type SystemsInventory = {
   otherServices: ServiceRow[];
   unmappedServices: string[];
   collectorsRunning: number;
-  collectorsConfigured: number;
+  collectorsExpected: number;
   idleCollectorNames: string[];
 };
 
@@ -184,7 +184,7 @@ function buildAttentionItems(
   const items: AttentionItem[] = [];
 
   if (
-    inventory.collectorsConfigured > 0 &&
+    inventory.collectorsExpected > 0 &&
     inventory.collectorsRunning === 0
   ) {
     items.push({
@@ -196,14 +196,14 @@ function buildAttentionItems(
       href: "/control",
     });
   } else if (
-    inventory.collectorsConfigured > 0 &&
-    inventory.collectorsRunning < inventory.collectorsConfigured
+    inventory.collectorsExpected > 0 &&
+    inventory.collectorsRunning < inventory.collectorsExpected
   ) {
     items.push({
       id: "collectors-partial",
       tone: "info",
       title: "Some collectors are idle",
-      detail: `${inventory.collectorsRunning} of ${inventory.collectorsConfigured} collectors running${
+      detail: `${inventory.collectorsRunning} of ${inventory.collectorsExpected} collectors running${
         inventory.idleCollectorNames.length ? ` (${inventory.idleCollectorNames.join(", ")})` : ""
       }. Check Control for why.`,
       href: "/control",
@@ -281,7 +281,7 @@ export function buildSystemsInventory(
   overview: OverviewResponse | null | undefined,
   workspace: WorkspaceMapResponse | null | undefined,
   inferraHealth?: HealthResponse | null,
-  collectors?: { running: number; configured: number; idleNames?: string[] },
+  collectors?: { running: number; supported: number; idleNames?: string[] },
 ): SystemsInventory {
   const hostname = overview?.runtime?.hostname ?? "This host";
   const processes = overview?.runtime?.processes ?? [];
@@ -327,7 +327,7 @@ export function buildSystemsInventory(
     otherServices: otherServices.sort((left, right) => left.service_id.localeCompare(right.service_id)),
     unmappedServices,
     collectorsRunning: collectors?.running ?? 0,
-    collectorsConfigured: collectors?.configured ?? 0,
+    collectorsExpected: collectors?.supported ?? 0,
     idleCollectorNames: collectors?.idleNames ?? [],
   };
 

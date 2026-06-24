@@ -428,6 +428,7 @@ show_raw_evidence_by_default = false
 [workspace]
 enabled = true
 discovery_mode = "strict"
+home_bootstrap_mode = "auto"
 include_config_root = true
 roots = []
 home_roots = []

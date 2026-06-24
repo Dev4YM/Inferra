@@ -117,9 +117,20 @@ export function ControlPage({ mode }: { mode: Mode }) {
       ) : null}
 
       <div className="dashboard-grid">
-        <Metric title="Collectors" value={String(collectors.data?.collectors.length ?? 0)} note={`${fleet.running}/${fleet.enabled} running · queue ${collectors.data?.queue_depth ?? 0}`} />
+        <Metric
+          title="Collectors"
+          value={String(collectors.data?.collectors.length ?? 0)}
+          note={`${fleet.running}/${fleet.supported} running${fleet.unsupported ? ` · ${fleet.unsupported} unsupported` : ""} · queue ${collectors.data?.queue_depth ?? 0}`}
+        />
         <Metric title="Collector errors" value={String(activeProblemCollectors.reduce((sum, row) => sum + (row.error_count ?? 0), 0))} note={`${problemCollectors.length} collectors have error history`} />
-        <Metric title="Idle collectors" value={String(fleet.idle)} note={fleet.idleCollectors.slice(0, 4).map((row) => row.collector_id).join(", ") || "All active collectors running"} />
+        <Metric
+          title="Idle collectors"
+          value={String(fleet.idle)}
+          note={
+            fleet.idleCollectors.slice(0, 4).map((row) => row.collector_id).join(", ") ||
+            (fleet.unsupported ? `All supported collectors running · ${fleet.unsupported} unsupported on this host` : "All supported collectors running")
+          }
+        />
         <Metric title="AI provider" value={aiMetric} note={aiMetricNote} />
       </div>
 
@@ -336,6 +347,7 @@ function buildCollectorReport(collectors: CollectorRow[], logs: EventRow[], queu
   for (const collector of collectors) {
     lines.push(`- ${collector.collector_id}`);
     lines.push(`  status: ${collector.status ?? "unknown"}`);
+    lines.push(`  supported_on_host: ${String(collector.supported_on_host ?? true)}`);
     lines.push(`  running: ${String(collector.is_running ?? false)}`);
     lines.push(`  source: ${collector.source_type ?? "unknown"}`);
     lines.push(`  emitted: ${collector.events_emitted ?? 0}`);

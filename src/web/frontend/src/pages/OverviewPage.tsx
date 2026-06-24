@@ -53,7 +53,7 @@ export function OverviewPageContent({
   const fleet = summarizeCollectorFleet(collectorRows);
   const activeCollectorErrors = collectorRows.filter((collector) => collector.status === "error" || (collector.error_count ?? 0) > 0);
   const collectorErrorCount = health.collector_errors ?? 0;
-  const collectorsUnderpowered = fleet.enabled > 0 && fleet.running < fleet.enabled;
+  const collectorsUnderpowered = fleet.supported > 0 && fleet.running < fleet.supported;
   const platformDegraded =
     Boolean(health.degraded) ||
     runtimeState === "degraded" ||
@@ -66,13 +66,15 @@ export function OverviewPageContent({
       : health.status ?? "degraded"
     : health.status ?? quick.risk_level;
   const platformDetail = collectorsUnderpowered
-    ? `${fleet.idle} of ${fleet.enabled} collectors idle — ${fleet.idleCollectors
+    ? `${fleet.idle} of ${fleet.supported} collectors idle - ${fleet.idleCollectors
         .slice(0, 3)
         .map((collector) => collector.collector_id)
         .join(", ")}`
     : collectorErrorCount
       ? `${collectorErrorCount} collector errors`
-      : "Collectors nominal";
+      : fleet.unsupported
+        ? `Collectors nominal - ${fleet.unsupported} unsupported on this host`
+        : "Collectors nominal";
   const aiState = health.ai_enabled
     ? health.ai_available
       ? { label: "Ready", variant: "success" as const }
@@ -103,6 +105,7 @@ export function OverviewPageContent({
             <Badge variant="outline">{formatDisplayValue(experience.ai_role)}</Badge>
             {health.degraded || platformDegraded ? <Badge variant="warning">Platform degraded</Badge> : null}
             {collectorsUnderpowered ? <Badge variant="warning">{fleet.idle} collectors idle</Badge> : null}
+            {fleet.unsupported ? <Badge variant="outline">{fleet.unsupported} unsupported on this host</Badge> : null}
           </div>
           <h2 className="text-xl font-semibold tracking-tight">{quick.headline}</h2>
           <div className="flex flex-wrap gap-x-4 gap-y-1 font-data text-xs text-muted-foreground">

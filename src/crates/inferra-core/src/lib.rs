@@ -8429,6 +8429,13 @@ enum WorkspaceDiscoveryMode {
 }
 
 #[derive(Clone, Copy, PartialEq, Eq)]
+enum WorkspaceHomeBootstrapMode {
+    Never,
+    Auto,
+    Always,
+}
+
+#[derive(Clone, Copy, PartialEq, Eq)]
 enum WorkspaceWeakMarkerPolicy {
     SourceOrRegistration,
     RegisteredOnly,
@@ -8570,6 +8577,22 @@ fn workspace_include_project_apps(config: &TomlValue) -> bool {
         .unwrap_or(true)
 }
 
+fn workspace_home_bootstrap_mode(config: &TomlValue) -> WorkspaceHomeBootstrapMode {
+    match config
+        .get("workspace")
+        .and_then(|value| value.get("home_bootstrap_mode"))
+        .and_then(TomlValue::as_str)
+        .unwrap_or("auto")
+        .trim()
+        .to_ascii_lowercase()
+        .as_str()
+    {
+        "never" | "off" | "disabled" => WorkspaceHomeBootstrapMode::Never,
+        "always" => WorkspaceHomeBootstrapMode::Always,
+        _ => WorkspaceHomeBootstrapMode::Auto,
+    }
+}
+
 fn workspace_weak_marker_policy(config: &TomlValue) -> WorkspaceWeakMarkerPolicy {
     match config
         .get("workspace")
@@ -8600,11 +8623,75 @@ fn workspace_home_roots(config: &TomlValue) -> Vec<String> {
         .collect()
 }
 
+fn workspace_has_explicit_roots(config: &TomlValue) -> bool {
+    config
+        .get("workspace")
+        .and_then(|value| value.get("roots"))
+        .and_then(TomlValue::as_array)
+        .is_some_and(|items| {
+            items.iter().any(|item| {
+                item.as_str()
+                    .map(str::trim)
+                    .is_some_and(|value| !value.is_empty())
+            })
+        })
+        || !workspace_home_roots(config).is_empty()
+}
+
+fn canonical_path_or_self(path: &Path) -> PathBuf {
+    path.canonicalize().unwrap_or_else(|_| path.to_path_buf())
+}
+
+fn path_has_prefix(path: &Path, prefix: &Path) -> bool {
+    canonical_path_or_self(path).starts_with(canonical_path_or_self(prefix))
+}
+
+fn system_workspace_roots() -> Vec<PathBuf> {
+    let mut roots = Vec::new();
+    for var in ["PROGRAMDATA", "ALLUSERSPROFILE"] {
+        if let Some(value) = std::env::var_os(var) {
+            roots.push(PathBuf::from(value));
+        }
+    }
+    for static_root in [
+        "/etc",
+        "/var/lib",
+        "/usr/local/etc",
+        "/Library/Application Support",
+        "/Library/Preferences",
+    ] {
+        roots.push(PathBuf::from(static_root));
+    }
+    roots
+}
+
+fn is_system_managed_workspace_root(base_root: &Path, home: &Path) -> bool {
+    if path_has_prefix(base_root, home) {
+        return false;
+    }
+    system_workspace_roots()
+        .into_iter()
+        .any(|root| path_has_prefix(base_root, &root))
+}
+
+fn workspace_should_bootstrap_default_home_roots(
+    config: &TomlValue,
+    base_root: &Path,
+    home: &Path,
+) -> bool {
+    match workspace_home_bootstrap_mode(config) {
+        WorkspaceHomeBootstrapMode::Never => false,
+        WorkspaceHomeBootstrapMode::Always => true,
+        WorkspaceHomeBootstrapMode::Auto => {
+            !workspace_has_explicit_roots(config)
+                && is_system_managed_workspace_root(base_root, home)
+        }
+    }
+}
+
 pub fn workspace_roots(config: &TomlValue, default_root: &Path) -> Vec<std::path::PathBuf> {
     let mut roots = Vec::new();
-    let base_root = default_root
-        .canonicalize()
-        .unwrap_or_else(|_| default_root.to_path_buf());
+    let base_root = canonical_path_or_self(default_root);
     if workspace_include_config_root(config) {
         push_workspace_root(&mut roots, base_root.clone());
     }
@@ -8620,12 +8707,14 @@ pub fn workspace_roots(config: &TomlValue, default_root: &Path) -> Vec<std::path
             } else {
                 base_root.join(candidate)
             };
-            let resolved = resolved.canonicalize().unwrap_or(resolved);
+            let resolved = canonical_path_or_self(&resolved);
             push_workspace_root(&mut roots, resolved);
         }
     }
     if let Some(home) = user_home_dir() {
-        if workspace_discovery_mode(config) == WorkspaceDiscoveryMode::Hybrid {
+        if workspace_discovery_mode(config) == WorkspaceDiscoveryMode::Hybrid
+            || workspace_should_bootstrap_default_home_roots(config, &base_root, &home)
+        {
             for relative in DEFAULT_HOME_WORKSPACE_ROOTS {
                 let candidate = home.join(relative);
                 if candidate.is_dir() {
@@ -8649,7 +8738,7 @@ pub fn workspace_roots(config: &TomlValue, default_root: &Path) -> Vec<std::path
 }
 
 fn push_workspace_root(roots: &mut Vec<PathBuf>, candidate: PathBuf) {
-    let resolved = candidate.canonicalize().unwrap_or(candidate);
+    let resolved = canonical_path_or_self(&candidate);
     if !roots.iter().any(|existing| existing == &resolved) {
         roots.push(resolved);
     }

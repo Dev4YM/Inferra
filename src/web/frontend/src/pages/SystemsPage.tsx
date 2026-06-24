@@ -56,7 +56,7 @@ export function SystemsPage({ mode }: { mode: Mode }) {
 
   const collectorStats = useMemo(() => {
     const fleet = summarizeCollectorFleet(collectors.data?.collectors ?? []);
-    return { running: fleet.running, configured: fleet.enabled, idleNames: fleet.idleCollectors.map((row) => row.collector_id) };
+    return { running: fleet.running, supported: fleet.supported, idleNames: fleet.idleCollectors.map((row) => row.collector_id) };
   }, [collectors.data]);
 
   const inventory = useMemo(

@@ -798,6 +798,7 @@ export type OverviewResponse = {
 export type CollectorRow = {
   collector_id: string;
   status?: string;
+  supported_on_host?: boolean;
   source_type?: string;
   is_running?: boolean;
   events_emitted?: number;
