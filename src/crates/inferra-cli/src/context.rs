@@ -6,6 +6,7 @@ use serde_json::Value as JsonValue;
 use toml::Value as TomlValue;
 use tracing_subscriber::EnvFilter;
 
+use crate::runtime_supervisor::runtime_unreachable_hint;
 use crate::ui::TerminalUi;
 
 #[derive(Clone, Debug)]
@@ -68,9 +69,7 @@ impl AppContext {
             request = request.json(&payload);
         }
         let response = request.send().await.with_context(|| {
-            format!(
-                "request local API at {url}; start `inferra runtime start` or install the Windows service if needed"
-            )
+            format!("request local API at {url}; {}", runtime_unreachable_hint())
         })?;
         let status = response.status();
         let text = response

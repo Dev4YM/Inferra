@@ -14,6 +14,10 @@ use crate::commands::{
     toml_to_json, toml_value_at,
 };
 use crate::context::{app_version, local_base_url, AppContext};
+use crate::runtime_supervisor::{
+    query_supervisor_status, restart_supervisor, runtime_unreachable_hint, service_install_hint,
+    start_supervisor, stop_supervisor, SupervisorStatus,
+};
 
 pub async fn show_landing(ctx: &AppContext) -> Result<()> {
     let spinner = ctx.ui.spinner("Inspecting local Inferra runtime");
@@ -126,52 +130,58 @@ async fn emit_runtime_status(ctx: &AppContext) -> Result<()> {
 }
 
 async fn runtime_start(ctx: &AppContext) -> Result<()> {
-    if !cfg!(windows) {
-        bail!("Windows service control is required. On this platform run `inferra serve` for a foreground API + dashboard.");
+    let status = query_supervisor_status()?;
+    if !status.supported {
+        bail!(
+            "platform service control is not available on this host. Run `inferra serve` for a foreground API + dashboard."
+        );
     }
-    let status = inferra_windows_service::query_service_status()?;
     if !status.installed {
         let paths = ctx.paths()?;
         bail!(
-            "Inferra service is not installed. Run deploy/windows/install-service.ps1 as Administrator, or:\n  inferra --config \"{}\" --ui-dist <ui_dist> service install --startup auto",
-            paths.config_path.display()
+            "{} {}",
+            missing_service_message(&status),
+            runtime_install_guidance(&status, &paths.config_path)
         );
     }
     if status.is_running() && runtime_health_ok(ctx).await? {
         return finish_runtime_action(ctx, "start", "Runtime already running (API + dashboard)")
             .await;
     }
-    inferra_windows_service::start_service()?;
+    start_supervisor()?;
     wait_for_runtime_health(ctx, 45).await?;
     finish_runtime_action(ctx, "start", "Started Inferra runtime (API + dashboard)").await
 }
 
 async fn runtime_stop(ctx: &AppContext) -> Result<()> {
-    if !cfg!(windows) {
-        bail!("Windows service control is required on this platform.");
+    let status = query_supervisor_status()?;
+    if !status.supported {
+        bail!("platform service control is not available on this host.");
     }
-    let status = inferra_windows_service::query_service_status()?;
     if !status.installed {
-        bail!("Inferra service is not installed.");
+        bail!("{}", missing_service_message(&status));
     }
-    inferra_windows_service::stop_service()?;
+    let post_status = stop_supervisor()?;
     let payload = collect_runtime_payload(ctx).await?;
     let reachable = payload["reachable"].as_bool().unwrap_or(false);
     let message = if reachable {
         format!(
-            "Stopped Windows service {}. The API is still responding, which usually means a foreground runtime is still active on the configured address.",
-            inferra_windows_service::SERVICE_NAME
+            "Stopped {} {}. The API is still responding, which usually means a foreground runtime is still active on the configured address.",
+            post_status.manager_label(),
+            post_status.service_name
         )
     } else {
         format!(
-            "Stopped Windows service {} (API + dashboard)",
-            inferra_windows_service::SERVICE_NAME
+            "Stopped {} {} (API + dashboard)",
+            post_status.manager_label(),
+            post_status.service_name
         )
     };
     let payload = json!({
         "action": "stop",
         "ok": true,
-        "service": inferra_windows_service::SERVICE_NAME,
+        "service": post_status.service_name,
+        "manager": post_status.kind,
         "reachable_after_stop": reachable,
     });
     emit_command_result(ctx, &payload, &[message]);
@@ -179,14 +189,14 @@ async fn runtime_stop(ctx: &AppContext) -> Result<()> {
 }
 
 async fn runtime_restart(ctx: &AppContext) -> Result<()> {
-    if !cfg!(windows) {
-        bail!("Windows service control is required on this platform.");
+    let status = query_supervisor_status()?;
+    if !status.supported {
+        bail!("platform service control is not available on this host.");
     }
-    let status = inferra_windows_service::query_service_status()?;
     if !status.installed {
-        bail!("Inferra service is not installed.");
+        bail!("{}", missing_service_message(&status));
     }
-    inferra_windows_service::restart_service()?;
+    restart_supervisor()?;
     wait_for_runtime_health(ctx, 45).await?;
     finish_runtime_action(
         ctx,
@@ -245,11 +255,7 @@ async fn collect_runtime_payload(ctx: &AppContext) -> Result<JsonValue> {
         .await
         .ok();
     let reachable = health.is_some();
-    let service = if cfg!(windows) {
-        inferra_windows_service::query_service_status().ok()
-    } else {
-        None
-    };
+    let service = query_supervisor_status().ok();
     let service_installed = service
         .as_ref()
         .map(|status| status.installed)
@@ -259,7 +265,7 @@ async fn collect_runtime_payload(ctx: &AppContext) -> Result<JsonValue> {
         .and_then(|status| status.state.clone())
         .unwrap_or_else(|| "not_installed".to_string());
     let mode = runtime_mode_for(reachable, service.as_ref());
-    let hint = runtime_hint_for(reachable, service.as_ref()).to_string();
+    let hint = runtime_hint_for(reachable, service.as_ref());
     Ok(json!({
         "reachable": reachable,
         "dashboard_url": dashboard_url,
@@ -288,32 +294,28 @@ async fn wait_for_runtime_health(ctx: &AppContext, timeout_secs: u64) -> Result<
         tokio::time::sleep(std::time::Duration::from_secs(1)).await;
     }
     let paths = ctx.paths()?;
-    let log_path = inferra_windows_service::service_log_path();
-    let service_state = if cfg!(windows) {
-        inferra_windows_service::query_service_status()
-            .ok()
-            .and_then(|status| status.state)
-            .unwrap_or_else(|| "unknown".to_string())
-    } else {
-        "unsupported".to_string()
-    };
+    let status = query_supervisor_status().ok();
+    let service_state = status
+        .as_ref()
+        .and_then(|row| row.state.clone())
+        .unwrap_or_else(|| "unknown".to_string());
+    let log_target = status
+        .as_ref()
+        .and_then(|row| row.log_target.clone())
+        .unwrap_or_else(|| "service manager logs".to_string());
     bail!(
-        "runtime did not become healthy within {timeout_secs}s (service state: {service_state}); check {} and {}",
-        log_path.display(),
+        "runtime did not become healthy within {timeout_secs}s (service state: {service_state}); check {log_target} and {}",
         paths.config_path.display()
     );
 }
 
-fn runtime_mode_for(
-    reachable: bool,
-    service: Option<&inferra_windows_service::ServiceStatus>,
-) -> &'static str {
+fn runtime_mode_for(reachable: bool, service: Option<&SupervisorStatus>) -> &'static str {
     if let Some(status) = service {
         if status.is_running() {
-            return "windows_service";
+            return status.kind;
         }
         if status.is_start_pending() || status.is_stop_pending() {
-            return "windows_service_pending";
+            return "service_pending";
         }
     }
     if reachable {
@@ -323,22 +325,50 @@ fn runtime_mode_for(
     }
 }
 
-fn runtime_hint_for(
-    reachable: bool,
-    service: Option<&inferra_windows_service::ServiceStatus>,
-) -> &'static str {
+fn runtime_hint_for(reachable: bool, service: Option<&SupervisorStatus>) -> String {
     if reachable {
-        return "inferra runtime open";
+        return "inferra runtime open".to_string();
     }
     if let Some(status) = service {
         if status.is_start_pending() || status.is_stop_pending() {
-            return "inferra runtime status";
+            return "inferra runtime status".to_string();
         }
-        if status.installed {
-            return "inferra runtime start";
+        if status.supported && status.installed {
+            return "inferra runtime start".to_string();
         }
     }
-    "deploy/windows/install-service.ps1 (Administrator)"
+    service_install_hint().to_string()
+}
+
+fn missing_service_message(status: &SupervisorStatus) -> String {
+    format!(
+        "{} {} is not installed.",
+        status.manager_label(),
+        status.service_name
+    )
+}
+
+fn runtime_install_guidance(status: &SupervisorStatus, config_path: &std::path::Path) -> String {
+    if status.kind == "windows_service" {
+        format!(
+            "Run {} or:\n  inferra --config \"{}\" --ui-dist <ui_dist> service install --startup auto",
+            service_install_hint(),
+            config_path.display()
+        )
+    } else {
+        format!("Install it with: {}", service_install_hint())
+    }
+}
+
+fn platform_service_next_step(config_path: &std::path::Path) -> String {
+    if cfg!(windows) {
+        format!(
+            "inferra --config \"{}\" service install --startup auto",
+            config_path.display()
+        )
+    } else {
+        service_install_hint().to_string()
+    }
 }
 
 fn open_dashboard_url(url: &str) -> Result<()> {
@@ -381,6 +411,9 @@ pub async fn run_service_command(
     match action {
         Some(ServiceAction::Install { startup }) => install_windows_service(ctx, &startup),
         Some(ServiceAction::Remove) => {
+            if !cfg!(windows) {
+                bail!("service removal is only implemented for the Windows service. Use the platform uninstall flow documented in docs/operations/install.md.");
+            }
             inferra_windows_service::remove_service()?;
             let payload = json!({
                 "service": inferra_windows_service::SERVICE_NAME,
@@ -398,9 +431,10 @@ pub async fn run_service_command(
             Ok(())
         }
         Some(ServiceAction::Start) => {
-            inferra_windows_service::start_service()?;
+            let status = start_supervisor()?;
             let payload = json!({
-                "service": inferra_windows_service::SERVICE_NAME,
+                "service": status.service_name,
+                "manager": status.kind,
                 "action": "start",
                 "ok": true,
             });
@@ -408,16 +442,18 @@ pub async fn run_service_command(
                 ctx,
                 &payload,
                 &[format!(
-                    "Started Windows service {}",
-                    inferra_windows_service::SERVICE_NAME
+                    "Started {} {}",
+                    status.manager_label(),
+                    status.service_name
                 )],
             );
             Ok(())
         }
         Some(ServiceAction::Stop) => {
-            inferra_windows_service::stop_service()?;
+            let status = stop_supervisor()?;
             let payload = json!({
-                "service": inferra_windows_service::SERVICE_NAME,
+                "service": status.service_name,
+                "manager": status.kind,
                 "action": "stop",
                 "ok": true,
             });
@@ -425,16 +461,18 @@ pub async fn run_service_command(
                 ctx,
                 &payload,
                 &[format!(
-                    "Stopped Windows service {}",
-                    inferra_windows_service::SERVICE_NAME
+                    "Stopped {} {}",
+                    status.manager_label(),
+                    status.service_name
                 )],
             );
             Ok(())
         }
         Some(ServiceAction::Restart) => {
-            inferra_windows_service::restart_service()?;
+            let status = restart_supervisor()?;
             let payload = json!({
-                "service": inferra_windows_service::SERVICE_NAME,
+                "service": status.service_name,
+                "manager": status.kind,
                 "action": "restart",
                 "ok": true,
             });
@@ -442,8 +480,9 @@ pub async fn run_service_command(
                 ctx,
                 &payload,
                 &[format!(
-                    "Restarted Windows service {}",
-                    inferra_windows_service::SERVICE_NAME
+                    "Restarted {} {}",
+                    status.manager_label(),
+                    status.service_name
                 )],
             );
             Ok(())
@@ -787,21 +826,39 @@ fn install_windows_service(ctx: &AppContext, startup: &str) -> Result<()> {
 }
 
 fn emit_service_status(ctx: &AppContext) -> Result<()> {
-    let status = inferra_windows_service::query_service_status()?;
+    let status = query_supervisor_status()?;
     let payload = json!({
-        "service": inferra_windows_service::SERVICE_NAME,
+        "service": status.service_name,
+        "manager": status.kind,
+        "manager_label": status.manager_label(),
+        "supported": status.supported,
         "installed": status.installed,
         "state": status.state,
         "startup": status.startup,
-        "log_path": status.log_path.display().to_string(),
+        "log_target": status.log_target,
+        "definition_path": status.definition_path.as_ref().map(|path| path.display().to_string()),
         "binary_path": status.binary_path,
     });
     if ctx.ui.is_json() {
         ctx.ui.print_json(&payload);
     } else {
-        ctx.ui.banner("Service", "Windows service status");
+        ctx.ui.banner("Service", "Platform service status");
         ctx.ui.kv_table([
-            ("Service", inferra_windows_service::SERVICE_NAME.to_string()),
+            (
+                "Manager",
+                payload["manager_label"]
+                    .as_str()
+                    .unwrap_or("service manager")
+                    .to_string(),
+            ),
+            (
+                "Service",
+                payload["service"].as_str().unwrap_or_default().to_string(),
+            ),
+            (
+                "Supported",
+                payload["supported"].as_bool().unwrap_or(false).to_string(),
+            ),
             (
                 "Installed",
                 payload["installed"].as_bool().unwrap_or(false).to_string(),
@@ -818,10 +875,16 @@ fn emit_service_status(ctx: &AppContext) -> Result<()> {
                 payload["startup"].as_str().unwrap_or("-").to_string(),
             ),
             (
-                "Log path",
-                payload["log_path"].as_str().unwrap_or_default().to_string(),
+                "Logs",
+                payload["log_target"]
+                    .as_str()
+                    .unwrap_or_default()
+                    .to_string(),
             ),
         ]);
+        if let Some(definition) = payload.get("definition_path").and_then(JsonValue::as_str) {
+            ctx.ui.paragraph(&format!("Definition: {definition}"));
+        }
         if let Some(binary) = payload.get("binary_path").and_then(JsonValue::as_str) {
             ctx.ui.paragraph(&format!("Binary: {binary}"));
         }
@@ -834,7 +897,7 @@ fn run_service_repair(ctx: &AppContext) -> Result<()> {
     let paths = ctx.paths()?;
     let config = load_merged_config(&paths.config_path)?;
     let (host, port) = server_listen(&config)?;
-    let log_path = inferra_windows_service::service_log_path();
+    let service_status = query_supervisor_status().ok();
 
     let mut findings = Vec::<JsonValue>::new();
     findings.push(json!({
@@ -876,27 +939,31 @@ fn run_service_repair(ctx: &AppContext) -> Result<()> {
         },
     }));
 
-    findings.push(json!({
-        "name": "log_path",
-        "ok": true,
-        "message": format!("Service log path: {}", log_path.display()),
-    }));
-
-    if cfg!(windows) {
-        let status = inferra_windows_service::query_service_status()?;
+    if let Some(status) = service_status.as_ref() {
         findings.push(json!({
-            "name": "service",
-            "ok": true,
-            "message": if status.installed {
+            "name": "service_manager",
+            "ok": status.supported,
+            "message": if status.supported {
                 format!(
-                    "Service installed state={} startup={}",
+                    "{} {} installed={} state={} startup={}",
+                    status.manager_label(),
+                    status.service_name,
+                    status.installed,
                     status.state.as_deref().unwrap_or("unknown"),
                     status.startup.as_deref().unwrap_or("unknown")
                 )
             } else {
-                "Service not installed".to_string()
+                "No supported platform service manager detected; use `inferra serve` on this host."
+                    .to_string()
             },
         }));
+        if let Some(log_target) = status.log_target.as_deref() {
+            findings.push(json!({
+                "name": "logs",
+                "ok": true,
+                "message": format!("Service logs: {log_target}"),
+            }));
+        }
     }
 
     let ok = findings
@@ -908,16 +975,12 @@ fn run_service_repair(ctx: &AppContext) -> Result<()> {
             "inferra service restart".to_string(),
         ]
     } else {
-        vec![
-            format!(
-                "inferra --config \"{}\" init-db",
-                paths.config_path.display()
-            ),
-            format!(
-                "inferra --config \"{}\" service install --startup auto",
-                paths.config_path.display()
-            ),
-        ]
+        let mut steps = vec![format!(
+            "inferra --config \"{}\" init-db",
+            paths.config_path.display()
+        )];
+        steps.push(platform_service_next_step(&paths.config_path));
+        steps
     };
     let payload = json!({
         "command": "service repair",
@@ -993,14 +1056,17 @@ async fn collect_status_payload(ctx: &AppContext) -> Result<JsonValue> {
         Ok(payload) => Some(payload),
         Err(_) => serde_json::to_value(build_overview(&config, &paths)?).ok(),
     };
-    let service = match inferra_windows_service::query_service_status() {
+    let service = match query_supervisor_status() {
         Ok(status) => json!({
-            "supported": true,
+            "manager": status.kind,
+            "manager_label": status.manager_label(),
+            "supported": status.supported,
             "installed": status.installed,
             "state": status.state,
             "startup": status.startup,
             "binary_path": status.binary_path,
-            "log_path": status.log_path.display().to_string(),
+            "definition_path": status.definition_path.as_ref().map(|path| path.display().to_string()),
+            "log_target": status.log_target,
         }),
         Err(error) => json!({
             "supported": false,
@@ -1044,9 +1110,10 @@ fn render_status_snapshot(ctx: &AppContext, payload: &JsonValue, welcome_only: b
             runtime["dashboard_url"].as_str().unwrap_or_default()
         ));
     } else {
-        ctx.ui.warning(
-            "API and dashboard are not responding. Use `inferra runtime start` when the Windows service is installed.",
-        );
+        ctx.ui.warning(&format!(
+            "API and dashboard are not responding. {}.",
+            runtime_unreachable_hint()
+        ));
     }
     ctx.ui.kv_table([
         (
@@ -1117,6 +1184,13 @@ fn render_status_snapshot(ctx: &AppContext, payload: &JsonValue, welcome_only: b
                     .to_string(),
             ),
             (
+                "Manager",
+                payload["service"]["manager_label"]
+                    .as_str()
+                    .unwrap_or("service manager")
+                    .to_string(),
+            ),
+            (
                 "State",
                 payload["service"]["state"]
                     .as_str()
@@ -1131,11 +1205,17 @@ fn render_status_snapshot(ctx: &AppContext, payload: &JsonValue, welcome_only: b
                     .to_string(),
             ),
         ]);
-        if let Some(log_path) = payload["service"]
-            .get("log_path")
+        if let Some(definition_path) = payload["service"]
+            .get("definition_path")
             .and_then(JsonValue::as_str)
         {
-            ctx.ui.paragraph(&format!("Log path: {log_path}"));
+            ctx.ui.paragraph(&format!("Definition: {definition_path}"));
+        }
+        if let Some(log_target) = payload["service"]
+            .get("log_target")
+            .and_then(JsonValue::as_str)
+        {
+            ctx.ui.paragraph(&format!("Logs: {log_target}"));
         }
 
         ctx.ui.paragraph("");
@@ -1220,7 +1300,6 @@ fn is_addr_in_use_error(error: &anyhow::Error) -> bool {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use std::path::PathBuf;
 
     #[test]
     fn addr_in_use_detection_matches_socket_conflicts() {
@@ -1242,27 +1321,32 @@ mod tests {
 
     #[test]
     fn runtime_mode_prefers_pending_service_states() {
-        let status = inferra_windows_service::ServiceStatus {
+        let status = SupervisorStatus {
+            kind: "systemd",
+            supported: true,
+            service_name: "inferra.service".into(),
             installed: true,
-            state: Some("start_pending".into()),
-            startup: None,
+            state: Some("activating".into()),
+            startup: Some("enabled".into()),
+            definition_path: None,
             binary_path: None,
-            log_path: PathBuf::new(),
+            log_target: None,
         };
-        assert_eq!(
-            runtime_mode_for(false, Some(&status)),
-            "windows_service_pending"
-        );
+        assert_eq!(runtime_mode_for(false, Some(&status)), "service_pending");
     }
 
     #[test]
     fn runtime_hint_prefers_status_during_pending_transition() {
-        let status = inferra_windows_service::ServiceStatus {
+        let status = SupervisorStatus {
+            kind: "launchd",
+            supported: true,
+            service_name: "com.inferra.agent".into(),
             installed: true,
-            state: Some("stop_pending".into()),
-            startup: None,
+            state: Some("stopping".into()),
+            startup: Some("run_at_load".into()),
+            definition_path: None,
             binary_path: None,
-            log_path: PathBuf::new(),
+            log_target: None,
         };
         assert_eq!(
             runtime_hint_for(false, Some(&status)),

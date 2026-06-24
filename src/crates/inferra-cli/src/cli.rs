@@ -44,7 +44,7 @@ pub enum Command {
         action: Option<RuntimeAction>,
     },
     #[command(
-        about = "Manage the Windows service install (API + dashboard run inside the service)"
+        about = "Manage the installed platform service (Windows service, systemd unit, or LaunchDaemon)"
     )]
     Service {
         #[command(subcommand)]
@@ -104,11 +104,11 @@ pub enum Command {
 pub enum RuntimeAction {
     #[command(about = "Show whether the API and dashboard are running")]
     Status,
-    #[command(about = "Start the installed Windows service (API + dashboard)")]
+    #[command(about = "Start the installed platform service (API + dashboard)")]
     Start,
-    #[command(about = "Stop the installed Windows service")]
+    #[command(about = "Stop the installed platform service")]
     Stop,
-    #[command(about = "Restart the installed Windows service")]
+    #[command(about = "Restart the installed platform service")]
     Restart,
     #[command(about = "Open the dashboard in your default browser")]
     Open,
@@ -116,22 +116,22 @@ pub enum RuntimeAction {
 
 #[derive(Subcommand, Debug)]
 pub enum ServiceAction {
-    #[command(about = "Install the Windows service")]
+    #[command(about = "Install the Windows service (Windows only)")]
     Install {
         #[arg(long, default_value = "auto")]
         startup: String,
     },
-    #[command(about = "Remove the Windows service")]
+    #[command(about = "Remove the Windows service (Windows only)")]
     Remove,
-    #[command(about = "Start the Windows service")]
+    #[command(about = "Start the installed platform service")]
     Start,
-    #[command(about = "Stop the Windows service")]
+    #[command(about = "Stop the installed platform service")]
     Stop,
-    #[command(about = "Restart the Windows service")]
+    #[command(about = "Restart the installed platform service")]
     Restart,
-    #[command(about = "Show Windows service status")]
+    #[command(about = "Show installed platform service status")]
     Status,
-    #[command(about = "Validate service prerequisites and suggest next steps")]
+    #[command(about = "Validate service-manager prerequisites and suggest next steps")]
     Repair,
 }
 
