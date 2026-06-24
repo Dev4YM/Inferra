@@ -67,7 +67,7 @@ pub async fn run_runtime_command(ctx: &AppContext, action: Option<RuntimeAction>
     match action {
         Some(RuntimeAction::Status) => emit_runtime_status(ctx).await,
         Some(RuntimeAction::Start) => runtime_start(ctx).await,
-        Some(RuntimeAction::Stop) => runtime_stop(ctx),
+        Some(RuntimeAction::Stop) => runtime_stop(ctx).await,
         Some(RuntimeAction::Restart) => runtime_restart(ctx).await,
         Some(RuntimeAction::Open) => runtime_open(ctx).await,
         None => emit_runtime_status(ctx).await,
@@ -137,7 +137,7 @@ async fn runtime_start(ctx: &AppContext) -> Result<()> {
             paths.config_path.display()
         );
     }
-    if status.state.as_deref() == Some("Running") && runtime_health_ok(ctx).await? {
+    if status.is_running() && runtime_health_ok(ctx).await? {
         return finish_runtime_action(ctx, "start", "Runtime already running (API + dashboard)")
             .await;
     }
@@ -146,7 +146,7 @@ async fn runtime_start(ctx: &AppContext) -> Result<()> {
     finish_runtime_action(ctx, "start", "Started Inferra runtime (API + dashboard)").await
 }
 
-fn runtime_stop(ctx: &AppContext) -> Result<()> {
+async fn runtime_stop(ctx: &AppContext) -> Result<()> {
     if !cfg!(windows) {
         bail!("Windows service control is required on this platform.");
     }
@@ -155,19 +155,26 @@ fn runtime_stop(ctx: &AppContext) -> Result<()> {
         bail!("Inferra service is not installed.");
     }
     inferra_windows_service::stop_service()?;
+    let payload = collect_runtime_payload(ctx).await?;
+    let reachable = payload["reachable"].as_bool().unwrap_or(false);
+    let message = if reachable {
+        format!(
+            "Stopped Windows service {}. The API is still responding, which usually means a foreground runtime is still active on the configured address.",
+            inferra_windows_service::SERVICE_NAME
+        )
+    } else {
+        format!(
+            "Stopped Windows service {} (API + dashboard)",
+            inferra_windows_service::SERVICE_NAME
+        )
+    };
     let payload = json!({
         "action": "stop",
         "ok": true,
         "service": inferra_windows_service::SERVICE_NAME,
+        "reachable_after_stop": reachable,
     });
-    emit_command_result(
-        ctx,
-        &payload,
-        &[format!(
-            "Stopped Windows service {} (API + dashboard)",
-            inferra_windows_service::SERVICE_NAME
-        )],
-    );
+    emit_command_result(ctx, &payload, &[message]);
     Ok(())
 }
 
@@ -251,21 +258,8 @@ async fn collect_runtime_payload(ctx: &AppContext) -> Result<JsonValue> {
         .as_ref()
         .and_then(|status| status.state.clone())
         .unwrap_or_else(|| "not_installed".to_string());
-    let service_running = service_state.eq_ignore_ascii_case("running");
-    let mode = if service_running {
-        "windows_service"
-    } else if reachable {
-        "foreground"
-    } else {
-        "stopped"
-    };
-    let hint = if reachable {
-        "inferra runtime open".to_string()
-    } else if service_installed {
-        "inferra runtime start".to_string()
-    } else {
-        "deploy/windows/install-service.ps1 (Administrator)".to_string()
-    };
+    let mode = runtime_mode_for(reachable, service.as_ref());
+    let hint = runtime_hint_for(reachable, service.as_ref()).to_string();
     Ok(json!({
         "reachable": reachable,
         "dashboard_url": dashboard_url,
@@ -295,11 +289,56 @@ async fn wait_for_runtime_health(ctx: &AppContext, timeout_secs: u64) -> Result<
     }
     let paths = ctx.paths()?;
     let log_path = inferra_windows_service::service_log_path();
+    let service_state = if cfg!(windows) {
+        inferra_windows_service::query_service_status()
+            .ok()
+            .and_then(|status| status.state)
+            .unwrap_or_else(|| "unknown".to_string())
+    } else {
+        "unsupported".to_string()
+    };
     bail!(
-        "runtime did not become healthy within {timeout_secs}s; check {} and {}",
+        "runtime did not become healthy within {timeout_secs}s (service state: {service_state}); check {} and {}",
         log_path.display(),
         paths.config_path.display()
     );
+}
+
+fn runtime_mode_for(
+    reachable: bool,
+    service: Option<&inferra_windows_service::ServiceStatus>,
+) -> &'static str {
+    if let Some(status) = service {
+        if status.is_running() {
+            return "windows_service";
+        }
+        if status.is_start_pending() || status.is_stop_pending() {
+            return "windows_service_pending";
+        }
+    }
+    if reachable {
+        "foreground"
+    } else {
+        "stopped"
+    }
+}
+
+fn runtime_hint_for(
+    reachable: bool,
+    service: Option<&inferra_windows_service::ServiceStatus>,
+) -> &'static str {
+    if reachable {
+        return "inferra runtime open";
+    }
+    if let Some(status) = service {
+        if status.is_start_pending() || status.is_stop_pending() {
+            return "inferra runtime status";
+        }
+        if status.installed {
+            return "inferra runtime start";
+        }
+    }
+    "deploy/windows/install-service.ps1 (Administrator)"
 }
 
 fn open_dashboard_url(url: &str) -> Result<()> {
@@ -1181,6 +1220,7 @@ fn is_addr_in_use_error(error: &anyhow::Error) -> bool {
 #[cfg(test)]
 mod tests {
     use super::*;
+    use std::path::PathBuf;
 
     #[test]
     fn addr_in_use_detection_matches_socket_conflicts() {
@@ -1198,5 +1238,35 @@ mod tests {
             "denied",
         ));
         assert!(!is_addr_in_use_error(&error));
+    }
+
+    #[test]
+    fn runtime_mode_prefers_pending_service_states() {
+        let status = inferra_windows_service::ServiceStatus {
+            installed: true,
+            state: Some("start_pending".into()),
+            startup: None,
+            binary_path: None,
+            log_path: PathBuf::new(),
+        };
+        assert_eq!(
+            runtime_mode_for(false, Some(&status)),
+            "windows_service_pending"
+        );
+    }
+
+    #[test]
+    fn runtime_hint_prefers_status_during_pending_transition() {
+        let status = inferra_windows_service::ServiceStatus {
+            installed: true,
+            state: Some("stop_pending".into()),
+            startup: None,
+            binary_path: None,
+            log_path: PathBuf::new(),
+        };
+        assert_eq!(
+            runtime_hint_for(false, Some(&status)),
+            "inferra runtime status"
+        );
     }
 }

@@ -9,6 +9,10 @@ use inferra_config::Paths;
 pub const SERVICE_NAME: &str = "Inferra";
 pub const SERVICE_DISPLAY_NAME: &str = "Inferra";
 pub const SERVICE_DESCRIPTION: &str = "Local-first runtime failure explanation service";
+#[cfg(any(windows, test))]
+const SERVICE_STATE_POLL_INTERVAL: std::time::Duration = std::time::Duration::from_millis(500);
+#[cfg(any(windows, test))]
+const SERVICE_CONTROL_TIMEOUT: std::time::Duration = std::time::Duration::from_secs(45);
 
 #[derive(Debug, Clone, Copy)]
 pub enum ServiceStartup {
@@ -51,6 +55,31 @@ pub struct ServiceStatus {
     pub startup: Option<String>,
     pub binary_path: Option<String>,
     pub log_path: PathBuf,
+}
+
+impl ServiceStatus {
+    pub fn normalized_state(&self) -> Option<&str> {
+        self.state
+            .as_deref()
+            .map(str::trim)
+            .filter(|value| !value.is_empty())
+    }
+
+    pub fn is_running(&self) -> bool {
+        service_state_matches(self.normalized_state(), "running")
+    }
+
+    pub fn is_start_pending(&self) -> bool {
+        service_state_matches(self.normalized_state(), "start_pending")
+    }
+
+    pub fn is_stopped(&self) -> bool {
+        service_state_matches(self.normalized_state(), "stopped")
+    }
+
+    pub fn is_stop_pending(&self) -> bool {
+        service_state_matches(self.normalized_state(), "stop_pending")
+    }
 }
 
 /// Service-host shell for the Rust runtime.
@@ -133,7 +162,24 @@ pub fn start_service() -> Result<()> {
     }
     #[cfg(windows)]
     {
-        run_sc(&["start".into(), SERVICE_NAME.into()])
+        let status = query_service_status()?;
+        if !status.installed {
+            bail!("Inferra service is not installed");
+        }
+        if status.is_running() || status.is_start_pending() {
+            wait_for_service_state(&["running"], "service start")?;
+            return Ok(());
+        }
+
+        if let Err(error) = run_sc(&["start".into(), SERVICE_NAME.into()]) {
+            let text = error.to_string();
+            if !is_already_running_service_error(&text) {
+                return Err(error);
+            }
+        }
+
+        wait_for_service_state(&["running"], "service start")?;
+        Ok(())
     }
 }
 
@@ -144,16 +190,34 @@ pub fn stop_service() -> Result<()> {
     }
     #[cfg(windows)]
     {
-        run_sc(&["stop".into(), SERVICE_NAME.into()])
+        let status = query_service_status()?;
+        if !status.installed {
+            bail!("Inferra service is not installed");
+        }
+        if status.is_stopped() || status.is_stop_pending() {
+            wait_for_service_state(&["stopped"], "service stop")?;
+            return Ok(());
+        }
+
+        if let Err(error) = run_sc(&["stop".into(), SERVICE_NAME.into()]) {
+            let text = error.to_string();
+            if !is_non_running_service_error(&text) {
+                return Err(error);
+            }
+        }
+
+        wait_for_service_state(&["stopped"], "service stop")?;
+        Ok(())
     }
 }
 
 pub fn restart_service() -> Result<()> {
-    if let Err(error) = stop_service() {
-        let text = error.to_string();
-        if !is_non_running_service_error(&text) && !is_missing_service_error(&text) {
-            return Err(error);
-        }
+    let status = query_service_status()?;
+    if !status.installed {
+        bail!("Inferra service is not installed");
+    }
+    if !status.is_stopped() {
+        stop_service()?;
     }
     start_service()
 }
@@ -302,6 +366,84 @@ fn parse_state_value(raw: String) -> Option<String> {
     Some(value.to_ascii_lowercase())
 }
 
+#[cfg(any(windows, test))]
+fn service_state_matches(state: Option<&str>, expected: &str) -> bool {
+    state.is_some_and(|value| value.eq_ignore_ascii_case(expected))
+}
+
+#[cfg(any(windows, test))]
+fn wait_for_service_state(expected: &[&str], action: &str) -> Result<ServiceStatus> {
+    wait_for_service_state_with(
+        query_service_status,
+        expected,
+        SERVICE_CONTROL_TIMEOUT,
+        SERVICE_STATE_POLL_INTERVAL,
+        action,
+    )
+}
+
+#[cfg(any(windows, test))]
+fn wait_for_service_state_with<F>(
+    mut query: F,
+    expected: &[&str],
+    timeout: std::time::Duration,
+    poll_interval: std::time::Duration,
+    action: &str,
+) -> Result<ServiceStatus>
+where
+    F: FnMut() -> Result<ServiceStatus>,
+{
+    let deadline = std::time::Instant::now() + timeout;
+    let mut last_status = None;
+    let mut last_error = None;
+
+    loop {
+        match query() {
+            Ok(status) => {
+                if !status.installed {
+                    bail!("Inferra service is not installed");
+                }
+                if expected
+                    .iter()
+                    .any(|candidate| service_state_matches(status.normalized_state(), candidate))
+                {
+                    return Ok(status);
+                }
+                last_status = Some(status);
+            }
+            Err(error) => last_error = Some(error),
+        }
+
+        if std::time::Instant::now() >= deadline {
+            break;
+        }
+        std::thread::sleep(poll_interval);
+    }
+
+    if let Some(status) = last_status {
+        bail!(
+            "{action} did not reach [{}] within {}s (last state: {})",
+            expected.join(", "),
+            timeout.as_secs(),
+            status.normalized_state().unwrap_or("unknown")
+        );
+    }
+
+    if let Some(error) = last_error {
+        return Err(error.context(format!(
+            "{action} did not reach [{}] within {}s",
+            expected.join(", "),
+            timeout.as_secs()
+        )));
+    }
+
+    bail!(
+        "{action} did not reach [{}] within {}s",
+        expected.join(", "),
+        timeout.as_secs()
+    )
+}
+
 #[cfg(windows)]
 fn append_service_log(message: &str) {
     let log_path = service_log_path();
@@ -327,6 +469,13 @@ fn is_non_running_service_error(text: &str) -> bool {
     lowered.contains("service has not been started")
         || lowered.contains("not started")
         || lowered.contains("1062")
+}
+
+fn is_already_running_service_error(text: &str) -> bool {
+    let lowered = text.to_ascii_lowercase();
+    lowered.contains("already running")
+        || lowered.contains("service has already been started")
+        || lowered.contains("1056")
 }
 
 #[cfg(test)]
@@ -456,6 +605,15 @@ mod tests {
     }
 
     #[test]
+    fn is_already_running_service_error_detects_known_patterns() {
+        assert!(is_already_running_service_error(
+            "An instance of the service is already running."
+        ));
+        assert!(is_already_running_service_error("error 1056"));
+        assert!(!is_already_running_service_error("not started"));
+    }
+
+    #[test]
     fn parse_state_value_extracts_text_after_numeric_code() {
         assert_eq!(
             parse_state_value("4  RUNNING".into()).as_deref(),
@@ -473,6 +631,83 @@ mod tests {
         assert!(path.to_string_lossy().contains("Inferra"));
         assert!(path.to_string_lossy().contains("logs"));
         assert!(path.to_string_lossy().contains("serve.log"));
+    }
+
+    #[test]
+    fn service_status_helpers_match_normalized_states() {
+        let running = ServiceStatus {
+            installed: true,
+            state: Some("RUNNING".into()),
+            startup: None,
+            binary_path: None,
+            log_path: PathBuf::new(),
+        };
+        assert!(running.is_running());
+        assert!(!running.is_stopped());
+
+        let pending = ServiceStatus {
+            installed: true,
+            state: Some("start_pending".into()),
+            startup: None,
+            binary_path: None,
+            log_path: PathBuf::new(),
+        };
+        assert!(pending.is_start_pending());
+        assert!(!pending.is_running());
+    }
+
+    #[test]
+    fn wait_for_service_state_with_accepts_pending_then_running() {
+        let mut attempts = 0;
+        let status = wait_for_service_state_with(
+            || {
+                attempts += 1;
+                Ok(ServiceStatus {
+                    installed: true,
+                    state: Some(if attempts < 3 {
+                        "start_pending".into()
+                    } else {
+                        "running".into()
+                    }),
+                    startup: None,
+                    binary_path: None,
+                    log_path: PathBuf::new(),
+                })
+            },
+            &["running"],
+            std::time::Duration::from_millis(20),
+            std::time::Duration::ZERO,
+            "service start",
+        )
+        .expect("service reaches running");
+
+        assert_eq!(status.normalized_state(), Some("running"));
+        assert_eq!(attempts, 3);
+    }
+
+    #[test]
+    fn wait_for_service_state_with_reports_last_state_on_timeout() {
+        let error = wait_for_service_state_with(
+            || {
+                Ok(ServiceStatus {
+                    installed: true,
+                    state: Some("stop_pending".into()),
+                    startup: None,
+                    binary_path: None,
+                    log_path: PathBuf::new(),
+                })
+            },
+            &["stopped"],
+            std::time::Duration::ZERO,
+            std::time::Duration::ZERO,
+            "service stop",
+        )
+        .expect_err("timeout should fail");
+
+        let message = error.to_string();
+        assert!(message.contains("service stop"));
+        assert!(message.contains("stopped"));
+        assert!(message.contains("stop_pending"));
     }
 }
 
