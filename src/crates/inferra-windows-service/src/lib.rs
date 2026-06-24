@@ -27,6 +27,7 @@ impl ServiceStartup {
         }
     }
 
+    #[cfg(any(windows, test))]
     fn as_sc_value(self) -> &'static str {
         match self {
             Self::Auto => "auto",
@@ -200,6 +201,7 @@ pub fn dispatch_service(paths: Paths, ui_dist: PathBuf) -> Result<()> {
     }
 }
 
+#[cfg(any(windows, test))]
 fn build_service_command_line(binary_path: &Path, options: &ServiceInstallOptions) -> String {
     let mut parts = vec![quote_windows_executable(&binary_path.display().to_string())];
     parts.push("--config".into());
@@ -213,6 +215,7 @@ fn build_service_command_line(binary_path: &Path, options: &ServiceInstallOption
     parts.join(" ")
 }
 
+#[cfg(any(windows, test))]
 fn build_sc_create_args(binary_path: &Path, options: &ServiceInstallOptions) -> Vec<String> {
     vec![
         "create".into(),
@@ -226,10 +229,12 @@ fn build_sc_create_args(binary_path: &Path, options: &ServiceInstallOptions) -> 
     ]
 }
 
+#[cfg(any(windows, test))]
 fn quote_windows_executable(value: &str) -> String {
     format!("\"{}\"", value.replace('"', "\\\""))
 }
 
+#[cfg(any(windows, test))]
 fn quote_windows_arg(value: &str) -> String {
     if value.contains([' ', '\t', '"']) {
         format!("\"{}\"", value.replace('"', "\\\""))
@@ -238,6 +243,7 @@ fn quote_windows_arg(value: &str) -> String {
     }
 }
 
+#[cfg(any(windows, test))]
 fn run_sc(args: &[String]) -> Result<()> {
     let output = run_sc_output(args)?;
     if output.status.success() {
@@ -250,6 +256,7 @@ fn run_sc(args: &[String]) -> Result<()> {
     )
 }
 
+#[cfg(any(windows, test))]
 fn run_sc_output(args: &[String]) -> Result<std::process::Output> {
     Command::new("sc.exe")
         .args(args)
@@ -257,6 +264,7 @@ fn run_sc_output(args: &[String]) -> Result<std::process::Output> {
         .with_context(|| format!("run sc.exe {}", args.join(" ")))
 }
 
+#[cfg(any(windows, test))]
 fn sc_output_text(output: &std::process::Output) -> String {
     let stdout = String::from_utf8_lossy(&output.stdout).trim().to_string();
     let stderr = String::from_utf8_lossy(&output.stderr).trim().to_string();
@@ -268,6 +276,7 @@ fn sc_output_text(output: &std::process::Output) -> String {
     }
 }
 
+#[cfg(any(windows, test))]
 fn parse_sc_field(text: &str, field_name: &str) -> Option<String> {
     for line in text.lines() {
         let trimmed = line.trim_start();
@@ -280,6 +289,7 @@ fn parse_sc_field(text: &str, field_name: &str) -> Option<String> {
     None
 }
 
+#[cfg(any(windows, test))]
 fn parse_state_value(raw: String) -> Option<String> {
     let mut parts = raw.split_whitespace();
     let first = parts.next()?;
@@ -292,6 +302,7 @@ fn parse_state_value(raw: String) -> Option<String> {
     Some(value.to_ascii_lowercase())
 }
 
+#[cfg(windows)]
 fn append_service_log(message: &str) {
     let log_path = service_log_path();
     if let Some(parent) = log_path.parent() {
