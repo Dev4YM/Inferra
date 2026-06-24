@@ -22,6 +22,21 @@ fn env_lock() -> &'static Mutex<()> {
     LOCK.get_or_init(|| Mutex::new(()))
 }
 
+macro_rules! process_runtime_evidence {
+    ($process_name:expr, $command:expr, $project_path:expr, $cwd:expr, $script:expr, $executable:expr, $framework:expr, $endpoints:expr $(,)?) => {
+        ProcessRuntimeEvidence {
+            process_name: $process_name,
+            command: $command,
+            project_path: $project_path,
+            cwd: $cwd,
+            script: $script,
+            executable: $executable,
+            framework: $framework,
+            endpoints: $endpoints,
+        }
+    };
+}
+
 #[test]
 fn process_cpu_is_normalized_to_total_host_share() {
     assert_eq!(normalize_process_cpu_to_host_percent(100.0, 8), 12.5);
@@ -126,6 +141,128 @@ roots = ["extra-root"]
 }
 
 #[test]
+fn workspace_roots_default_to_strict_config_scope() {
+    let _guard = env_lock()
+        .lock()
+        .unwrap_or_else(|poisoned| poisoned.into_inner());
+    let root = temp_dir("workspace-roots-strict");
+    let base = root.join("config-root");
+    let home = root.join("home");
+    fs::create_dir_all(&base).expect("create base");
+    fs::create_dir_all(home.join("Projects")).expect("create home projects");
+
+    let old_home = std::env::var_os("HOME");
+    let old_userprofile = std::env::var_os("USERPROFILE");
+    unsafe {
+        std::env::set_var("HOME", &home);
+        std::env::set_var("USERPROFILE", &home);
+    }
+
+    let config: TomlValue = "[workspace]\n".parse().expect("parse config");
+    let roots = workspace_roots(&config, &base);
+
+    unsafe {
+        if let Some(value) = old_home {
+            std::env::set_var("HOME", value);
+        } else {
+            std::env::remove_var("HOME");
+        }
+        if let Some(value) = old_userprofile {
+            std::env::set_var("USERPROFILE", value);
+        } else {
+            std::env::remove_var("USERPROFILE");
+        }
+    }
+
+    assert_eq!(roots.len(), 1);
+    assert_eq!(roots[0], base.canonicalize().expect("canonical base"));
+
+    let _ = fs::remove_dir_all(&root);
+}
+
+#[test]
+fn workspace_roots_hybrid_mode_includes_home_candidates() {
+    let _guard = env_lock()
+        .lock()
+        .unwrap_or_else(|poisoned| poisoned.into_inner());
+    let root = temp_dir("workspace-roots-hybrid");
+    let base = root.join("config-root");
+    let home = root.join("home");
+    fs::create_dir_all(&base).expect("create base");
+    fs::create_dir_all(home.join("Projects")).expect("create home projects");
+
+    let old_home = std::env::var_os("HOME");
+    let old_userprofile = std::env::var_os("USERPROFILE");
+    unsafe {
+        std::env::set_var("HOME", &home);
+        std::env::set_var("USERPROFILE", &home);
+    }
+
+    let config: TomlValue = "[workspace]\ndiscovery_mode = \"hybrid\"\n"
+        .parse()
+        .expect("parse config");
+    let roots = workspace_roots(&config, &base);
+
+    unsafe {
+        if let Some(value) = old_home {
+            std::env::set_var("HOME", value);
+        } else {
+            std::env::remove_var("HOME");
+        }
+        if let Some(value) = old_userprofile {
+            std::env::set_var("USERPROFILE", value);
+        } else {
+            std::env::remove_var("USERPROFILE");
+        }
+    }
+
+    assert!(roots.iter().any(|path| path.ends_with("Projects")));
+
+    let _ = fs::remove_dir_all(&root);
+}
+
+#[test]
+fn workspace_roots_support_explicit_home_roots_without_hybrid_mode() {
+    let _guard = env_lock()
+        .lock()
+        .unwrap_or_else(|poisoned| poisoned.into_inner());
+    let root = temp_dir("workspace-roots-explicit-home");
+    let base = root.join("config-root");
+    let home = root.join("home");
+    fs::create_dir_all(&base).expect("create base");
+    fs::create_dir_all(home.join("code")).expect("create home code");
+
+    let old_home = std::env::var_os("HOME");
+    let old_userprofile = std::env::var_os("USERPROFILE");
+    unsafe {
+        std::env::set_var("HOME", &home);
+        std::env::set_var("USERPROFILE", &home);
+    }
+
+    let config: TomlValue = "[workspace]\nhome_roots = [\"code\"]\n"
+        .parse()
+        .expect("parse config");
+    let roots = workspace_roots(&config, &base);
+
+    unsafe {
+        if let Some(value) = old_home {
+            std::env::set_var("HOME", value);
+        } else {
+            std::env::remove_var("HOME");
+        }
+        if let Some(value) = old_userprofile {
+            std::env::set_var("USERPROFILE", value);
+        } else {
+            std::env::remove_var("USERPROFILE");
+        }
+    }
+
+    assert!(roots.iter().any(|path| path.ends_with("code")));
+
+    let _ = fs::remove_dir_all(&root);
+}
+
+#[test]
 fn discover_projects_prefers_framework_marker_over_git() {
     let root = temp_dir("workspace-framework-marker-preferred");
     let flutter = root.join("givity_customer_app");
@@ -161,6 +298,97 @@ fn discover_projects_skips_bare_git_checkout_without_source_evidence() {
     assert!(!projects
         .iter()
         .any(|project| project.path.contains("notes-repo")));
+
+    let _ = fs::remove_dir_all(&root);
+}
+
+#[test]
+fn discover_projects_allows_weak_markers_when_policy_is_always() {
+    let root = temp_dir("workspace-weak-marker-always");
+    let repo = root.join("notes-repo");
+    fs::create_dir_all(repo.join(".git")).expect("create git dir");
+
+    let config: TomlValue = "[workspace]\nweak_marker_policy = \"always\"\n"
+        .parse()
+        .expect("parse config");
+    let projects = discover_projects(&config, &root);
+
+    assert!(projects
+        .iter()
+        .any(|project| project.path.contains("notes-repo") && project.marker == ".git"));
+
+    let _ = fs::remove_dir_all(&root);
+}
+
+#[test]
+fn workspace_map_includes_project_apps_by_default() {
+    let root = temp_dir("workspace-project-apps-default");
+    let project = root.join("inferra-app");
+    fs::create_dir_all(project.join(".inferra")).expect("create project");
+    fs::write(
+        project.join("package.json"),
+        r#"{"name":"inferra","dependencies":{"next":"latest"}}"#,
+    )
+    .expect("write package");
+    fs::write(
+        project.join(".inferra").join("app.toml"),
+        "[app]\nname = \"Inferra UI\"\n",
+    )
+    .expect("write app manifest");
+
+    let paths = Paths {
+        config_path: root.join("inferra.toml"),
+        data_dir: root.join("data"),
+        events_db: root.join("data").join("events.db"),
+        incidents_db: root.join("data").join("incidents.db"),
+    };
+    let config: TomlValue = "[workspace]\nroots = [\"inferra-app\"]\n"
+        .parse()
+        .expect("parse config");
+
+    let workspace = build_workspace_map(&config, &paths).expect("workspace map");
+    let app = workspace
+        .runtime_apps
+        .iter()
+        .find(|app| app.name == "inferra")
+        .expect("project app");
+    assert_eq!(app.source, "project");
+    assert_eq!(app.status.as_deref(), Some("registered"));
+    assert_eq!(
+        app.app_state
+            .as_ref()
+            .map(|state| state.observed_by.as_str()),
+        Some("workspace")
+    );
+    assert_eq!(app.display_name.as_deref(), Some("Inferra UI"));
+
+    let _ = fs::remove_dir_all(&root);
+}
+
+#[test]
+fn workspace_map_can_disable_project_app_synthesis() {
+    let root = temp_dir("workspace-project-apps-disabled");
+    let project = root.join("inferra-app");
+    fs::create_dir_all(&project).expect("create project");
+    fs::write(
+        project.join("package.json"),
+        r#"{"name":"inferra","dependencies":{"next":"latest"}}"#,
+    )
+    .expect("write package");
+
+    let paths = Paths {
+        config_path: root.join("inferra.toml"),
+        data_dir: root.join("data"),
+        events_db: root.join("data").join("events.db"),
+        incidents_db: root.join("data").join("incidents.db"),
+    };
+    let config: TomlValue =
+        "[workspace]\nroots = [\"inferra-app\"]\ninclude_project_apps = false\n"
+            .parse()
+            .expect("parse config");
+
+    let workspace = build_workspace_map(&config, &paths).expect("workspace map");
+    assert!(workspace.runtime_apps.is_empty());
 
     let _ = fs::remove_dir_all(&root);
 }
@@ -243,7 +471,7 @@ fn process_runtime_apps_without_project_need_real_app_signals() {
         confidence: 0.72,
     }];
 
-    assert!(should_keep_process_runtime_app(
+    assert!(should_keep_process_runtime_app(&process_runtime_evidence!(
         "node",
         "node C:\\apps\\api\\server.js",
         None,
@@ -252,8 +480,8 @@ fn process_runtime_apps_without_project_need_real_app_signals() {
         Some(r"C:\Program Files\nodejs\node.exe"),
         None,
         &[],
-    ));
-    assert!(should_keep_process_runtime_app(
+    )));
+    assert!(should_keep_process_runtime_app(&process_runtime_evidence!(
         "node",
         "node_modules/.bin/vite",
         None,
@@ -262,8 +490,8 @@ fn process_runtime_apps_without_project_need_real_app_signals() {
         Some(r"C:\Program Files\nodejs\node.exe"),
         Some("vite"),
         &[],
-    ));
-    assert!(should_keep_process_runtime_app(
+    )));
+    assert!(should_keep_process_runtime_app(&process_runtime_evidence!(
         "node",
         "node server.js --port 3000",
         None,
@@ -272,58 +500,68 @@ fn process_runtime_apps_without_project_need_real_app_signals() {
         Some(r"C:\Program Files\nodejs\node.exe"),
         None,
         &endpoints,
+    )));
+    assert!(!should_keep_process_runtime_app(
+        &process_runtime_evidence!(
+            "git",
+            "git status --porcelain",
+            Some(r"D:\MYFiles\Projects\py\Inferra"),
+            Some(r"D:\MYFiles\Projects\py\Inferra"),
+            None,
+            Some(r"C:\Program Files\Git\mingw64\bin\git.exe"),
+            None,
+            &[],
+        )
     ));
     assert!(!should_keep_process_runtime_app(
-        "git",
-        "git status --porcelain",
-        Some(r"D:\MYFiles\Projects\py\Inferra"),
-        Some(r"D:\MYFiles\Projects\py\Inferra"),
-        None,
-        Some(r"C:\Program Files\Git\mingw64\bin\git.exe"),
-        None,
-        &[],
+        &process_runtime_evidence!(
+            "node",
+            r#"node C:\Users\User\AppData\Local\nvm\v20.20.0\node_modules\pm2\lib\Daemon.js"#,
+            Some(r"D:\MYFiles\Projects\py\Inferra\src\crates\inferra-api"),
+            Some(r"D:\MYFiles\Projects\py\Inferra\src\crates\inferra-api"),
+            Some(r"C:\Users\User\AppData\Local\nvm\v20.20.0\node_modules\pm2\lib\Daemon.js"),
+            Some(r"C:\Users\User\AppData\Local\nvm\v20.20.0\node.exe"),
+            None,
+            &[],
+        )
     ));
     assert!(!should_keep_process_runtime_app(
-        "node",
-        r#"node C:\Users\User\AppData\Local\nvm\v20.20.0\node_modules\pm2\lib\Daemon.js"#,
-        Some(r"D:\MYFiles\Projects\py\Inferra\src\crates\inferra-api"),
-        Some(r"D:\MYFiles\Projects\py\Inferra\src\crates\inferra-api"),
-        Some(r"C:\Users\User\AppData\Local\nvm\v20.20.0\node_modules\pm2\lib\Daemon.js"),
-        Some(r"C:\Users\User\AppData\Local\nvm\v20.20.0\node.exe"),
-        None,
-        &[],
+        &process_runtime_evidence!(
+            "npm",
+            "npm run dev -- --port 3000",
+            Some(r"D:\MYFiles\Projects\py\Inferra\src\web\frontend"),
+            Some(r"D:\MYFiles\Projects\py\Inferra\src\web\frontend"),
+            Some(r"C:\Program Files\nodejs\node_modules\npm\bin\npm-cli.js"),
+            Some(r"C:\Program Files\nodejs\npm.cmd"),
+            Some("vite"),
+            &endpoints,
+        )
     ));
     assert!(!should_keep_process_runtime_app(
-        "npm",
-        "npm run dev -- --port 3000",
-        Some(r"D:\MYFiles\Projects\py\Inferra\src\web\frontend"),
-        Some(r"D:\MYFiles\Projects\py\Inferra\src\web\frontend"),
-        Some(r"C:\Program Files\nodejs\node_modules\npm\bin\npm-cli.js"),
-        Some(r"C:\Program Files\nodejs\npm.cmd"),
-        Some("vite"),
-        &endpoints,
+        &process_runtime_evidence!(
+            "powershell",
+            "powershell -noexit",
+            Some(r"D:\MYFiles\Projects\Server\EECP"),
+            Some(r"D:\MYFiles\Projects\Server\EECP"),
+            None,
+            Some(r"C:\Windows\System32\WindowsPowerShell\v1.0\powershell.exe"),
+            None,
+            &[],
+        )
     ));
     assert!(!should_keep_process_runtime_app(
-        "powershell",
-        "powershell -noexit",
-        Some(r"D:\MYFiles\Projects\Server\EECP"),
-        Some(r"D:\MYFiles\Projects\Server\EECP"),
-        None,
-        Some(r"C:\Windows\System32\WindowsPowerShell\v1.0\powershell.exe"),
-        None,
-        &[],
+        &process_runtime_evidence!(
+            "cmd",
+            "cmd.exe",
+            None,
+            None,
+            None,
+            Some(r"C:\Windows\System32\cmd.exe"),
+            None,
+            &[],
+        )
     ));
-    assert!(!should_keep_process_runtime_app(
-        "cmd",
-        "cmd.exe",
-        None,
-        None,
-        None,
-        Some(r"C:\Windows\System32\cmd.exe"),
-        None,
-        &[],
-    ));
-    assert!(should_keep_process_runtime_app(
+    assert!(should_keep_process_runtime_app(&process_runtime_evidence!(
         "cmd",
         "cmd.exe /d /s /c next start -p 81",
         Some(r"D:\MYFiles\Projects\Next.js\main"),
@@ -339,16 +577,18 @@ fn process_runtime_apps_without_project_need_real_app_signals() {
             source: "command".into(),
             confidence: 0.72,
         }],
-    ));
+    )));
     assert!(!should_keep_process_runtime_app(
-        "powershell",
-        "powershell -File D:\\MYFiles\\Projects\\py\\Inferra\\scripts\\serve.ps1",
-        Some(r"D:\MYFiles\Projects\py\Inferra"),
-        Some(r"D:\MYFiles\Projects\py\Inferra"),
-        Some(r"D:\MYFiles\Projects\py\Inferra\scripts\serve.ps1"),
-        Some(r"C:\Windows\System32\WindowsPowerShell\v1.0\powershell.exe"),
-        None,
-        &[],
+        &process_runtime_evidence!(
+            "powershell",
+            "powershell -File D:\\MYFiles\\Projects\\py\\Inferra\\scripts\\serve.ps1",
+            Some(r"D:\MYFiles\Projects\py\Inferra"),
+            Some(r"D:\MYFiles\Projects\py\Inferra"),
+            Some(r"D:\MYFiles\Projects\py\Inferra\scripts\serve.ps1"),
+            Some(r"C:\Windows\System32\WindowsPowerShell\v1.0\powershell.exe"),
+            None,
+            &[],
+        )
     ));
 }
 
@@ -494,16 +734,16 @@ fn npm_cache_logs_are_discovered_for_node_apps() {
         std::env::remove_var("APPDATA");
     }
 
-    let sources = workspace_log_sources(
-        None,
-        "nodejs",
-        Some("nextjs"),
-        &[],
-        Some(&display_path(&root)),
-        Some(&display_path(&root)),
-        None,
-        None,
-    );
+    let sources = workspace_log_sources(WorkspaceLogSourceInput {
+        manager: None,
+        runtime: "nodejs",
+        framework: Some("nextjs"),
+        libraries: &[],
+        project_path: Some(&display_path(&root)),
+        cwd: Some(&display_path(&root)),
+        script: None,
+        pm2_env: None,
+    });
 
     unsafe {
         if let Some(value) = old_cache {
@@ -553,16 +793,16 @@ fn workspace_log_sources_include_pm2_home_files() {
         std::env::set_var("USERPROFILE", &home);
     }
 
-    let sources = workspace_log_sources(
-        Some("pm2"),
-        "nodejs",
-        Some("express"),
-        &[],
-        Some(&display_path(&project)),
-        Some(&display_path(&project)),
-        Some(&display_path(&project.join("server.js"))),
-        None,
-    );
+    let sources = workspace_log_sources(WorkspaceLogSourceInput {
+        manager: Some("pm2"),
+        runtime: "nodejs",
+        framework: Some("express"),
+        libraries: &[],
+        project_path: Some(&display_path(&project)),
+        cwd: Some(&display_path(&project)),
+        script: Some(&display_path(&project.join("server.js"))),
+        pm2_env: None,
+    });
 
     unsafe {
         if let Some(value) = old_home {
@@ -696,8 +936,13 @@ fn project_for_paths_discovers_project_root_outside_configured_scan_roots() {
     let script = src.join("server.js");
     fs::write(&script, "console.log('ok')").expect("write script");
 
+    let locator = WorkspaceProjectLocator {
+        projects: &[],
+        allowed_roots: &[],
+        allow_unscoped_resolution: true,
+    };
     let discovered = project_for_paths(
-        &[],
+        &locator,
         Some(src.to_string_lossy().as_ref()),
         Some(script.to_string_lossy().as_ref()),
     )
@@ -706,6 +951,39 @@ fn project_for_paths_discovers_project_root_outside_configured_scan_roots() {
         discovered,
         clean_display_path(&app.canonicalize().expect("canonical app").to_string_lossy())
     );
+
+    let _ = fs::remove_dir_all(&root);
+}
+
+#[test]
+fn project_for_paths_stays_within_allowed_roots_by_default() {
+    let root = temp_dir("runtime-project-root-scoped");
+    let allowed = root.join("allowed");
+    let outside = root.join("outside");
+    let src = outside.join("apps").join("web").join("src");
+    fs::create_dir_all(&allowed).expect("create allowed root");
+    fs::create_dir_all(&src).expect("create app src");
+    let app = src
+        .parent()
+        .and_then(|path| path.parent())
+        .expect("app root");
+    fs::write(app.join("package.json"), r#"{"name":"web-app"}"#).expect("write package");
+    let script = src.join("server.js");
+    fs::write(&script, "console.log('ok')").expect("write script");
+
+    let allowed_roots = vec![allowed.canonicalize().expect("canonical allowed")];
+    let locator = WorkspaceProjectLocator {
+        projects: &[],
+        allowed_roots: &allowed_roots,
+        allow_unscoped_resolution: false,
+    };
+    let discovered = project_for_paths(
+        &locator,
+        Some(src.to_string_lossy().as_ref()),
+        Some(script.to_string_lossy().as_ref()),
+    );
+
+    assert!(discovered.is_none());
 
     let _ = fs::remove_dir_all(&root);
 }

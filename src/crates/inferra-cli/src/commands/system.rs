@@ -309,7 +309,7 @@ fn open_dashboard_url(url: &str) -> Result<()> {
             .args(["/C", "start", "", url])
             .spawn()
             .context("open dashboard in browser")?;
-        return Ok(());
+        Ok(())
     }
     #[cfg(target_os = "macos")]
     {

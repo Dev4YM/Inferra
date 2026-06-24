@@ -156,7 +156,7 @@ fn log_record_to_new_event(
         .unwrap_or(Value::Null);
     let message = body_to_log_message(&body);
 
-    let severity = severity_from_otel(sev_num, sev_text.as_deref());
+    let severity = severity_from_otel(sev_num, sev_text);
 
     let event_id = next_event_id("otlp");
     let fingerprint = semantic_fingerprint(

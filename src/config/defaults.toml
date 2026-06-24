@@ -427,9 +427,15 @@ show_raw_evidence_by_default = false
 
 [workspace]
 enabled = true
+discovery_mode = "strict"
+include_config_root = true
 roots = []
+home_roots = []
+include_project_apps = true
 max_depth = 4
 max_results = 100
 map_runtime = true
 redact_env_files = true
+allow_unscoped_project_resolution = false
+weak_marker_policy = "source_or_registration"
 service_mappings = []

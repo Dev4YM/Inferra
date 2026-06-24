@@ -127,10 +127,7 @@ async fn one_tick(state: &AppState) -> anyhow::Result<()> {
 
     let cursor_path = paths.data_dir.join(CURSOR_FILE);
     if !cursor_path.exists() {
-        let store = match EventsStore::open(&paths.events_db)? {
-            Some(s) => Some(s),
-            None => None,
-        };
+        let store = EventsStore::open(&paths.events_db)?;
         let cursor = if backfill {
             ExportCursor {
                 timestamp: "1970-01-01T00:00:00Z".into(),
@@ -427,7 +424,7 @@ fn hex_to_bytes(hex: &str) -> Option<Vec<u8>> {
         .filter(|c| c.is_ascii_hexdigit())
         .collect::<String>()
         .to_ascii_lowercase();
-    if h.len() % 2 != 0 {
+    if !h.len().is_multiple_of(2) {
         return None;
     }
     let mut out = Vec::with_capacity(h.len() / 2);
@@ -607,9 +604,7 @@ mod tests {
 
     #[tokio::test]
     async fn export_tick_retries_transient_sink_failures() {
-        let _guard = export_test_lock()
-            .lock()
-            .unwrap_or_else(|poisoned| poisoned.into_inner());
+        let _guard = export_test_lock().lock().await;
         let (url, state) = start_retry_then_success_sink().await;
         let (app_state, root) = export_test_state("retry-once", &url);
         insert_export_events(
@@ -636,9 +631,7 @@ mod tests {
 
     #[tokio::test]
     async fn export_tick_splits_partial_success_and_drops_only_poison_event() {
-        let _guard = export_test_lock()
-            .lock()
-            .unwrap_or_else(|poisoned| poisoned.into_inner());
+        let _guard = export_test_lock().lock().await;
         let (url, state) = start_partial_success_sink("poison").await;
         let (app_state, root) = export_test_state("split-poison", &url);
         insert_export_events(
@@ -678,9 +671,9 @@ mod tests {
         accepted_batches: Arc<Mutex<Vec<Vec<String>>>>,
     }
 
-    fn export_test_lock() -> &'static Mutex<()> {
-        static LOCK: OnceLock<Mutex<()>> = OnceLock::new();
-        LOCK.get_or_init(|| Mutex::new(()))
+    fn export_test_lock() -> &'static AsyncMutex<()> {
+        static LOCK: OnceLock<AsyncMutex<()>> = OnceLock::new();
+        LOCK.get_or_init(|| AsyncMutex::new(()))
     }
 
     async fn start_retry_then_success_sink() -> (String, MockSinkState) {

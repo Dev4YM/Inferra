@@ -557,13 +557,24 @@ fn is_infrastructure_service_id(service_id: &str) -> bool {
 pub fn build_workspace_map(config: &TomlValue, paths: &Paths) -> Result<WorkspaceMapResponse> {
     let enabled = workspace_enabled(config);
     let scan_root = paths.config_path.parent().unwrap_or(Path::new("."));
+    let discovery_roots = workspace_roots(config, scan_root);
     let mut projects = if enabled {
         discover_projects(config, scan_root)
     } else {
         Vec::new()
     };
     let runtime_apps = if enabled {
-        discover_workspace_runtime_apps(&projects)
+        let mut apps = discover_workspace_runtime_apps(
+            &projects,
+            &discovery_roots,
+            workspace_allow_unscoped_project_resolution(config),
+        );
+        if workspace_include_project_apps(config) {
+            for app in synthesize_project_runtime_apps(&projects) {
+                upsert_runtime_app(&mut apps, app);
+            }
+        }
+        apps
     } else {
         Vec::new()
     };
@@ -8396,6 +8407,62 @@ const WEAK_WORKSPACE_PROJECT_MARKERS: &[(&str, &str)] = &[
     (".git", "git"),
 ];
 
+const DEFAULT_HOME_WORKSPACE_ROOTS: &[&str] = &[
+    "Projects",
+    "projects",
+    "src",
+    "Source",
+    "source",
+    "repos",
+    "code",
+    "workspace",
+    "Workspace",
+    "Documents\\Projects",
+    "Documents\\repos",
+    "Desktop",
+];
+
+#[derive(Clone, Copy, PartialEq, Eq)]
+enum WorkspaceDiscoveryMode {
+    Strict,
+    Hybrid,
+}
+
+#[derive(Clone, Copy, PartialEq, Eq)]
+enum WorkspaceWeakMarkerPolicy {
+    SourceOrRegistration,
+    RegisteredOnly,
+    Always,
+}
+
+struct WorkspaceProjectLocator<'a> {
+    projects: &'a [WorkspaceProject],
+    allowed_roots: &'a [PathBuf],
+    allow_unscoped_resolution: bool,
+}
+
+struct ProcessRuntimeEvidence<'a> {
+    process_name: &'a str,
+    command: &'a str,
+    project_path: Option<&'a str>,
+    cwd: Option<&'a str>,
+    script: Option<&'a str>,
+    executable: Option<&'a str>,
+    framework: Option<&'a str>,
+    endpoints: &'a [WorkspaceAppEndpoint],
+}
+
+struct WorkspaceLogSourceInput<'a> {
+    manager: Option<&'a str>,
+    runtime: &'a str,
+    framework: Option<&'a str>,
+    libraries: &'a [String],
+    project_path: Option<&'a str>,
+    cwd: Option<&'a str>,
+    script: Option<&'a str>,
+    pm2_env: Option<&'a serde_json::Value>,
+}
+
 fn discover_projects(config: &TomlValue, root: &Path) -> Vec<WorkspaceProject> {
     let mut out = Vec::new();
     let max_depth = workspace_max_depth(config);
@@ -8419,7 +8486,7 @@ fn discover_projects(config: &TomlValue, root: &Path) -> Vec<WorkspaceProject> {
             if !should_accept_workspace_project(path) {
                 continue;
             }
-            if let Some((marker, kind)) = workspace_project_marker(path) {
+            if let Some((marker, kind)) = workspace_project_marker(path, config) {
                 let rel = display_path(path);
                 if out.iter().any(|p: &WorkspaceProject| p.path == rel) {
                     continue;
@@ -8464,18 +8531,83 @@ fn workspace_max_results(config: &TomlValue) -> usize {
         .clamp(1, 1000) as usize
 }
 
-fn workspace_roots(config: &TomlValue, default_root: &Path) -> Vec<std::path::PathBuf> {
+fn workspace_discovery_mode(config: &TomlValue) -> WorkspaceDiscoveryMode {
+    match config
+        .get("workspace")
+        .and_then(|value| value.get("discovery_mode"))
+        .and_then(TomlValue::as_str)
+        .unwrap_or("strict")
+        .trim()
+        .to_ascii_lowercase()
+        .as_str()
+    {
+        "hybrid" => WorkspaceDiscoveryMode::Hybrid,
+        _ => WorkspaceDiscoveryMode::Strict,
+    }
+}
+
+fn workspace_include_config_root(config: &TomlValue) -> bool {
+    config
+        .get("workspace")
+        .and_then(|value| value.get("include_config_root"))
+        .and_then(TomlValue::as_bool)
+        .unwrap_or(true)
+}
+
+fn workspace_allow_unscoped_project_resolution(config: &TomlValue) -> bool {
+    config
+        .get("workspace")
+        .and_then(|value| value.get("allow_unscoped_project_resolution"))
+        .and_then(TomlValue::as_bool)
+        .unwrap_or(false)
+}
+
+fn workspace_include_project_apps(config: &TomlValue) -> bool {
+    config
+        .get("workspace")
+        .and_then(|value| value.get("include_project_apps"))
+        .and_then(TomlValue::as_bool)
+        .unwrap_or(true)
+}
+
+fn workspace_weak_marker_policy(config: &TomlValue) -> WorkspaceWeakMarkerPolicy {
+    match config
+        .get("workspace")
+        .and_then(|value| value.get("weak_marker_policy"))
+        .and_then(TomlValue::as_str)
+        .unwrap_or("source_or_registration")
+        .trim()
+        .to_ascii_lowercase()
+        .as_str()
+    {
+        "registered_only" => WorkspaceWeakMarkerPolicy::RegisteredOnly,
+        "always" => WorkspaceWeakMarkerPolicy::Always,
+        _ => WorkspaceWeakMarkerPolicy::SourceOrRegistration,
+    }
+}
+
+fn workspace_home_roots(config: &TomlValue) -> Vec<String> {
+    config
+        .get("workspace")
+        .and_then(|value| value.get("home_roots"))
+        .and_then(TomlValue::as_array)
+        .into_iter()
+        .flat_map(|items| items.iter())
+        .filter_map(TomlValue::as_str)
+        .map(str::trim)
+        .filter(|value| !value.is_empty())
+        .map(str::to_string)
+        .collect()
+}
+
+pub fn workspace_roots(config: &TomlValue, default_root: &Path) -> Vec<std::path::PathBuf> {
     let mut roots = Vec::new();
     let base_root = default_root
         .canonicalize()
         .unwrap_or_else(|_| default_root.to_path_buf());
-    push_workspace_root(&mut roots, base_root.clone());
-    let has_config_roots = config
-        .get("workspace")
-        .and_then(|value| value.get("roots"))
-        .and_then(TomlValue::as_array)
-        .map(|items| !items.is_empty())
-        .unwrap_or(false);
+    if workspace_include_config_root(config) {
+        push_workspace_root(&mut roots, base_root.clone());
+    }
     if let Some(items) = config
         .get("workspace")
         .and_then(|value| value.get("roots"))
@@ -8492,29 +8624,24 @@ fn workspace_roots(config: &TomlValue, default_root: &Path) -> Vec<std::path::Pa
             push_workspace_root(&mut roots, resolved);
         }
     }
-    if !has_config_roots {
-        if let Some(home) = std::env::var_os("USERPROFILE")
-            .or_else(|| std::env::var_os("HOME"))
-            .map(PathBuf::from)
-        {
-            for relative in [
-                "Projects",
-                "projects",
-                "src",
-                "Source",
-                "source",
-                "repos",
-                "code",
-                "workspace",
-                "Workspace",
-                "Documents\\Projects",
-                "Documents\\repos",
-                "Desktop",
-            ] {
+    if let Some(home) = user_home_dir() {
+        if workspace_discovery_mode(config) == WorkspaceDiscoveryMode::Hybrid {
+            for relative in DEFAULT_HOME_WORKSPACE_ROOTS {
                 let candidate = home.join(relative);
                 if candidate.is_dir() {
                     push_workspace_root(&mut roots, candidate);
                 }
+            }
+        }
+        for root in workspace_home_roots(config) {
+            let candidate = PathBuf::from(&root);
+            let resolved = if candidate.is_absolute() {
+                candidate
+            } else {
+                home.join(candidate)
+            };
+            if resolved.is_dir() {
+                push_workspace_root(&mut roots, resolved);
             }
         }
     }
@@ -8640,10 +8767,12 @@ fn workspace_project_from_path(path: &Path) -> Option<WorkspaceProject> {
     if !should_accept_workspace_project(&root) {
         return None;
     }
-    workspace_project_marker(&root).map(|(marker, kind)| WorkspaceProject {
-        path: display_path(&root),
-        kind: kind.into(),
-        marker: marker.into(),
+    workspace_project_marker(&root, &TomlValue::Table(Default::default())).map(|(marker, kind)| {
+        WorkspaceProject {
+            path: display_path(&root),
+            kind: kind.into(),
+            marker: marker.into(),
+        }
     })
 }
 
@@ -8672,26 +8801,43 @@ fn should_accept_workspace_project(path: &Path) -> bool {
     true
 }
 
-fn workspace_project_marker(path: &Path) -> Option<(&'static str, &'static str)> {
+fn workspace_project_marker(
+    path: &Path,
+    config: &TomlValue,
+) -> Option<(&'static str, &'static str)> {
     for (marker, kind) in STRONG_WORKSPACE_PROJECT_MARKERS {
         if workspace_marker_exists(path, marker) {
             return Some((marker, kind));
         }
     }
     for (marker, kind) in WEAK_WORKSPACE_PROJECT_MARKERS {
-        if workspace_marker_exists(path, marker) && weak_workspace_marker_allowed(path, marker) {
+        if workspace_marker_exists(path, marker)
+            && weak_workspace_marker_allowed(path, marker, workspace_weak_marker_policy(config))
+        {
             return Some((marker, kind));
         }
     }
     None
 }
 
-fn weak_workspace_marker_allowed(path: &Path, marker: &str) -> bool {
-    has_workspace_registration(path)
-        || STRONG_WORKSPACE_PROJECT_MARKERS
-            .iter()
-            .any(|(candidate, _)| *candidate != marker && workspace_marker_exists(path, candidate))
-        || has_workspace_source_evidence(path)
+fn weak_workspace_marker_allowed(
+    path: &Path,
+    marker: &str,
+    policy: WorkspaceWeakMarkerPolicy,
+) -> bool {
+    match policy {
+        WorkspaceWeakMarkerPolicy::Always => true,
+        WorkspaceWeakMarkerPolicy::RegisteredOnly => has_workspace_registration(path),
+        WorkspaceWeakMarkerPolicy::SourceOrRegistration => {
+            has_workspace_registration(path)
+                || STRONG_WORKSPACE_PROJECT_MARKERS
+                    .iter()
+                    .any(|(candidate, _)| {
+                        *candidate != marker && workspace_marker_exists(path, candidate)
+                    })
+                || has_workspace_source_evidence(path)
+        }
+    }
 }
 
 fn has_workspace_registration(path: &Path) -> bool {
@@ -9299,10 +9445,19 @@ fn support_item(signature: &WorkspaceSignature) -> WorkspaceSupportItem {
     }
 }
 
-fn discover_workspace_runtime_apps(projects: &[WorkspaceProject]) -> Vec<WorkspaceRuntimeApp> {
-    let mut apps = discover_pm2_runtime_apps(projects);
+fn discover_workspace_runtime_apps(
+    projects: &[WorkspaceProject],
+    allowed_roots: &[PathBuf],
+    allow_unscoped_resolution: bool,
+) -> Vec<WorkspaceRuntimeApp> {
+    let locator = WorkspaceProjectLocator {
+        projects,
+        allowed_roots,
+        allow_unscoped_resolution,
+    };
+    let mut apps = discover_pm2_runtime_apps(&locator);
     let pm2_pids: std::collections::HashSet<u32> = apps.iter().filter_map(|app| app.pid).collect();
-    for app in discover_process_runtime_apps(projects) {
+    for app in discover_process_runtime_apps(&locator) {
         if app.pid.map(|pid| pm2_pids.contains(&pid)).unwrap_or(false) {
             continue;
         }
@@ -9319,7 +9474,7 @@ fn discover_workspace_runtime_apps(projects: &[WorkspaceProject]) -> Vec<Workspa
     apps
 }
 
-fn discover_pm2_runtime_apps(projects: &[WorkspaceProject]) -> Vec<WorkspaceRuntimeApp> {
+fn discover_pm2_runtime_apps(locator: &WorkspaceProjectLocator<'_>) -> Vec<WorkspaceRuntimeApp> {
     let Some(output) = command_output_with_timeout("pm2", &["jlist"], 6_000) else {
         return Vec::new();
     };
@@ -9383,7 +9538,7 @@ fn discover_pm2_runtime_apps(projects: &[WorkspaceProject]) -> Vec<WorkspaceRunt
                 detect_framework(command.as_deref().unwrap_or_default(), script.as_deref());
             let libraries =
                 detect_libraries(command.as_deref().unwrap_or_default(), script.as_deref());
-            let project_path = project_for_paths(projects, cwd.as_deref(), script.as_deref());
+            let project_path = project_for_paths(locator, cwd.as_deref(), script.as_deref());
             let log_hints =
                 runtime_log_hints(&runtime, framework.as_deref(), &libraries, Some("pm2"));
             let mut signals = vec![WorkspaceMappingSignal {
@@ -9413,16 +9568,16 @@ fn discover_pm2_runtime_apps(projects: &[WorkspaceProject]) -> Vec<WorkspaceRunt
                 Some(env),
             );
             let app_url = primary_app_url(&endpoints);
-            let log_sources = workspace_log_sources(
-                Some("pm2"),
-                &runtime,
-                framework.as_deref(),
-                &libraries,
-                project_path.as_deref(),
-                cwd.as_deref(),
-                script.as_deref(),
-                Some(env),
-            );
+            let log_sources = workspace_log_sources(WorkspaceLogSourceInput {
+                manager: Some("pm2"),
+                runtime: &runtime,
+                framework: framework.as_deref(),
+                libraries: &libraries,
+                project_path: project_path.as_deref(),
+                cwd: cwd.as_deref(),
+                script: script.as_deref(),
+                pm2_env: Some(env),
+            });
             let resources = pm2_resources(env);
             let app_state = pm2_app_state(env, status.clone());
             let app_location =
@@ -9532,7 +9687,9 @@ fn command_candidates(program: &str) -> Vec<String> {
     candidates
 }
 
-fn discover_process_runtime_apps(projects: &[WorkspaceProject]) -> Vec<WorkspaceRuntimeApp> {
+fn discover_process_runtime_apps(
+    locator: &WorkspaceProjectLocator<'_>,
+) -> Vec<WorkspaceRuntimeApp> {
     let mut sys = System::new_all();
     sys.refresh_all();
     let logical_processors = system_logical_processors(&sys);
@@ -9553,7 +9710,7 @@ fn discover_process_runtime_apps(projects: &[WorkspaceProject]) -> Vec<Workspace
         let exe = process.exe().map(display_path);
         let script = infer_script_path(&cmd_parts, cwd.as_deref());
         let project_path = project_for_paths(
-            projects,
+            locator,
             cwd.as_deref(),
             script.as_deref().or(exe.as_deref()),
         );
@@ -9572,16 +9729,16 @@ fn discover_process_runtime_apps(projects: &[WorkspaceProject]) -> Vec<Workspace
             project_path.as_deref(),
             None,
         );
-        if !should_keep_process_runtime_app(
-            &name,
-            &command,
-            project_path.as_deref(),
-            cwd.as_deref(),
-            script.as_deref(),
-            exe.as_deref(),
-            framework.as_deref(),
-            &endpoints,
-        ) {
+        if !should_keep_process_runtime_app(&ProcessRuntimeEvidence {
+            process_name: &name,
+            command: &command,
+            project_path: project_path.as_deref(),
+            cwd: cwd.as_deref(),
+            script: script.as_deref(),
+            executable: exe.as_deref(),
+            framework: framework.as_deref(),
+            endpoints: &endpoints,
+        }) {
             continue;
         }
         let app_name = runtime_app_name(&name, script.as_deref(), project_path.as_deref());
@@ -9626,16 +9783,16 @@ fn discover_process_runtime_apps(projects: &[WorkspaceProject]) -> Vec<Workspace
             });
         }
         let app_url = primary_app_url(&endpoints);
-        let log_sources = workspace_log_sources(
-            None,
-            &runtime,
-            framework.as_deref(),
-            &libraries,
-            project_path.as_deref(),
-            cwd.as_deref(),
-            script.as_deref(),
-            None,
-        );
+        let log_sources = workspace_log_sources(WorkspaceLogSourceInput {
+            manager: None,
+            runtime: &runtime,
+            framework: framework.as_deref(),
+            libraries: &libraries,
+            project_path: project_path.as_deref(),
+            cwd: cwd.as_deref(),
+            script: script.as_deref(),
+            pm2_env: None,
+        });
         let raw_cpu = f64::from(process.cpu_usage());
         let resources = Some(WorkspaceAppResources {
             cpu_percent: Some(normalize_process_cpu_to_host_percent(
@@ -9724,28 +9881,173 @@ fn discover_process_runtime_apps(projects: &[WorkspaceProject]) -> Vec<Workspace
     apps
 }
 
-fn should_keep_process_runtime_app(
-    process_name: &str,
-    command: &str,
-    project_path: Option<&str>,
-    cwd: Option<&str>,
-    script: Option<&str>,
-    executable: Option<&str>,
-    framework: Option<&str>,
-    endpoints: &[WorkspaceAppEndpoint],
-) -> bool {
-    let script_in_project = path_is_within_project(project_path, script);
-    let executable_in_project = path_is_within_project(project_path, executable);
-    let cwd_in_project = path_is_within_project(project_path, cwd);
-    let script_app_signal = script_supports_runtime_app(script);
+fn synthesize_project_runtime_apps(projects: &[WorkspaceProject]) -> Vec<WorkspaceRuntimeApp> {
+    projects
+        .iter()
+        .map(synthesize_project_runtime_app)
+        .collect()
+}
+
+fn synthesize_project_runtime_app(project: &WorkspaceProject) -> WorkspaceRuntimeApp {
+    let project_path = project.path.clone();
+    let hints = project_dependency_hints(&project_path);
+    let framework = hints.framework.clone();
+    let libraries = hints.libraries.clone();
+    let runtime = hints
+        .language
+        .clone()
+        .or_else(|| project_runtime_from_kind(&project.kind))
+        .unwrap_or_else(|| "unknown".into());
+    let language = (runtime != "unknown").then(|| runtime.clone());
+    let name = project_manifest_name(Path::new(&project_path))
+        .or_else(|| {
+            Path::new(&project_path)
+                .file_name()
+                .and_then(|value| value.to_str())
+                .map(str::to_string)
+        })
+        .unwrap_or_else(|| "workspace-app".into());
+    let endpoints = workspace_app_endpoints(
+        None,
+        framework.as_deref(),
+        Some(project_path.as_str()),
+        None,
+    );
+    let app_url = primary_app_url(&endpoints);
+    let log_sources = workspace_log_sources(WorkspaceLogSourceInput {
+        manager: None,
+        runtime: &runtime,
+        framework: framework.as_deref(),
+        libraries: &libraries,
+        project_path: Some(project_path.as_str()),
+        cwd: Some(project_path.as_str()),
+        script: None,
+        pm2_env: None,
+    });
+    let app_location = workspace_app_location(
+        Some(project_path.clone()),
+        Some(project_path.clone()),
+        None,
+        None,
+    );
+    let mut confidence = if framework.is_some() { 0.68 } else { 0.58 };
+    let mut signals = vec![WorkspaceMappingSignal {
+        name: "workspace_project".into(),
+        confidence,
+        detail: format!("Derived from workspace project marker {}", project.marker),
+    }];
+    if let Some(display_name) = project_manifest_name(Path::new(&project_path)) {
+        confidence = confidence.max(0.74);
+        signals.push(WorkspaceMappingSignal {
+            name: "project_manifest".into(),
+            confidence: 0.74,
+            detail: format!("Project manifest declares app name {display_name}"),
+        });
+    }
+    if read_inferra_app_manifest(&project_path).is_some() {
+        confidence = confidence.max(0.88);
+        signals.push(WorkspaceMappingSignal {
+            name: "inferra_manifest".into(),
+            confidence: 0.88,
+            detail: "Project contains an Inferra workspace manifest".into(),
+        });
+    }
+    if !endpoints.is_empty() {
+        confidence = confidence.max(0.72);
+        signals.push(WorkspaceMappingSignal {
+            name: "project_endpoint".into(),
+            confidence: 0.72,
+            detail: "Project metadata suggests at least one app endpoint".into(),
+        });
+    }
+    let app_state = Some(WorkspaceAppState {
+        health: "registered".into(),
+        status: Some("not_running".into()),
+        reason: Some(
+            "Derived from workspace project metadata; no live runtime process is currently attached."
+                .into(),
+        ),
+        started_at: None,
+        restarts: None,
+        observed_by: "workspace".into(),
+    });
+    let context_capabilities = workspace_app_capabilities(
+        &log_sources,
+        &endpoints,
+        None,
+        app_location.as_ref(),
+        None,
+        app_state.as_ref(),
+    );
+    let log_hints = runtime_log_hints(&runtime, framework.as_deref(), &libraries, None);
+    let mut app = WorkspaceRuntimeApp {
+        pid: None,
+        name,
+        display_name: Some(runtime_app_display_name(
+            Some(project_path.as_str()),
+            None,
+            None,
+        ))
+        .filter(|value| !value.is_empty()),
+        runtime: runtime.clone(),
+        language,
+        process_kind: Some(process_kind_for(None, framework.as_deref())),
+        framework,
+        libraries,
+        log_hints,
+        log_sources,
+        app_url,
+        endpoints,
+        health_endpoint: None,
+        app_location,
+        resources: None,
+        app_state,
+        context_capabilities,
+        app_structure: project_structure(&project_path),
+        manager: Some("workspace".into()),
+        status: Some("registered".into()),
+        cwd: Some(project_path.clone()),
+        script: None,
+        command: None,
+        project_path: Some(project_path),
+        latest_trace_summary: None,
+        confidence,
+        source: "project".into(),
+        signals,
+    };
+    apply_workspace_manifest(&mut app);
+    app
+}
+
+fn project_runtime_from_kind(kind: &str) -> Option<String> {
+    match kind {
+        "node" => Some("nodejs".into()),
+        "python" => Some("python".into()),
+        "rust" => Some("rust".into()),
+        "go" => Some("go".into()),
+        "java" => Some("java".into()),
+        _ => None,
+    }
+}
+
+fn should_keep_process_runtime_app(evidence: &ProcessRuntimeEvidence<'_>) -> bool {
+    let script_in_project = path_is_within_project(evidence.project_path, evidence.script);
+    let executable_in_project = path_is_within_project(evidence.project_path, evidence.executable);
+    let cwd_in_project = path_is_within_project(evidence.project_path, evidence.cwd);
+    let script_app_signal = script_supports_runtime_app(evidence.script);
 
     if script_in_project || executable_in_project {
         return true;
     }
-    if is_utility_process(process_name, command, script, executable) {
+    if is_utility_process(
+        evidence.process_name,
+        evidence.command,
+        evidence.script,
+        evidence.executable,
+    ) {
         return script_app_signal;
     }
-    if framework.is_some() || !endpoints.is_empty() {
+    if evidence.framework.is_some() || !evidence.endpoints.is_empty() {
         return true;
     }
     script_app_signal && !cwd_in_project
@@ -9996,7 +10298,7 @@ fn mapping_from_service_tokens(
 }
 
 fn project_for_paths(
-    projects: &[WorkspaceProject],
+    locator: &WorkspaceProjectLocator<'_>,
     cwd: Option<&str>,
     candidate: Option<&str>,
 ) -> Option<String> {
@@ -10005,7 +10307,7 @@ fn project_for_paths(
     for raw in candidates.into_iter().flatten() {
         let path = PathBuf::from(raw);
         let normalized = path.canonicalize().unwrap_or(path);
-        for project in projects {
+        for project in locator.projects {
             let project_path = PathBuf::from(&project.path)
                 .canonicalize()
                 .unwrap_or_else(|_| PathBuf::from(&project.path));
@@ -10024,11 +10326,28 @@ fn project_for_paths(
     }
     for raw in candidates.into_iter().flatten() {
         let path = PathBuf::from(raw);
-        if let Some(project) = discover_nearest_workspace_project(&path) {
-            return Some(project.path);
+        let normalized = path.canonicalize().unwrap_or(path);
+        if !locator.allow_unscoped_resolution
+            && !path_is_within_any_root(&normalized, locator.allowed_roots)
+        {
+            continue;
+        }
+        if let Some(project) = discover_nearest_workspace_project(&normalized) {
+            let project_path = PathBuf::from(&project.path)
+                .canonicalize()
+                .unwrap_or_else(|_| PathBuf::from(&project.path));
+            if locator.allow_unscoped_resolution
+                || path_is_within_any_root(&project_path, locator.allowed_roots)
+            {
+                return Some(project.path);
+            }
         }
     }
     None
+}
+
+fn path_is_within_any_root(path: &Path, roots: &[PathBuf]) -> bool {
+    roots.iter().any(|root| path.starts_with(root))
 }
 
 fn workspace_app_location(
@@ -10067,18 +10386,9 @@ fn runtime_app_display_name(
         .unwrap_or_default()
 }
 
-fn workspace_log_sources(
-    manager: Option<&str>,
-    runtime: &str,
-    framework: Option<&str>,
-    libraries: &[String],
-    project_path: Option<&str>,
-    cwd: Option<&str>,
-    script: Option<&str>,
-    pm2_env: Option<&serde_json::Value>,
-) -> Vec<WorkspaceLogSource> {
+fn workspace_log_sources(input: WorkspaceLogSourceInput<'_>) -> Vec<WorkspaceLogSource> {
     let mut sources = Vec::new();
-    if matches!(manager, Some("pm2")) {
+    if matches!(input.manager, Some("pm2")) {
         sources.push(WorkspaceLogSource {
             kind: "manager".into(),
             label: "PM2 logs".into(),
@@ -10103,7 +10413,7 @@ fn workspace_log_sources(
             confidence: 0.55,
         });
     }
-    if let Some(env) = pm2_env {
+    if let Some(env) = input.pm2_env {
         for (key, label) in [
             ("pm_out_log_path", "PM2 stdout file"),
             ("pm_err_log_path", "PM2 stderr file"),
@@ -10120,8 +10430,8 @@ fn workspace_log_sources(
             }
         }
     }
-    if matches!(manager, Some("pm2")) {
-        for path in pm2_home_log_candidates(project_path, cwd, script) {
+    if matches!(input.manager, Some("pm2")) {
+        for path in pm2_home_log_candidates(input.project_path, input.cwd, input.script) {
             let label = if path.to_ascii_lowercase().contains("-error") {
                 "PM2 stderr file"
             } else {
@@ -10129,13 +10439,13 @@ fn workspace_log_sources(
             };
             push_file_log_source(&mut sources, label, &path, "pm2_home", 0.9);
         }
-    } else if matches!(runtime, "nodejs" | "bun" | "deno")
+    } else if matches!(input.runtime, "nodejs" | "bun" | "deno")
         || matches!(
-            framework,
+            input.framework,
             Some("nextjs" | "nestjs" | "express" | "fastify" | "koa" | "hono")
         )
     {
-        for path in pm2_home_log_candidates(project_path, cwd, script) {
+        for path in pm2_home_log_candidates(input.project_path, input.cwd, input.script) {
             push_file_log_source(
                 &mut sources,
                 "PM2 archived app log",
@@ -10145,9 +10455,9 @@ fn workspace_log_sources(
             );
         }
     }
-    if matches!(runtime, "nodejs" | "bun" | "deno")
+    if matches!(input.runtime, "nodejs" | "bun" | "deno")
         || matches!(
-            framework,
+            input.framework,
             Some("nextjs" | "nestjs" | "express" | "fastify" | "koa" | "hono")
         )
     {
@@ -10155,8 +10465,14 @@ fn workspace_log_sources(
             push_file_log_source(&mut sources, "npm cache log", &path, "npm_cache", 0.48);
         }
     }
-    for root in [project_path, cwd].into_iter().flatten() {
-        for path in discover_project_log_files(root, runtime, framework, libraries, script) {
+    for root in [input.project_path, input.cwd].into_iter().flatten() {
+        for path in discover_project_log_files(
+            root,
+            input.runtime,
+            input.framework,
+            input.libraries,
+            input.script,
+        ) {
             push_file_log_source(&mut sources, "Project log file", &path, "project", 0.78);
         }
     }

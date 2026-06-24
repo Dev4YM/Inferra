@@ -3,16 +3,47 @@
 Inferra discovers local projects from configured workspace roots and maps runtime
 processes back to source directories where possible.
 
+By default, workspace discovery is now **strictly scoped** to the directory that
+contains `inferra.toml` plus any explicit `workspace.roots` entries. Broad
+machine scanning is opt-in.
+
 ## Inspect Scope
 
-`GET /api/workspace/inspect?path=...` only accepts paths under the configured
+`GET /api/workspace/inspect?path=...` only accepts paths under the resolved
 workspace roots. Relative roots are resolved from the directory containing
-`inferra.toml`; when no roots are configured, the config directory is the default
-root.
+`inferra.toml`; with the default configuration, that config directory is the only
+root until additional roots are configured.
 
 With `workspace.redact_env_files = true` (the default), `.env*` markers and
 directory entries are omitted from inspection responses. Inferra reports project
 structure and known build/runtime markers, not secret file contents.
+
+## Discovery Policy
+
+The workspace scanner is controlled by a small policy surface:
+
+```toml
+[workspace]
+discovery_mode = "strict" # strict | hybrid
+include_config_root = true
+roots = []
+home_roots = []
+include_project_apps = true
+allow_unscoped_project_resolution = false
+weak_marker_policy = "source_or_registration" # source_or_registration | registered_only | always
+```
+
+- `discovery_mode = "strict"` scans only the config directory and explicit roots.
+- `discovery_mode = "hybrid"` also scans curated home-relative developer folders
+  such as `Projects`, `repos`, `code`, `workspace`, and `Desktop`.
+- `home_roots` adds explicit home-relative scan targets without enabling the full
+  hybrid preset.
+- `include_project_apps = true` synthesizes workspace apps from detected projects
+  even when no live process or manager entry exists yet.
+- `allow_unscoped_project_resolution = true` allows runtime path fallback to
+  infer a nearest project even when it sits outside the resolved workspace roots.
+- `weak_marker_policy` controls whether low-signal markers like bare `.git`,
+  `Makefile`, and Docker compose files count as projects on their own.
 
 ## App Manifest Integration
 

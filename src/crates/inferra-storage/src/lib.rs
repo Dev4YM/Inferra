@@ -933,7 +933,7 @@ impl EventsStore {
         } else if let Some(retention) = retention_if_no_explicit_start {
             let retention = retention.max(1);
             sql.push_str(&format!(
-                " AND timestamp >= datetime('now', '-{retention} hours')"
+                " AND timestamp >= strftime('%Y-%m-%dT%H:%M:%fZ', 'now', '-{retention} hours')"
             ));
         }
 
@@ -1178,7 +1178,7 @@ impl EventsStore {
             params.push(start.to_string().into());
         } else {
             sql.push_str(&format!(
-                " AND timestamp >= datetime('now', '-{retention} hours')"
+                " AND timestamp >= strftime('%Y-%m-%dT%H:%M:%fZ', 'now', '-{retention} hours')"
             ));
         }
         if let Some(end) = timestamp_before
@@ -1532,7 +1532,7 @@ impl EventsStore {
         self.conn
             .execute(
                 "DELETE FROM event_attributes WHERE event_id IN (
-                SELECT event_id FROM events WHERE inserted_at < datetime('now', ?1)
+                SELECT event_id FROM events WHERE inserted_at < strftime('%Y-%m-%dT%H:%M:%fZ', 'now', ?1)
             )",
                 rusqlite::params![cutoff],
             )
@@ -1540,7 +1540,7 @@ impl EventsStore {
         let deleted = self
             .conn
             .execute(
-                "DELETE FROM events WHERE inserted_at < datetime('now', ?1)",
+                "DELETE FROM events WHERE inserted_at < strftime('%Y-%m-%dT%H:%M:%fZ', 'now', ?1)",
                 rusqlite::params![cutoff],
             )
             .context("prune expired events")?;
@@ -3993,15 +3993,13 @@ fn initialize_events_db(path: &Path) -> Result<()> {
              INSERT INTO events_fts(event_id, message)
              VALUES (new.event_id, substr(new.message, 1, 8192));
          END;
-         CREATE TRIGGER events_fts_au AFTER UPDATE ON events BEGIN
-             INSERT INTO events_fts(events_fts, event_id, message)
-             VALUES ('delete', old.event_id, old.message);
+         CREATE TRIGGER events_fts_au AFTER UPDATE OF event_id, message ON events BEGIN
+             DELETE FROM events_fts WHERE event_id = old.event_id;
              INSERT INTO events_fts(event_id, message)
              VALUES (new.event_id, substr(new.message, 1, 8192));
          END;
          CREATE TRIGGER events_fts_ad AFTER DELETE ON events BEGIN
-             INSERT INTO events_fts(events_fts, event_id, message)
-             VALUES ('delete', old.event_id, old.message);
+             DELETE FROM events_fts WHERE event_id = old.event_id;
          END;",
     )
     .context("initialize events db indexes")?;
@@ -4675,6 +4673,12 @@ mod tests {
         (root, events, incidents)
     }
 
+    fn recent_iso(minutes_ago: i64) -> String {
+        (OffsetDateTime::now_utc() - Duration::minutes(minutes_ago))
+            .format(&time::format_description::well_known::Rfc3339)
+            .expect("format recent timestamp")
+    }
+
     #[test]
     fn initialize_databases_creates_extended_python_compatible_schema() {
         let (_root, events_db, incidents_db) = temp_db_paths("schema");
@@ -4779,6 +4783,8 @@ mod tests {
         let mut store = EventsStore::open(&events_db)
             .expect("open events result")
             .expect("events store present");
+        let timestamp = recent_iso(5);
+        let collected_at = recent_iso(4);
         let governance = IngestGovernance {
             dedup_enabled: false,
             noise_enabled: false,
@@ -4793,7 +4799,7 @@ mod tests {
             .insert_batch_governed(
                 &[NewEventRecord {
                     event_id: "e-attr-1".into(),
-                    timestamp: "2026-05-14T11:00:00Z".into(),
+                    timestamp,
                     service_id: "api".into(),
                     severity: 3,
                     message: "upstream error".into(),
@@ -4804,7 +4810,7 @@ mod tests {
                     host_id: "host.local".into(),
                     event_type: 0,
                     timestamp_source: "collector".into(),
-                    collected_at: "2026-05-14T11:00:01Z".into(),
+                    collected_at,
                     quality: Some("normalized".into()),
                     structured_data: Some(structured),
                     raw_offset: None,
@@ -4926,14 +4932,14 @@ mod tests {
         store
             .conn
             .execute(
-                "UPDATE events SET inserted_at = datetime('now', '-4 hours') WHERE event_id = 'e-prune-old'",
+                "UPDATE events SET inserted_at = strftime('%Y-%m-%dT%H:%M:%fZ', 'now', '-4 hours') WHERE event_id = 'e-prune-old'",
                 [],
             )
             .expect("backdate old row");
         store
             .conn
             .execute(
-                "UPDATE events SET inserted_at = datetime('now', '-30 minutes') WHERE event_id = 'e-prune-fresh'",
+                "UPDATE events SET inserted_at = strftime('%Y-%m-%dT%H:%M:%fZ', 'now', '-30 minutes') WHERE event_id = 'e-prune-fresh'",
                 [],
             )
             .expect("backdate fresh row");
@@ -4975,6 +4981,8 @@ mod tests {
         let mut store = EventsStore::open(&events_db)
             .expect("open events result")
             .expect("events store present");
+        let timestamp = recent_iso(5);
+        let collected_at = recent_iso(4);
         let gov = IngestGovernance {
             dedup_enabled: false,
             noise_enabled: false,
@@ -4984,7 +4992,7 @@ mod tests {
             .insert_batch_governed(
                 &[NewEventRecord {
                     event_id: "e-fts-1".into(),
-                    timestamp: "2026-05-14T12:00:00Z".into(),
+                    timestamp,
                     service_id: "api".into(),
                     severity: 2,
                     message: "alpha bravo uniqueftsmarker".into(),
@@ -4995,7 +5003,7 @@ mod tests {
                     host_id: "host.local".into(),
                     event_type: 0,
                     timestamp_source: "collector".into(),
-                    collected_at: "2026-05-14T12:00:01Z".into(),
+                    collected_at,
                     quality: Some("normalized".into()),
                     structured_data: None,
                     raw_offset: None,
@@ -5030,25 +5038,13 @@ mod tests {
             .expect("open events result")
             .expect("events store present");
         let tid = "aabbccdd0011223344556677889900aa";
-        let mut later = NewEventRecord::minimal(
-            "e-tr-2",
-            "2026-05-14T12:00:01Z",
-            "api",
-            3,
-            "second",
-            "app",
-            "2026-05-14T12:00:01Z",
-        );
+        let earlier_ts = recent_iso(6);
+        let later_ts = recent_iso(5);
+        let mut later =
+            NewEventRecord::minimal("e-tr-2", &later_ts, "api", 3, "second", "app", &later_ts);
         later.trace_id = Some(tid.into());
-        let mut earlier = NewEventRecord::minimal(
-            "e-tr-1",
-            "2026-05-14T12:00:00Z",
-            "api",
-            2,
-            "first",
-            "app",
-            "2026-05-14T12:00:00Z",
-        );
+        let mut earlier =
+            NewEventRecord::minimal("e-tr-1", &earlier_ts, "api", 2, "first", "app", &earlier_ts);
         earlier.trace_id = Some(tid.into());
         store
             .insert_batch(&[later, earlier])

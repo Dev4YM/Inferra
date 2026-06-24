@@ -143,14 +143,12 @@ pub async fn local_security_middleware(
         let cfg = state.config.read().await;
         (server_require_loopback(&cfg), server_auth_token_env(&cfg))
     };
-    if require_loopback {
-        if !is_loopback_client(peer_addr(&request)) {
-            return (
-                StatusCode::FORBIDDEN,
-                Json(json!({"detail": "local clients only"})),
-            )
-                .into_response();
-        }
+    if require_loopback && !is_loopback_client(peer_addr(&request)) {
+        return (
+            StatusCode::FORBIDDEN,
+            Json(json!({"detail": "local clients only"})),
+        )
+            .into_response();
     }
 
     if !auth_env.is_empty() {

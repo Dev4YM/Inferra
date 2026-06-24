@@ -179,6 +179,15 @@ struct AppStandaloneState {
     shared_token: String,
 }
 
+struct CollectorTaskContext<'a> {
+    runtime: &'a CollectorRuntime,
+    events_db: &'a Path,
+    incidents_db: &'a Path,
+    config: &'a TomlValue,
+    collector_id: &'a str,
+    source_type: &'a str,
+}
+
 #[derive(Debug, Clone, Copy)]
 enum CollectorEventKind {
     Log,
@@ -1603,6 +1612,14 @@ async fn run_host_metrics(
 ) {
     let collector_id = "host_metrics";
     let source_type = "host";
+    let collector = CollectorTaskContext {
+        runtime: &runtime,
+        events_db: &events_db,
+        incidents_db: &incidents_db,
+        config: &config,
+        collector_id,
+        source_type,
+    };
     runtime
         .upsert_status(CollectorRuntimeRow {
             collector_id: collector_id.into(),
@@ -1621,16 +1638,8 @@ async fn run_host_metrics(
         let sample = match tokio::task::spawn_blocking(collect_host_sample).await {
             Ok(sample) => sample,
             Err(error) => {
-                record_collector_error(
-                    &runtime,
-                    &events_db,
-                    &incidents_db,
-                    &config,
-                    collector_id,
-                    source_type,
-                    &format!("host sample task failed: {error}"),
-                )
-                .await;
+                record_collector_error(&collector, &format!("host sample task failed: {error}"))
+                    .await;
                 tokio::select! {
                     _ = stop_rx.changed() => {},
                     _ = tokio::time::sleep(poll_interval) => {},
@@ -1649,30 +1658,9 @@ async fn run_host_metrics(
                     )
                     .into_iter()
                     .collect::<Vec<_>>();
-                handle_collected_events(
-                    &runtime,
-                    &events_db,
-                    &incidents_db,
-                    &config,
-                    collector_id,
-                    source_type,
-                    observed_at,
-                    events,
-                )
-                .await;
+                handle_collected_events(&collector, observed_at, events).await;
             }
-            Err(error) => {
-                record_collector_error(
-                    &runtime,
-                    &events_db,
-                    &incidents_db,
-                    &config,
-                    collector_id,
-                    source_type,
-                    &format!("{error:#}"),
-                )
-                .await
-            }
+            Err(error) => record_collector_error(&collector, &format!("{error:#}")).await,
         }
         tokio::select! {
             _ = stop_rx.changed() => {},
@@ -1697,6 +1685,14 @@ async fn run_process_snapshot(
 ) {
     let collector_id = "process";
     let source_type = "process_snapshot";
+    let collector = CollectorTaskContext {
+        runtime: &runtime,
+        events_db: &events_db,
+        incidents_db: &incidents_db,
+        config: &config,
+        collector_id,
+        source_type,
+    };
     runtime
         .upsert_status(CollectorRuntimeRow {
             collector_id: collector_id.into(),
@@ -1712,9 +1708,6 @@ async fn run_process_snapshot(
             break;
         }
         let observed_at = now_iso();
-        let top_n = top_n;
-        let min_cpu_percent = min_cpu_percent;
-        let min_memory_mb = min_memory_mb;
         let watch_processes = watch_processes.clone();
         let watch_pids = watch_pids.clone();
         let mut seen_hot_local = seen_hot.clone();
@@ -1733,38 +1726,12 @@ async fn run_process_snapshot(
         match collect_result {
             Ok(Ok((events, updated_seen))) => {
                 seen_hot = updated_seen;
-                handle_collected_events(
-                    &runtime,
-                    &events_db,
-                    &incidents_db,
-                    &config,
-                    collector_id,
-                    source_type,
-                    observed_at,
-                    events,
-                )
-                .await;
+                handle_collected_events(&collector, observed_at, events).await;
             }
-            Ok(Err(error)) => {
-                record_collector_error(
-                    &runtime,
-                    &events_db,
-                    &incidents_db,
-                    &config,
-                    collector_id,
-                    source_type,
-                    &format!("{error:#}"),
-                )
-                .await
-            }
+            Ok(Err(error)) => record_collector_error(&collector, &format!("{error:#}")).await,
             Err(error) => {
                 record_collector_error(
-                    &runtime,
-                    &events_db,
-                    &incidents_db,
-                    &config,
-                    collector_id,
-                    source_type,
+                    &collector,
                     &format!("process snapshot task failed: {error}"),
                 )
                 .await
@@ -1790,6 +1757,14 @@ async fn run_linux_syslog(
 ) {
     let collector_id = "linux_syslog";
     let source_type = "syslog";
+    let collector = CollectorTaskContext {
+        runtime: &runtime,
+        events_db: &events_db,
+        incidents_db: &incidents_db,
+        config: &config,
+        collector_id,
+        source_type,
+    };
     runtime
         .upsert_status(CollectorRuntimeRow {
             collector_id: collector_id.into(),
@@ -1808,30 +1783,9 @@ async fn run_linux_syslog(
         match collect_syslog_events(&events_db, &paths, start_at_end && !started) {
             Ok(events) => {
                 started = true;
-                handle_collected_events(
-                    &runtime,
-                    &events_db,
-                    &incidents_db,
-                    &config,
-                    collector_id,
-                    source_type,
-                    observed_at,
-                    events,
-                )
-                .await;
+                handle_collected_events(&collector, observed_at, events).await;
             }
-            Err(error) => {
-                record_collector_error(
-                    &runtime,
-                    &events_db,
-                    &incidents_db,
-                    &config,
-                    collector_id,
-                    source_type,
-                    &format!("{error:#}"),
-                )
-                .await
-            }
+            Err(error) => record_collector_error(&collector, &format!("{error:#}")).await,
         }
         tokio::select! {
             _ = stop_rx.changed() => {},
@@ -1853,6 +1807,14 @@ async fn run_file_tail(
 ) {
     let collector_id = "file";
     let source_type = "file";
+    let collector = CollectorTaskContext {
+        runtime: &runtime,
+        events_db: &events_db,
+        incidents_db: &incidents_db,
+        config: &config,
+        collector_id,
+        source_type,
+    };
     let mut started = false;
     loop {
         if *stop_rx.borrow() {
@@ -1862,30 +1824,9 @@ async fn run_file_tail(
         match collect_file_events(&events_db, &targets, start_at_end && !started) {
             Ok(events) => {
                 started = true;
-                handle_collected_events(
-                    &runtime,
-                    &events_db,
-                    &incidents_db,
-                    &config,
-                    collector_id,
-                    source_type,
-                    observed_at,
-                    events,
-                )
-                .await;
+                handle_collected_events(&collector, observed_at, events).await;
             }
-            Err(error) => {
-                record_collector_error(
-                    &runtime,
-                    &events_db,
-                    &incidents_db,
-                    &config,
-                    collector_id,
-                    source_type,
-                    &format!("{error:#}"),
-                )
-                .await
-            }
+            Err(error) => record_collector_error(&collector, &format!("{error:#}")).await,
         }
         tokio::select! {
             _ = stop_rx.changed() => {},
@@ -1910,6 +1851,14 @@ async fn run_journald(
 ) {
     let collector_id = "journald";
     let source_type = "journald";
+    let collector = CollectorTaskContext {
+        runtime: &runtime,
+        events_db: &events_db,
+        incidents_db: &incidents_db,
+        config: &config,
+        collector_id,
+        source_type,
+    };
     loop {
         if *stop_rx.borrow() {
             break;
@@ -1924,42 +1873,14 @@ async fn run_journald(
             limit,
         ) {
             Ok(events) => {
-                handle_collected_events(
-                    &runtime,
-                    &events_db,
-                    &incidents_db,
-                    &config,
-                    collector_id,
-                    source_type,
-                    observed_at,
-                    events,
-                )
-                .await;
+                handle_collected_events(&collector, observed_at, events).await;
             }
             Err(error) => {
                 let message = format!("{error:#}");
                 if let Some(reason) = collector_unavailable_reason(collector_id, &message) {
-                    record_collector_unavailable(
-                        &runtime,
-                        &events_db,
-                        &incidents_db,
-                        &config,
-                        collector_id,
-                        source_type,
-                        &reason,
-                    )
-                    .await;
+                    record_collector_unavailable(&collector, &reason).await;
                 } else {
-                    record_collector_error(
-                        &runtime,
-                        &events_db,
-                        &incidents_db,
-                        &config,
-                        collector_id,
-                        source_type,
-                        &message,
-                    )
-                    .await;
+                    record_collector_error(&collector, &message).await;
                 }
             }
         }
@@ -1981,6 +1902,14 @@ async fn run_windows_eventlog(
 ) {
     let collector_id = "windows_eventlog";
     let source_type = "eventlog";
+    let collector = CollectorTaskContext {
+        runtime: &runtime,
+        events_db: &events_db,
+        incidents_db: &incidents_db,
+        config: &config,
+        collector_id,
+        source_type,
+    };
     loop {
         if *stop_rx.borrow() {
             break;
@@ -1994,38 +1923,12 @@ async fn run_windows_eventlog(
         .await;
         match collect_result {
             Ok(Ok(events)) => {
-                handle_collected_events(
-                    &runtime,
-                    &events_db,
-                    &incidents_db,
-                    &config,
-                    collector_id,
-                    source_type,
-                    observed_at,
-                    events,
-                )
-                .await;
+                handle_collected_events(&collector, observed_at, events).await;
             }
-            Ok(Err(error)) => {
-                record_collector_error(
-                    &runtime,
-                    &events_db,
-                    &incidents_db,
-                    &config,
-                    collector_id,
-                    source_type,
-                    &format!("{error:#}"),
-                )
-                .await
-            }
+            Ok(Err(error)) => record_collector_error(&collector, &format!("{error:#}")).await,
             Err(error) => {
                 record_collector_error(
-                    &runtime,
-                    &events_db,
-                    &incidents_db,
-                    &config,
-                    collector_id,
-                    source_type,
+                    &collector,
                     &format!("windows eventlog task failed: {error}"),
                 )
                 .await
@@ -2053,14 +1956,20 @@ async fn run_windows_service(
 ) {
     let collector_id = "windows_service";
     let source_type = "service";
+    let collector = CollectorTaskContext {
+        runtime: &runtime,
+        events_db: &events_db,
+        incidents_db: &incidents_db,
+        config: &config,
+        collector_id,
+        source_type,
+    };
     loop {
         if *stop_rx.borrow() {
             break;
         }
         let observed_at = now_iso();
         let events_db_for_collect = events_db.clone();
-        let include_stopped = include_stopped;
-        let include_automatic_stopped = include_automatic_stopped;
         let names = names.clone();
         let exclude_names = exclude_names.clone();
         let collect_result = tokio::task::spawn_blocking(move || {
@@ -2075,41 +1984,12 @@ async fn run_windows_service(
         .await;
         match collect_result {
             Ok(Ok(events)) => {
-                handle_collected_events(
-                    &runtime,
-                    &events_db,
-                    &incidents_db,
-                    &config,
-                    collector_id,
-                    source_type,
-                    observed_at,
-                    events,
-                )
-                .await;
+                handle_collected_events(&collector, observed_at, events).await;
             }
-            Ok(Err(error)) => {
-                record_collector_error(
-                    &runtime,
-                    &events_db,
-                    &incidents_db,
-                    &config,
-                    collector_id,
-                    source_type,
-                    &format!("{error:#}"),
-                )
-                .await
-            }
+            Ok(Err(error)) => record_collector_error(&collector, &format!("{error:#}")).await,
             Err(error) => {
-                record_collector_error(
-                    &runtime,
-                    &events_db,
-                    &incidents_db,
-                    &config,
-                    collector_id,
-                    source_type,
-                    &format!("windows service task failed: {error}"),
-                )
-                .await
+                record_collector_error(&collector, &format!("windows service task failed: {error}"))
+                    .await
             }
         }
         tokio::select! {
@@ -2135,6 +2015,14 @@ async fn run_docker(
 ) {
     let collector_id = "docker";
     let source_type = "container";
+    let collector = CollectorTaskContext {
+        runtime: &runtime,
+        events_db: &events_db,
+        incidents_db: &incidents_db,
+        config: &config,
+        collector_id,
+        source_type,
+    };
     loop {
         if *stop_rx.borrow() {
             break;
@@ -2149,42 +2037,14 @@ async fn run_docker(
             include_all,
         ) {
             Ok(events) => {
-                handle_collected_events(
-                    &runtime,
-                    &events_db,
-                    &incidents_db,
-                    &config,
-                    collector_id,
-                    source_type,
-                    observed_at,
-                    events,
-                )
-                .await;
+                handle_collected_events(&collector, observed_at, events).await;
             }
             Err(error) => {
                 let message = format!("{error:#}");
                 if let Some(reason) = collector_unavailable_reason(collector_id, &message) {
-                    record_collector_unavailable(
-                        &runtime,
-                        &events_db,
-                        &incidents_db,
-                        &config,
-                        collector_id,
-                        source_type,
-                        &reason,
-                    )
-                    .await;
+                    record_collector_unavailable(&collector, &reason).await;
                 } else {
-                    record_collector_error(
-                        &runtime,
-                        &events_db,
-                        &incidents_db,
-                        &config,
-                        collector_id,
-                        source_type,
-                        &message,
-                    )
-                    .await;
+                    record_collector_error(&collector, &message).await;
                 }
             }
         }
@@ -2212,6 +2072,14 @@ async fn run_kubernetes(
 ) {
     let collector_id = "kubernetes";
     let source_type = "kubernetes";
+    let collector = CollectorTaskContext {
+        runtime: &runtime,
+        events_db: &events_db,
+        incidents_db: &incidents_db,
+        config: &config,
+        collector_id,
+        source_type,
+    };
     loop {
         if *stop_rx.borrow() {
             break;
@@ -2227,42 +2095,14 @@ async fn run_kubernetes(
             include_events,
         ) {
             Ok(events) => {
-                handle_collected_events(
-                    &runtime,
-                    &events_db,
-                    &incidents_db,
-                    &config,
-                    collector_id,
-                    source_type,
-                    observed_at,
-                    events,
-                )
-                .await;
+                handle_collected_events(&collector, observed_at, events).await;
             }
             Err(error) => {
                 let message = format!("{error:#}");
                 if let Some(reason) = collector_unavailable_reason(collector_id, &message) {
-                    record_collector_unavailable(
-                        &runtime,
-                        &events_db,
-                        &incidents_db,
-                        &config,
-                        collector_id,
-                        source_type,
-                        &reason,
-                    )
-                    .await;
+                    record_collector_unavailable(&collector, &reason).await;
                 } else {
-                    record_collector_error(
-                        &runtime,
-                        &events_db,
-                        &incidents_db,
-                        &config,
-                        collector_id,
-                        source_type,
-                        &message,
-                    )
-                    .await;
+                    record_collector_error(&collector, &message).await;
                 }
             }
         }
@@ -2368,24 +2208,26 @@ async fn handle_app_standalone_ingest(
 }
 
 async fn handle_collected_events(
-    runtime: &CollectorRuntime,
-    events_db: &Path,
-    incidents_db: &Path,
-    config: &TomlValue,
-    collector_id: &str,
-    source_type: &str,
+    context: &CollectorTaskContext<'_>,
     observed_at: String,
     events: Vec<NewEventRecord>,
 ) {
     if events.is_empty() {
-        runtime
-            .bump_success(collector_id, source_type, 0, 0, Some(observed_at))
+        context
+            .runtime
+            .bump_success(
+                context.collector_id,
+                context.source_type,
+                0,
+                0,
+                Some(observed_at),
+            )
             .await;
         return;
     }
-    let events_db_owned = events_db.to_path_buf();
-    let incidents_db_owned = incidents_db.to_path_buf();
-    let config_owned = config.clone();
+    let events_db_owned = context.events_db.to_path_buf();
+    let incidents_db_owned = context.incidents_db.to_path_buf();
+    let config_owned = context.config.clone();
     let events_owned = events;
     let persist_result = tokio::task::spawn_blocking(move || {
         persist_events_and_reconcile(
@@ -2398,10 +2240,11 @@ async fn handle_collected_events(
     .await;
     match persist_result {
         Ok(Ok(result)) => {
-            runtime
+            context
+                .runtime
                 .bump_success(
-                    collector_id,
-                    source_type,
+                    context.collector_id,
+                    context.source_type,
                     result.inserted as u64,
                     (result.suppressed_duplicates + result.suppressed_noise) as u64,
                     Some(observed_at),
@@ -2409,88 +2252,38 @@ async fn handle_collected_events(
                 .await;
         }
         Ok(Err(error)) => {
-            record_collector_error(
-                runtime,
-                events_db,
-                incidents_db,
-                config,
-                collector_id,
-                source_type,
-                &format!("{error:#}"),
-            )
-            .await;
+            record_collector_error(context, &format!("{error:#}")).await;
         }
         Err(error) => {
-            record_collector_error(
-                runtime,
-                events_db,
-                incidents_db,
-                config,
-                collector_id,
-                source_type,
-                &format!("persist task failed: {error}"),
-            )
-            .await;
+            record_collector_error(context, &format!("persist task failed: {error}")).await;
         }
     }
 }
 
-async fn record_collector_error(
-    runtime: &CollectorRuntime,
-    events_db: &Path,
-    incidents_db: &Path,
-    config: &TomlValue,
-    collector_id: &str,
-    source_type: &str,
-    error: &str,
-) {
-    runtime.record_error(collector_id, source_type, error).await;
-    let _ = persist_collector_diagnostic_event(
-        events_db,
-        incidents_db,
-        config,
-        collector_id,
-        source_type,
-        "collector_error",
-        3,
-        error,
-    );
+async fn record_collector_error(context: &CollectorTaskContext<'_>, error: &str) {
+    context
+        .runtime
+        .record_error(context.collector_id, context.source_type, error)
+        .await;
+    let _ = persist_collector_diagnostic_event(context, "collector_error", 3, error);
 }
 
-async fn record_collector_unavailable(
-    runtime: &CollectorRuntime,
-    events_db: &Path,
-    incidents_db: &Path,
-    config: &TomlValue,
-    collector_id: &str,
-    source_type: &str,
-    reason: &str,
-) {
-    runtime
-        .record_unavailable(collector_id, source_type, reason)
+async fn record_collector_unavailable(context: &CollectorTaskContext<'_>, reason: &str) {
+    context
+        .runtime
+        .record_unavailable(context.collector_id, context.source_type, reason)
         .await;
-    let _ = persist_collector_diagnostic_event(
-        events_db,
-        incidents_db,
-        config,
-        collector_id,
-        source_type,
-        "collector_unavailable",
-        1,
-        reason,
-    );
+    let _ = persist_collector_diagnostic_event(context, "collector_unavailable", 1, reason);
 }
 
 fn persist_collector_diagnostic_event(
-    events_db: &Path,
-    incidents_db: &Path,
-    config: &TomlValue,
-    collector_id: &str,
-    source_type: &str,
+    context: &CollectorTaskContext<'_>,
     kind: &str,
     severity: i64,
     reason: &str,
 ) -> Result<()> {
+    let collector_id = context.collector_id;
+    let source_type = context.source_type;
     let message = format!("collector {collector_id} {kind}: {reason}");
     let event = NewEventRecord {
         event_id: next_event_id("collector"),
@@ -2524,7 +2317,13 @@ fn persist_collector_diagnostic_event(
         deployment_environment: None,
         severity_text: None,
     };
-    persist_events_and_reconcile(events_db, incidents_db, config, &[event]).map(|_| ())
+    persist_events_and_reconcile(
+        context.events_db,
+        context.incidents_db,
+        context.config,
+        &[event],
+    )
+    .map(|_| ())
 }
 
 fn collector_unavailable_reason(collector_id: &str, message: &str) -> Option<String> {

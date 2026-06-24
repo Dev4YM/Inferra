@@ -107,6 +107,9 @@ fn resolve_config_path(config_override: Option<PathBuf>) -> Result<PathBuf> {
 }
 
 pub fn config_path_candidates_from_executable(exe: &Path) -> Vec<PathBuf> {
+    if let Some(candidates) = windows_style_config_path_candidates(&exe.to_string_lossy()) {
+        return candidates;
+    }
     let mut candidates = Vec::new();
     if let Some(parent) = exe.parent() {
         candidates.push(parent.join("inferra.toml"));
@@ -118,6 +121,29 @@ pub fn config_path_candidates_from_executable(exe: &Path) -> Vec<PathBuf> {
         }
     }
     candidates
+}
+
+fn windows_style_config_path_candidates(raw: &str) -> Option<Vec<PathBuf>> {
+    let trimmed = raw.trim();
+    let looks_like_windows =
+        trimmed.contains('\\') || trimmed.chars().nth(1).is_some_and(|ch| ch == ':');
+    if !looks_like_windows {
+        return None;
+    }
+    let normalized = trimmed.replace('/', "\\");
+    let (parent, _) = normalized.rsplit_once('\\')?;
+    let mut candidates = vec![
+        PathBuf::from(format!(r"{parent}\inferra.toml")),
+        PathBuf::from(format!(r"{parent}\config\inferra.toml")),
+    ];
+    if let Some((grandparent, _)) = parent.rsplit_once('\\') {
+        candidates.push(PathBuf::from(format!(r"{grandparent}\inferra.toml")));
+        candidates.push(PathBuf::from(format!(r"{grandparent}\etc\inferra.toml")));
+        candidates.push(PathBuf::from(format!(
+            r"{grandparent}\etc\inferra\inferra.toml"
+        )));
+    }
+    Some(candidates)
 }
 
 fn executable_looks_installed(exe: &Path) -> bool {

@@ -37,8 +37,8 @@ use inferra_core::{
     build_overview, build_overview_with_runtime_signals, build_workspace_map,
     collect_host_resources_snapshot, collect_runtime_monitor_window,
     enrich_incident_rows_with_latest_traces, refresh_incident_reasoning, service_row_for_id,
-    try_collect_gpu_summary, workspace_app_live_resources, AdaptiveArtifactSelection,
-    AdaptiveSavedReviewViewDraft, OverviewRuntimeSignals,
+    try_collect_gpu_summary, workspace_app_live_resources, workspace_roots,
+    AdaptiveArtifactSelection, AdaptiveSavedReviewViewDraft, OverviewRuntimeSignals,
 };
 use inferra_storage::{
     initialize_databases, AdaptiveLearningAuditQuery, AdaptiveLearningHistoryQuery, EventsStore,
@@ -842,7 +842,6 @@ async fn api_logs_v2(
         cursor_event_id: params.get("cursor_event_id").cloned(),
         attr_key: params.get("attr_key").cloned(),
         attr_value: params.get("attr_value").cloned(),
-        ..Default::default()
     };
     let store = EventsStore::open(&state.paths.events_db)
         .map_err(|e| (StatusCode::INTERNAL_SERVER_ERROR, e.to_string()))?;
@@ -1941,16 +1940,16 @@ async fn api_investigate_now(
         investigation_bundle_enriched(state.paths.as_ref(), &cfg, &focus, "", &mode, monitor)
             .await
             .map_err(|e| (investigation_status(&e), e.to_string()))?;
-    investigation_response_for_bundle(
-        state.paths.as_ref(),
-        &cfg,
+    investigation_response_for_bundle(InvestigationRequest {
+        paths: state.paths.as_ref(),
+        config: &cfg,
         bundle,
-        &focus,
-        &mode,
-        None,
-        false,
+        focus: &focus,
+        mode: &mode,
+        question: None,
+        report: false,
         use_cache,
-    )
+    })
     .await
 }
 
@@ -1991,16 +1990,16 @@ async fn api_ai_ask(
     )
     .await
     .map_err(|e| (investigation_status(&e), e.to_string()))?;
-    investigation_response_for_bundle(
-        state.paths.as_ref(),
-        &cfg,
+    investigation_response_for_bundle(InvestigationRequest {
+        paths: state.paths.as_ref(),
+        config: &cfg,
         bundle,
-        &focus,
-        &mode,
-        Some(question),
-        false,
+        focus: &focus,
+        mode: &mode,
+        question: Some(question),
+        report: false,
         use_cache,
-    )
+    })
     .await
 }
 
@@ -2018,16 +2017,16 @@ async fn api_investigate_incident(
         investigation_bundle_enriched(state.paths.as_ref(), &cfg, &focus, "", &mode, monitor)
             .await
             .map_err(|e| (investigation_status(&e), e.to_string()))?;
-    investigation_response_for_bundle(
-        state.paths.as_ref(),
-        &cfg,
+    investigation_response_for_bundle(InvestigationRequest {
+        paths: state.paths.as_ref(),
+        config: &cfg,
         bundle,
-        &focus,
-        &mode,
-        None,
-        false,
+        focus: &focus,
+        mode: &mode,
+        question: None,
+        report: false,
         use_cache,
-    )
+    })
     .await
 }
 
@@ -2045,16 +2044,16 @@ async fn api_investigate_service(
         investigation_bundle_enriched(state.paths.as_ref(), &cfg, &focus, "", &mode, monitor)
             .await
             .map_err(|e| (investigation_status(&e), e.to_string()))?;
-    investigation_response_for_bundle(
-        state.paths.as_ref(),
-        &cfg,
+    investigation_response_for_bundle(InvestigationRequest {
+        paths: state.paths.as_ref(),
+        config: &cfg,
         bundle,
-        &focus,
-        &mode,
-        None,
-        false,
+        focus: &focus,
+        mode: &mode,
+        question: None,
+        report: false,
         use_cache,
-    )
+    })
     .await
 }
 
@@ -2072,33 +2071,38 @@ async fn api_ai_report(
         investigation_bundle_enriched(state.paths.as_ref(), &cfg, &focus, "", &mode, monitor)
             .await
             .map_err(|e| (investigation_status(&e), e.to_string()))?;
-    investigation_response_for_bundle(
-        state.paths.as_ref(),
-        &cfg,
+    investigation_response_for_bundle(InvestigationRequest {
+        paths: state.paths.as_ref(),
+        config: &cfg,
         bundle,
-        &focus,
-        &mode,
-        None,
-        true,
+        focus: &focus,
+        mode: &mode,
+        question: None,
+        report: true,
         use_cache,
-    )
+    })
     .await
 }
 
-async fn investigation_response_for_bundle(
-    paths: &Paths,
-    config: &TomlValue,
+struct InvestigationRequest<'a> {
+    paths: &'a Paths,
+    config: &'a TomlValue,
     bundle: JsonValue,
-    focus: &str,
-    mode: &str,
+    focus: &'a str,
+    mode: &'a str,
     question: Option<String>,
     report: bool,
     use_cache: bool,
+}
+
+async fn investigation_response_for_bundle(
+    request: InvestigationRequest<'_>,
 ) -> Result<Json<JsonValue>, (StatusCode, String)> {
-    let question_text = question.clone().unwrap_or_default();
-    let scope_key = ai_generation_scope_key(focus, mode, &question_text, report);
-    if use_cache {
-        if let Some(mut saved) = load_saved_ai_generation(paths, &scope_key)
+    let question_text = request.question.clone().unwrap_or_default();
+    let scope_key =
+        ai_generation_scope_key(request.focus, request.mode, &question_text, request.report);
+    if request.use_cache {
+        if let Some(mut saved) = load_saved_ai_generation(request.paths, &scope_key)
             .map_err(|e| (StatusCode::INTERNAL_SERVER_ERROR, format!("{e:#}")))?
         {
             if let Some(mut response) = saved.get_mut("response").cloned() {
@@ -2111,39 +2115,39 @@ async fn investigation_response_for_bundle(
             }
         }
     }
-    let mut response = run_investigation_response(paths, config, &bundle)
+    let mut response = run_investigation_response(request.paths, request.config, &request.bundle)
         .await
         .map_err(|e| (StatusCode::BAD_GATEWAY, e.to_string()))?;
-    if let Some(audit) = persist_investigation_artifacts(paths, &bundle, &response)
+    if let Some(audit) = persist_investigation_artifacts(request.paths, &request.bundle, &response)
         .map_err(|e| (StatusCode::INTERNAL_SERVER_ERROR, format!("{e:#}")))?
     {
         response["audit"] = audit;
     }
-    response["focus"] = JsonValue::String(focus.to_string());
-    response["mode"] = JsonValue::String(mode.to_string());
+    response["focus"] = JsonValue::String(request.focus.to_string());
+    response["mode"] = JsonValue::String(request.mode.to_string());
     if !question_text.is_empty() {
         response["question"] = JsonValue::String(question_text.clone());
     }
-    if report {
+    if request.report {
         response["report"] = JsonValue::Bool(true);
     }
     let generation = persist_ai_generation(
-        paths,
+        request.paths,
         &scope_key,
-        focus,
-        mode,
+        request.focus,
+        request.mode,
         &question_text,
-        &bundle,
+        &request.bundle,
         &response,
     )
     .map_err(|e| (StatusCode::INTERNAL_SERVER_ERROR, format!("{e:#}")))?;
     response["ai_generation"] = ai_generation_metadata_json(&generation);
     let _ = persist_ui_snapshot(
-        paths,
+        request.paths,
         SNAPSHOT_AI_INVESTIGATION,
         &json!({
-            "focus": focus,
-            "mode": mode,
+            "focus": request.focus,
+            "mode": request.mode,
             "response": response.clone(),
         }),
         UI_SNAPSHOT_SOURCE_CORE,
@@ -3003,7 +3007,12 @@ async fn workspace_runtime_app_lookup(
             return Ok(Some(app.clone()));
         }
     }
-    Ok(None)
+    let cfg = state.config.read().await.clone();
+    let workspace = build_workspace_map(&cfg, state.paths.as_ref())?;
+    Ok(workspace
+        .runtime_apps
+        .into_iter()
+        .find(|app| workspace_runtime_app_matches(app, app_name)))
 }
 
 fn workspace_app_service_candidates(
@@ -5984,34 +5993,7 @@ fn workspace_inspect_allowed_roots(config: &TomlValue, paths: &Paths) -> Vec<Pat
         .parent()
         .unwrap_or_else(|| Path::new("."))
         .to_path_buf();
-    let mut roots = Vec::new();
-    if let Ok(root) = base.canonicalize() {
-        roots.push(root);
-    }
-    if let Some(items) = config
-        .get("workspace")
-        .and_then(|value| value.get("roots"))
-        .and_then(TomlValue::as_array)
-    {
-        for item in items.iter().filter_map(TomlValue::as_str) {
-            let trimmed = item.trim();
-            if trimmed.is_empty() {
-                continue;
-            }
-            let candidate = PathBuf::from(trimmed);
-            let resolved = if candidate.is_absolute() {
-                candidate
-            } else {
-                base.join(candidate)
-            };
-            if let Ok(root) = resolved.canonicalize() {
-                if !roots.iter().any(|existing| existing == &root) {
-                    roots.push(root);
-                }
-            }
-        }
-    }
-    roots
+    workspace_roots(config, &base)
 }
 
 fn inspect_workspace_project(path: &std::path::Path, redact_env_files: bool) -> JsonValue {
@@ -6172,12 +6154,16 @@ mod tests {
     use axum::http::Request;
     use rusqlite::Connection;
     use serde_json::Value as JsonValue;
-    use std::sync::Mutex;
+    use std::sync::OnceLock;
     use std::time::{SystemTime, UNIX_EPOCH};
+    use tokio::sync::Mutex;
     use toml::Value as TomlValue;
     use tower::util::ServiceExt;
 
-    static ENV_LOCK: Mutex<()> = Mutex::new(());
+    fn env_lock() -> &'static Mutex<()> {
+        static LOCK: OnceLock<Mutex<()>> = OnceLock::new();
+        LOCK.get_or_init(|| Mutex::new(()))
+    }
 
     fn test_root(name: &str) -> PathBuf {
         let unique = SystemTime::now()
@@ -6877,7 +6863,7 @@ redact_raw_logs = true
 
     #[tokio::test]
     async fn probe_routes_remain_minimal_when_api_auth_is_enabled() {
-        let _guard = ENV_LOCK.lock().expect("env lock");
+        let _guard = env_lock().lock().await;
         let env_name = "INFERRA_TEST_PROBE_TOKEN";
         std::env::set_var(env_name, "correct-token");
         let state = seeded_test_state("probe-auth", false);
@@ -6911,7 +6897,7 @@ redact_raw_logs = true
 
     #[tokio::test]
     async fn api_auth_fails_closed_when_env_is_unset_and_accepts_exact_bearer() {
-        let _guard = ENV_LOCK.lock().expect("env lock");
+        let _guard = env_lock().lock().await;
         let env_name = "INFERRA_TEST_API_TOKEN";
         std::env::remove_var(env_name);
         let state = seeded_test_state("api-auth-unset", false);
