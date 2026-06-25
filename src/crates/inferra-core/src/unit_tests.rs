@@ -505,6 +505,61 @@ fn workspace_map_can_disable_project_app_synthesis() {
 }
 
 #[test]
+fn workspace_map_uses_runtime_app_aliases_for_service_ownership() {
+    let root = temp_dir("workspace-runtime-app-aliases");
+    let project = root.join("billing-worker");
+    let data_dir = root.join("data");
+    fs::create_dir_all(project.join(".inferra")).expect("create inferra dir");
+    fs::create_dir_all(&data_dir).expect("create data dir");
+    fs::write(
+        project.join("package.json"),
+        r#"{"name":"@acme/billing-api","dependencies":{"fastify":"latest"}}"#,
+    )
+    .expect("write package");
+    fs::write(
+        project.join(".inferra").join("app.toml"),
+        "[app]\nname = \"Billing API\"\n",
+    )
+    .expect("write app manifest");
+
+    let paths = Paths {
+        config_path: root.join("inferra.toml"),
+        data_dir: data_dir.clone(),
+        events_db: data_dir.join("events.db"),
+        incidents_db: data_dir.join("incidents.db"),
+    };
+    initialize_databases(&paths.events_db, &paths.incidents_db).expect("initialize databases");
+    let mut events = EventsStore::open(&paths.events_db)
+        .expect("open events")
+        .expect("events store");
+    events
+        .insert_batch(&[NewEventRecord::minimal(
+            "evt-workspace-alias",
+            "2026-06-25T00:00:00Z",
+            "billing-api-service",
+            SEVERITY_INFO,
+            "billing runtime ready",
+            "app",
+            "2026-06-25T00:00:00Z",
+        )])
+        .expect("insert events");
+
+    let config: TomlValue = "[workspace]\nroots = [\"billing-worker\"]\n"
+        .parse()
+        .expect("parse config");
+    let workspace = build_workspace_map(&config, &paths).expect("workspace map");
+    let mapping = workspace
+        .service_mappings
+        .iter()
+        .find(|mapping| mapping.service_id == "billing-api-service")
+        .expect("service mapping");
+    assert_eq!(mapping.project_path, display_path(&project));
+    assert!(mapping.confidence >= 0.8);
+
+    let _ = fs::remove_dir_all(&root);
+}
+
+#[test]
 fn platform_readiness_marks_cold_deployments_with_concrete_next_steps() {
     let root = temp_dir("platform-readiness-cold");
     let paths = Paths {
@@ -1233,6 +1288,110 @@ fn service_token_mapping_keeps_low_confidence_fallback_available() {
     assert_eq!(mapping.project_path, "/srv/projects/billing-api");
     assert_eq!(mapping.source, "auto");
     assert!(mapping.confidence >= 0.45);
+}
+
+#[test]
+fn service_token_mapping_uses_project_manifest_aliases() {
+    let root = temp_dir("service-token-manifest-alias");
+    let project = root.join("apps").join("billing-worker");
+    fs::create_dir_all(&project).expect("create project");
+    fs::write(
+        project.join("package.json"),
+        r#"{"name":"@acme/billing-api"}"#,
+    )
+    .expect("write package");
+    let projects = vec![WorkspaceProject {
+        path: display_path(&project),
+        kind: "node".into(),
+        marker: "package.json".into(),
+    }];
+
+    let mapping =
+        mapping_from_service_tokens("prod-billing-api-service", &projects).expect("token mapping");
+    assert_eq!(mapping.project_path, display_path(&project));
+    assert!(mapping.signals.iter().any(|signal| {
+        matches!(
+            signal.name.as_str(),
+            "project_manifest_name_match" | "project_manifest_segment_match"
+        )
+    }));
+    assert!(mapping.confidence >= 0.8);
+
+    let _ = fs::remove_dir_all(&root);
+}
+
+#[test]
+fn runtime_app_alias_mapping_resolves_service_variants() {
+    let root = temp_dir("runtime-app-alias-mapping");
+    let project = root.join("billing-api");
+    fs::create_dir_all(project.join(".inferra")).expect("create inferra dir");
+    fs::write(
+        project.join(".inferra").join("app.toml"),
+        "[app]\nname = \"Billing API\"\n",
+    )
+    .expect("write manifest");
+    let project_path = display_path(&project);
+    let apps = vec![WorkspaceRuntimeApp {
+        pid: Some(42),
+        name: "api".into(),
+        display_name: Some("API".into()),
+        runtime: "nodejs".into(),
+        language: Some("nodejs".into()),
+        process_kind: Some("server".into()),
+        framework: Some("fastify".into()),
+        libraries: vec![],
+        log_hints: vec![],
+        log_sources: vec![],
+        app_url: None,
+        endpoints: vec![],
+        health_endpoint: None,
+        app_location: None,
+        resources: None,
+        app_state: None,
+        context_capabilities: vec![],
+        app_structure: vec![],
+        manager: Some("process".into()),
+        status: Some("running".into()),
+        cwd: Some(project_path.clone()),
+        script: Some(display_path(&project.join("server.js"))),
+        command: Some("node server.js".into()),
+        project_path: Some(project_path.clone()),
+        latest_trace_summary: None,
+        confidence: 0.83,
+        source: "process".into(),
+        signals: vec![],
+    }];
+
+    let mapping = mapping_from_runtime_app_alias("billing-api-service", &apps)
+        .expect("runtime alias mapping");
+    assert_eq!(mapping.project_path, project_path);
+    assert_eq!(mapping.service_id, "billing-api-service");
+    assert!(mapping.confidence >= 0.8);
+    assert!(mapping
+        .signals
+        .iter()
+        .any(|signal| signal.name == "inferra_manifest_name_match"));
+
+    let _ = fs::remove_dir_all(&root);
+}
+
+#[test]
+fn service_token_mapping_avoids_ambiguous_project_aliases() {
+    let projects = vec![
+        WorkspaceProject {
+            path: "/srv/apps/payments-api".into(),
+            kind: "node".into(),
+            marker: "package.json".into(),
+        },
+        WorkspaceProject {
+            path: "/srv/apps/payments-worker".into(),
+            kind: "node".into(),
+            marker: "package.json".into(),
+        },
+    ];
+
+    let mapping = mapping_from_service_tokens("payments", &projects);
+    assert!(mapping.is_none());
 }
 
 #[test]

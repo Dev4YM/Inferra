@@ -946,6 +946,10 @@ pub fn build_workspace_map(config: &TomlValue, paths: &Paths) -> Result<Workspac
         {
             continue;
         }
+        if let Some(mapping) = mapping_from_runtime_app_alias(service_id, &runtime_apps) {
+            upsert_workspace_mapping(&mut service_mappings, mapping, &explicit_keys);
+            continue;
+        }
         if let Some(mapping) = mapping_from_service_tokens(service_id, &projects) {
             upsert_workspace_mapping(&mut service_mappings, mapping, &explicit_keys);
         }
@@ -8799,6 +8803,13 @@ struct WorkspaceLogSourceInput<'a> {
     pm2_env: Option<&'a serde_json::Value>,
 }
 
+struct WorkspaceAliasCandidate {
+    value: String,
+    signal_name: &'static str,
+    confidence: f64,
+    detail: String,
+}
+
 struct PlatformReadinessInputs<'a> {
     config: &'a TomlValue,
     paths: &'a Paths,
@@ -10667,63 +10678,327 @@ fn upsert_workspace_mapping(
     }
 }
 
+fn mapping_from_runtime_app_alias(
+    service_id: &str,
+    apps: &[WorkspaceRuntimeApp],
+) -> Option<WorkspaceMapping> {
+    let mut candidates = Vec::new();
+    for app in apps {
+        let Some(mut mapping) = mapping_from_runtime_app(app) else {
+            continue;
+        };
+        if mapping.service_id.eq_ignore_ascii_case(service_id) {
+            continue;
+        }
+        let Some((alias, match_confidence, match_detail)) =
+            best_alias_match(service_id, &runtime_app_aliases(app))
+        else {
+            continue;
+        };
+        mapping.service_id = service_id.to_string();
+        mapping.source = app.manager.clone().unwrap_or_else(|| app.source.clone());
+        mapping.confidence = round_mapping_confidence(match_confidence.max(mapping.confidence));
+        mapping.signals.push(WorkspaceMappingSignal {
+            name: alias.signal_name.into(),
+            confidence: match_confidence,
+            detail: format!(
+                "Matched service id `{service_id}` to runtime app alias `{}` ({match_detail})",
+                alias.value
+            ),
+        });
+        candidates.push(mapping);
+    }
+    select_best_mapping(candidates)
+}
+
 fn mapping_from_service_tokens(
     service_id: &str,
     projects: &[WorkspaceProject],
 ) -> Option<WorkspaceMapping> {
-    let service_tokens = tokenize_workspace_value(service_id);
-    if service_tokens.is_empty() {
-        return None;
-    }
-    let mut best: Option<WorkspaceMapping> = None;
+    let mut candidates = Vec::new();
     for project in projects {
-        let path_tokens = tokenize_workspace_value(&project.path);
-        let overlap: Vec<String> = service_tokens
-            .iter()
-            .filter(|token| path_tokens.contains(*token))
-            .cloned()
-            .collect();
-        if overlap.is_empty() {
+        let Some((alias, confidence, match_detail)) =
+            best_alias_match(service_id, &project_aliases(project))
+        else {
             continue;
-        }
-        let exact_segment = Path::new(&project.path).components().any(|part| {
-            part.as_os_str()
-                .to_string_lossy()
-                .eq_ignore_ascii_case(service_id)
-        });
-        let mut confidence = (0.25 + 0.2 * overlap.len() as f64).min(0.65);
-        if exact_segment {
-            confidence = confidence.max(0.7);
-        }
-        let mut signals = vec![WorkspaceMappingSignal {
-            name: "path_token_match".into(),
-            confidence,
-            detail: format!("shared tokens: {}", overlap.join(",")),
-        }];
-        if exact_segment {
-            signals.push(WorkspaceMappingSignal {
-                name: "exact_path_segment".into(),
-                confidence: 0.7,
-                detail: "service id is a directory segment".into(),
-            });
-        }
+        };
         let mapping = WorkspaceMapping {
             service_id: service_id.to_string(),
             project_path: project.path.clone(),
-            confidence: (confidence * 1000.0).round() / 1000.0,
+            confidence: round_mapping_confidence(confidence),
             source: "auto".into(),
             notes: Some(format!("{} marker {}", project.kind, project.marker)),
-            signals,
+            signals: vec![WorkspaceMappingSignal {
+                name: alias.signal_name.into(),
+                confidence,
+                detail: format!(
+                    "Matched service id `{service_id}` to project alias `{}` ({match_detail})",
+                    alias.value
+                ),
+            }],
         };
+        candidates.push(mapping);
+    }
+    select_best_mapping(candidates)
+}
+
+fn select_best_mapping(candidates: Vec<WorkspaceMapping>) -> Option<WorkspaceMapping> {
+    let mut sorted = candidates;
+    sorted.sort_by(|left, right| {
+        right
+            .confidence
+            .partial_cmp(&left.confidence)
+            .unwrap_or(std::cmp::Ordering::Equal)
+            .then_with(|| left.project_path.cmp(&right.project_path))
+    });
+    let best = sorted.first()?.clone();
+    let ambiguous = sorted.iter().skip(1).any(|candidate| {
+        candidate.project_path != best.project_path
+            && (best.confidence - candidate.confidence).abs() <= 0.03
+    });
+    (!ambiguous).then_some(best)
+}
+
+fn best_alias_match(
+    service_id: &str,
+    aliases: &[WorkspaceAliasCandidate],
+) -> Option<(WorkspaceAliasCandidate, f64, String)> {
+    let mut best: Option<(WorkspaceAliasCandidate, f64, String)> = None;
+    for alias in aliases {
+        let Some((match_confidence, match_detail)) =
+            service_alias_match_confidence(service_id, &alias.value)
+        else {
+            continue;
+        };
+        let confidence = alias.confidence.min(match_confidence);
         if best
             .as_ref()
-            .map(|current| mapping.confidence > current.confidence)
+            .map(|(_, best_confidence, _)| confidence > *best_confidence)
             .unwrap_or(true)
         {
-            best = Some(mapping);
+            best = Some((
+                WorkspaceAliasCandidate {
+                    value: alias.value.clone(),
+                    signal_name: alias.signal_name,
+                    confidence: alias.confidence,
+                    detail: alias.detail.clone(),
+                },
+                confidence,
+                match_detail,
+            ));
         }
     }
     best
+}
+
+fn runtime_app_aliases(app: &WorkspaceRuntimeApp) -> Vec<WorkspaceAliasCandidate> {
+    let mut aliases = vec![WorkspaceAliasCandidate {
+        value: app.name.clone(),
+        signal_name: "runtime_app_name_match",
+        confidence: 0.94,
+        detail: "Runtime app name".into(),
+    }];
+    if let Some(display_name) = app.display_name.as_deref() {
+        push_alias_candidate(
+            &mut aliases,
+            display_name,
+            "runtime_display_name_match",
+            0.82,
+            "Runtime app display name",
+        );
+    }
+    if let Some(project_path) = app.project_path.as_deref() {
+        if let Some(manifest_name) = project_manifest_name(Path::new(project_path)) {
+            push_alias_candidate(
+                &mut aliases,
+                &manifest_name,
+                "project_manifest_name_match",
+                0.88,
+                "Project manifest name",
+            );
+            if let Some(derived_name) = workspace_identity_last_segment(&manifest_name) {
+                push_alias_candidate(
+                    &mut aliases,
+                    &derived_name,
+                    "project_manifest_segment_match",
+                    0.86,
+                    "Project manifest leaf name",
+                );
+            }
+        }
+        if let Some(manifest) = read_inferra_app_manifest(project_path) {
+            let app_table = manifest.get("app").unwrap_or(&manifest);
+            if let Some(name) = toml_string(app_table, "name") {
+                push_alias_candidate(
+                    &mut aliases,
+                    &name,
+                    "inferra_manifest_name_match",
+                    0.92,
+                    "Inferra workspace manifest name",
+                );
+            }
+        }
+        if let Some(dir_name) = Path::new(project_path)
+            .file_name()
+            .and_then(|value| value.to_str())
+        {
+            push_alias_candidate(
+                &mut aliases,
+                dir_name,
+                "project_directory_match",
+                0.76,
+                "Project directory name",
+            );
+        }
+    }
+    if let Some(script) = app.script.as_deref() {
+        if let Some(stem) = Path::new(script)
+            .file_stem()
+            .and_then(|value| value.to_str())
+        {
+            push_alias_candidate(
+                &mut aliases,
+                stem,
+                "runtime_script_match",
+                0.72,
+                "Runtime script file name",
+            );
+        }
+    }
+    aliases
+}
+
+fn project_aliases(project: &WorkspaceProject) -> Vec<WorkspaceAliasCandidate> {
+    let mut aliases = Vec::new();
+    if let Some(dir_name) = Path::new(&project.path)
+        .file_name()
+        .and_then(|value| value.to_str())
+    {
+        push_alias_candidate(
+            &mut aliases,
+            dir_name,
+            "project_directory_match",
+            0.72,
+            "Project directory name",
+        );
+    }
+    if let Some(manifest_name) = project_manifest_name(Path::new(&project.path)) {
+        push_alias_candidate(
+            &mut aliases,
+            &manifest_name,
+            "project_manifest_name_match",
+            0.86,
+            "Project manifest name",
+        );
+        if let Some(derived_name) = workspace_identity_last_segment(&manifest_name) {
+            push_alias_candidate(
+                &mut aliases,
+                &derived_name,
+                "project_manifest_segment_match",
+                0.84,
+                "Project manifest leaf name",
+            );
+        }
+    }
+    if let Some(manifest) = read_inferra_app_manifest(&project.path) {
+        let app_table = manifest.get("app").unwrap_or(&manifest);
+        if let Some(name) = toml_string(app_table, "name") {
+            push_alias_candidate(
+                &mut aliases,
+                &name,
+                "inferra_manifest_name_match",
+                0.9,
+                "Inferra workspace manifest name",
+            );
+        }
+    }
+    aliases
+}
+
+fn push_alias_candidate(
+    aliases: &mut Vec<WorkspaceAliasCandidate>,
+    value: &str,
+    signal_name: &'static str,
+    confidence: f64,
+    detail: &str,
+) {
+    let value = value.trim();
+    if value.is_empty() || normalize_workspace_identity(value).len() < 3 {
+        return;
+    }
+    if aliases
+        .iter()
+        .any(|existing| existing.value.eq_ignore_ascii_case(value))
+    {
+        return;
+    }
+    aliases.push(WorkspaceAliasCandidate {
+        value: value.to_string(),
+        signal_name,
+        confidence,
+        detail: detail.into(),
+    });
+}
+
+fn service_alias_match_confidence(service_id: &str, alias: &str) -> Option<(f64, String)> {
+    let service_normalized = normalize_workspace_identity(service_id);
+    let alias_normalized = normalize_workspace_identity(alias);
+    if service_normalized.is_empty() || alias_normalized.is_empty() {
+        return None;
+    }
+    if service_normalized == alias_normalized {
+        return Some((0.97, "exact normalized match".into()));
+    }
+    let service_tokens = tokenize_workspace_value(service_id);
+    let alias_tokens = tokenize_workspace_value(alias);
+    let alias_is_too_generic = alias_tokens.len() <= 1 && alias_normalized.len() <= 4;
+    if !alias_tokens.is_empty() && alias_tokens.is_subset(&service_tokens) {
+        if alias_is_too_generic {
+            return None;
+        }
+        let shared = alias_tokens.iter().cloned().collect::<Vec<_>>().join(",");
+        return Some((
+            0.88,
+            format!("alias tokens contained in service id: {shared}"),
+        ));
+    }
+    if service_normalized.starts_with(&alias_normalized)
+        || service_normalized.ends_with(&alias_normalized)
+    {
+        if alias_is_too_generic {
+            return None;
+        }
+        return Some((0.81, "service id extends a normalized alias".into()));
+    }
+    let overlap: Vec<String> = service_tokens
+        .iter()
+        .filter(|token| alias_tokens.contains(*token))
+        .cloned()
+        .collect();
+    if overlap.len() >= 2 {
+        return Some((0.74, format!("shared alias tokens: {}", overlap.join(","))));
+    }
+    None
+}
+
+fn normalize_workspace_identity(value: &str) -> String {
+    value
+        .chars()
+        .filter(|ch| ch.is_ascii_alphanumeric())
+        .map(|ch| ch.to_ascii_lowercase())
+        .collect()
+}
+
+fn workspace_identity_last_segment(value: &str) -> Option<String> {
+    value
+        .rsplit(['/', '\\'])
+        .find(|segment| !segment.trim().is_empty())
+        .map(str::trim)
+        .map(str::to_string)
+}
+
+fn round_mapping_confidence(value: f64) -> f64 {
+    (value * 1000.0).round() / 1000.0
 }
 
 fn project_for_paths(
