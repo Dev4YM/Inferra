@@ -574,6 +574,15 @@ fn platform_readiness_marks_cold_deployments_with_concrete_next_steps() {
     let workspace = WorkspaceMapResponse {
         enabled: true,
         support_layers: vec![],
+        setup: WorkspaceSetupGuide {
+            status: "blocked".into(),
+            score: 0,
+            headline: "blocked".into(),
+            summary: "blocked".into(),
+            issues: vec![],
+            actions: vec![],
+            recommended_roots: vec![],
+        },
         projects: vec![],
         runtime_apps: vec![],
         service_mappings: vec![],
@@ -623,6 +632,15 @@ fn platform_readiness_marks_mapped_signal_flow_as_ready() {
     let workspace = WorkspaceMapResponse {
         enabled: true,
         support_layers: vec![],
+        setup: WorkspaceSetupGuide {
+            status: "ready".into(),
+            score: 100,
+            headline: "ready".into(),
+            summary: "ready".into(),
+            issues: vec![],
+            actions: vec![],
+            recommended_roots: vec![],
+        },
         projects: vec![WorkspaceProject {
             path: "/code/app".into(),
             kind: "node".into(),
@@ -646,6 +664,7 @@ fn platform_readiness_marks_mapped_signal_flow_as_ready() {
             resources: None,
             app_state: None,
             context_capabilities: vec![],
+            setup: None,
             app_structure: vec![],
             manager: Some("workspace".into()),
             status: Some("registered".into()),
@@ -726,6 +745,7 @@ fn runtime_apps_map_to_projects_with_manager_confidence() {
         resources: None,
         app_state: None,
         context_capabilities: Vec::new(),
+        setup: None,
         app_structure: Vec::new(),
         manager: Some("pm2".into()),
         status: Some("online".into()),
@@ -1005,6 +1025,7 @@ kind = "file"
         resources: None,
         app_state: None,
         context_capabilities: Vec::new(),
+        setup: None,
         app_structure: Vec::new(),
         manager: None,
         status: None,
@@ -1193,6 +1214,152 @@ fn workspace_log_sources_include_pm2_home_files() {
 }
 
 #[test]
+fn workspace_root_candidate_prefers_home_roots_when_candidate_is_under_home() {
+    let _guard = env_lock()
+        .lock()
+        .unwrap_or_else(|poisoned| poisoned.into_inner());
+    let root = temp_dir("workspace-root-candidate");
+    let scan_root = root.join("managed/Inferra");
+    let home = root.join("home");
+    let candidate = home.join("code");
+    let project = candidate.join("billing-api");
+    fs::create_dir_all(&scan_root).expect("create scan root");
+    fs::create_dir_all(&project).expect("create project");
+    fs::write(project.join("package.json"), "{}").expect("write project marker");
+
+    let old_home = std::env::var_os("HOME");
+    let old_userprofile = std::env::var_os("USERPROFILE");
+    unsafe {
+        std::env::set_var("HOME", &home);
+        std::env::set_var("USERPROFILE", &home);
+    }
+
+    let config: TomlValue = "[workspace]\n".parse().expect("parse config");
+    let candidate = scan_workspace_root_candidate(
+        &config,
+        &scan_root,
+        &[scan_root.clone()],
+        candidate,
+        "manual",
+    )
+    .expect("workspace candidate");
+
+    unsafe {
+        if let Some(value) = old_home {
+            std::env::set_var("HOME", value);
+        } else {
+            std::env::remove_var("HOME");
+        }
+        if let Some(value) = old_userprofile {
+            std::env::set_var("USERPROFILE", value);
+        } else {
+            std::env::remove_var("USERPROFILE");
+        }
+    }
+
+    assert_eq!(candidate.config_key, "workspace.home_roots");
+    assert_eq!(candidate.config_value, "code");
+    assert_eq!(candidate.project_count, 1);
+    assert!(candidate
+        .sample_projects
+        .iter()
+        .any(|item| item == "billing-api"));
+
+    let _ = fs::remove_dir_all(&root);
+}
+
+#[test]
+fn workspace_app_setup_guide_emits_manifest_snippet_from_detected_signals() {
+    let root = temp_dir("workspace-app-setup-guide");
+    let project = root.join("billing-api");
+    fs::create_dir_all(project.join("logs")).expect("create logs");
+    fs::write(project.join("logs/app.log"), "ready\n").expect("write log");
+    let project_path = display_path(&project);
+    let app = WorkspaceRuntimeApp {
+        pid: None,
+        name: "billing-api".into(),
+        display_name: Some("Billing API".into()),
+        runtime: "nodejs".into(),
+        language: Some("nodejs".into()),
+        process_kind: Some("server".into()),
+        framework: Some("fastify".into()),
+        libraries: Vec::new(),
+        log_hints: Vec::new(),
+        log_sources: vec![WorkspaceLogSource {
+            kind: "file".into(),
+            label: "App log".into(),
+            path: Some(display_path(&project.join("logs/app.log"))),
+            command: None,
+            stream: None,
+            exists: Some(true),
+            readable: Some(true),
+            source: "project".into(),
+            confidence: 0.9,
+        }],
+        app_url: Some("http://127.0.0.1:3001".into()),
+        endpoints: vec![WorkspaceAppEndpoint {
+            url: "http://127.0.0.1:3001".into(),
+            host: Some("127.0.0.1".into()),
+            port: Some(3001),
+            protocol: "http".into(),
+            source: "command".into(),
+            confidence: 0.9,
+        }],
+        health_endpoint: Some(WorkspaceAppEndpoint {
+            url: "http://127.0.0.1:3001/health".into(),
+            host: Some("127.0.0.1".into()),
+            port: Some(3001),
+            protocol: "http".into(),
+            source: "manifest".into(),
+            confidence: 0.9,
+        }),
+        app_location: None,
+        resources: None,
+        app_state: Some(WorkspaceAppState {
+            health: "registered".into(),
+            status: Some("not_running".into()),
+            reason: None,
+            started_at: None,
+            restarts: None,
+            observed_by: "workspace".into(),
+        }),
+        context_capabilities: Vec::new(),
+        setup: None,
+        app_structure: Vec::new(),
+        manager: Some("workspace".into()),
+        status: Some("registered".into()),
+        cwd: Some(project_path.clone()),
+        script: None,
+        command: None,
+        project_path: Some(project_path),
+        latest_trace_summary: None,
+        confidence: 0.8,
+        source: "project".into(),
+        signals: Vec::new(),
+    };
+
+    let setup = build_workspace_app_setup_guide(&app, &[]);
+    let manifest_action = setup
+        .actions
+        .iter()
+        .find(|action| action.id == "create-app-manifest")
+        .expect("manifest action");
+    let snippet = manifest_action
+        .manifest_snippet
+        .as_deref()
+        .expect("manifest snippet");
+    assert!(snippet.contains("[app]"));
+    assert!(snippet.contains("name = \"Billing API\""));
+    assert!(snippet.contains("framework = \"fastify\""));
+    assert!(snippet.contains("[heartbeat]"));
+    assert!(snippet.contains("path = \"/health\""));
+    assert!(snippet.contains("[[logs]]"));
+    assert!(snippet.contains("path = \"logs/app.log\""));
+
+    let _ = fs::remove_dir_all(&root);
+}
+
+#[test]
 fn workspace_project_acceptance_skips_installed_packages_unless_registered() {
     let root = temp_dir("workspace-installed-package-filter");
     let package = root.join("node_modules/pm2");
@@ -1249,6 +1416,7 @@ fn dependency_scan_discovers_framework_log_files_without_manifest() {
         resources: None,
         app_state: None,
         context_capabilities: Vec::new(),
+        setup: None,
         app_structure: Vec::new(),
         manager: None,
         status: None,
@@ -1349,6 +1517,7 @@ fn runtime_app_alias_mapping_resolves_service_variants() {
         resources: None,
         app_state: None,
         context_capabilities: vec![],
+        setup: None,
         app_structure: vec![],
         manager: Some("process".into()),
         status: Some("running".into()),

@@ -14,6 +14,7 @@ import type {
   WorkspaceAppResourcesResponse,
   WorkspaceMapResponse,
   WorkspaceRuntimeApp,
+  WorkspaceSetupAction,
 } from "@/api";
 import { errorMessage, postJson } from "@/api";
 import { Button } from "@/components/ui/button";
@@ -135,6 +136,76 @@ export function WorkspacePage({ mode }: { mode: Mode }) {
         <SummaryCard label="Mappings" value={String(workspace.data.service_mappings.length)} />
         <SummaryCard label="Unmapped services" value={String(workspace.data.unmapped_services.length)} />
       </div>
+
+      <Card>
+        <CardHeader>
+          <div className="flex flex-wrap items-center gap-3">
+            <CardTitle>Workspace setup</CardTitle>
+            <Badge variant={setupBadgeVariant(workspace.data.setup.status)}>
+              {formatDisplayValue(workspace.data.setup.status)}
+            </Badge>
+            <Badge variant="outline">Score {workspace.data.setup.score}</Badge>
+          </div>
+        </CardHeader>
+        <CardContent className="space-y-4">
+          <div>
+            <p className="font-medium">{workspace.data.setup.headline}</p>
+            <p className="mt-1 text-sm text-muted-foreground">{workspace.data.setup.summary}</p>
+          </div>
+          {workspace.data.setup.issues?.length ? (
+            <div className="grid gap-3 md:grid-cols-2">
+              {workspace.data.setup.issues.map((issue) => (
+                <div key={issue.id} className="rounded-md border border-border bg-panel-inset p-4">
+                  <div className="flex flex-wrap items-center gap-2">
+                    <Badge variant={setupBadgeVariant(issue.severity)}>{formatDisplayValue(issue.severity)}</Badge>
+                    <p className="font-medium">{issue.title}</p>
+                  </div>
+                  <p className="mt-2 text-sm text-muted-foreground">{issue.detail}</p>
+                </div>
+              ))}
+            </div>
+          ) : null}
+          {workspace.data.setup.recommended_roots?.length ? (
+            <div className="space-y-3">
+              <p className="text-xs font-semibold uppercase tracking-[0.18em] text-muted-foreground">
+                Recommended roots
+              </p>
+              <div className="grid gap-3 xl:grid-cols-2">
+                {workspace.data.setup.recommended_roots.map((candidate) => (
+                  <div key={`${candidate.path}-${candidate.config_key}`} className="rounded-md border border-border bg-panel-inset p-4">
+                    <div className="flex flex-wrap items-center gap-2">
+                      <Badge variant="outline">{candidate.config_key}</Badge>
+                      <Badge variant="outline">{candidate.project_count} project(s)</Badge>
+                      <Badge variant="outline">{formatDisplayValue(candidate.source)}</Badge>
+                    </div>
+                    <p className="mt-2 break-all font-mono text-xs">{candidate.path}</p>
+                    <p className="mt-2 break-all font-mono text-xs text-muted-foreground">
+                      {candidate.config_key} += "{candidate.config_value}"
+                    </p>
+                    {candidate.sample_projects?.length ? (
+                      <div className="mt-3 flex flex-wrap gap-2">
+                        {candidate.sample_projects.map((project) => (
+                          <Badge key={project} variant="outline">
+                            {project}
+                          </Badge>
+                        ))}
+                      </div>
+                    ) : null}
+                  </div>
+                ))}
+              </div>
+            </div>
+          ) : null}
+          {workspace.data.setup.actions?.length ? (
+            <div className="space-y-3">
+              <p className="text-xs font-semibold uppercase tracking-[0.18em] text-muted-foreground">Next actions</p>
+              {workspace.data.setup.actions.map((action) => (
+                <SetupActionCard key={action.id} action={action} />
+              ))}
+            </div>
+          ) : null}
+        </CardContent>
+      </Card>
 
       {!workspace.data.projects.length ? (
         <Card className="border-dashed">
@@ -636,11 +707,46 @@ function WorkspaceAppDetails({
       </div>
 
       <div className="grid gap-4 xl:grid-cols-3">
-        <Card>
-          <CardHeader>
-            <CardTitle>App state</CardTitle>
-          </CardHeader>
-          <CardContent className="space-y-3 text-sm">
+      <Card>
+        <CardHeader>
+          <div className="flex flex-wrap items-center gap-3">
+            <CardTitle>Setup readiness</CardTitle>
+            <Badge variant={setupBadgeVariant(app.setup?.status ?? "partial")}>
+              {formatDisplayValue(app.setup?.status ?? "partial")}
+            </Badge>
+            {app.setup ? <Badge variant="outline">Score {app.setup.score}</Badge> : null}
+          </div>
+        </CardHeader>
+        <CardContent className="space-y-3 text-sm">
+            <p className="text-sm text-muted-foreground">{app.setup?.summary ?? "Setup guidance is unavailable for this app."}</p>
+            {app.setup?.issues?.length ? (
+              <div className="space-y-3">
+                {app.setup.issues.map((issue) => (
+                  <div key={issue.id} className="rounded-md border border-border bg-panel-inset p-3">
+                    <div className="flex flex-wrap items-center gap-2">
+                      <Badge variant={setupBadgeVariant(issue.severity)}>{formatDisplayValue(issue.severity)}</Badge>
+                      <p className="font-medium">{issue.title}</p>
+                    </div>
+                    <p className="mt-2 text-xs text-muted-foreground">{issue.detail}</p>
+                  </div>
+                ))}
+              </div>
+            ) : null}
+            {app.setup?.actions?.length ? (
+              <div className="space-y-3">
+                {app.setup.actions.map((action) => (
+                  <SetupActionCard key={action.id} action={action} />
+                ))}
+              </div>
+            ) : null}
+        </CardContent>
+      </Card>
+
+      <Card>
+        <CardHeader>
+          <CardTitle>App state</CardTitle>
+        </CardHeader>
+        <CardContent className="space-y-3 text-sm">
             <InfoLine label="Health" value={app.app_state?.health ? formatDisplayValue(app.app_state.health) : "-"} />
             <InfoLine label="Status" value={app.app_state?.status ? formatDisplayValue(app.app_state.status) : app.status ?? "-"} />
             <InfoLine label="Observed by" value={formatDisplayValue(app.app_state?.observed_by ?? app.manager ?? app.source)} />
@@ -651,9 +757,9 @@ function WorkspaceAppDetails({
 
         <Card>
           <CardHeader>
-            <CardTitle>Resources</CardTitle>
-          </CardHeader>
-          <CardContent className="space-y-3 text-sm">
+          <CardTitle>Resources</CardTitle>
+        </CardHeader>
+        <CardContent className="space-y-3 text-sm">
             <div className="mb-2 flex items-center gap-2">
               <Badge variant={liveResources.data?.live ? "success" : "outline"}>
                 {liveResources.data?.live ? "Live" : "Snapshot"}
@@ -818,6 +924,62 @@ function formatRawCpuPercent(resources: WorkspaceAppResources | null | undefined
 
 function formatPercentValue(value: number): string {
   return Number.isInteger(value) ? String(value) : value.toFixed(2).replace(/\.?0+$/, "");
+}
+
+function SetupActionCard({ action }: { action: WorkspaceSetupAction }) {
+  return (
+    <div className="rounded-md border border-border bg-panel-inset p-4">
+      <div className="flex flex-wrap items-center justify-between gap-3">
+        <div>
+          <p className="font-medium">{action.title}</p>
+          <p className="mt-1 text-sm text-muted-foreground">{action.detail}</p>
+        </div>
+        {action.href ? (
+          <Button variant="outline" size="sm" asChild>
+            <Link to={action.href}>Open</Link>
+          </Button>
+        ) : null}
+      </div>
+      {action.command ? <p className="mt-3 break-all font-mono text-xs text-muted-foreground">{action.command}</p> : null}
+      {action.config?.length ? (
+        <div className="mt-3 space-y-2">
+          {action.config.map((item, index) => (
+            <div key={`${action.id}-${item.key}-${index}`} className="rounded-md border border-border/60 bg-background p-3">
+              <p className="font-mono text-xs">
+                {item.key}: {stringifyConfigValue(item.value)}
+              </p>
+              <p className="mt-1 text-xs text-muted-foreground">{item.reason}</p>
+            </div>
+          ))}
+        </div>
+      ) : null}
+      {action.manifest_path ? <p className="mt-3 break-all font-mono text-xs text-muted-foreground">{action.manifest_path}</p> : null}
+      {action.manifest_snippet ? (
+        <pre className="mt-3 overflow-x-auto rounded-md border border-border/60 bg-background p-3 text-xs leading-6">
+          <code>{action.manifest_snippet}</code>
+        </pre>
+      ) : null}
+    </div>
+  );
+}
+
+function setupBadgeVariant(status: string) {
+  switch (status.trim().toLowerCase()) {
+    case "ready":
+      return "success";
+    case "warning":
+    case "partial":
+      return "warning";
+    case "critical":
+    case "blocked":
+      return "destructive";
+    default:
+      return "outline";
+  }
+}
+
+function stringifyConfigValue(value: unknown): string {
+  return JSON.stringify(value);
 }
 
 function InfoLine({ label, value }: { label: string; value: string }) {

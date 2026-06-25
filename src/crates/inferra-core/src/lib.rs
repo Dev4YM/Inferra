@@ -13,9 +13,11 @@ use inferra_contracts::{
     PlatformReadiness, PlatformReadinessAction, PlatformReadinessIssue, QuickAnalysis,
     RuntimeContainer, RuntimeContext, RuntimeProcess, ServiceRow, SeverityValue,
     WorkspaceAppCapability, WorkspaceAppEndpoint, WorkspaceAppLocation, WorkspaceAppResources,
-    WorkspaceAppState, WorkspaceAppStructureItem, WorkspaceLogSource, WorkspaceMapResponse,
-    WorkspaceMapping, WorkspaceMappingSignal, WorkspaceProject, WorkspaceRuntimeApp,
-    WorkspaceSupportItem, WorkspaceSupportLayer,
+    WorkspaceAppSetupGuide, WorkspaceAppState, WorkspaceAppStructureItem,
+    WorkspaceConfigSuggestion, WorkspaceLogSource, WorkspaceMapResponse, WorkspaceMapping,
+    WorkspaceMappingSignal, WorkspaceProject, WorkspaceRootCandidate, WorkspaceRuntimeApp,
+    WorkspaceSetupAction, WorkspaceSetupGuide, WorkspaceSetupIssue, WorkspaceSupportItem,
+    WorkspaceSupportLayer,
 };
 use inferra_storage::{
     AdaptiveLearningAuditQuery, AdaptiveLearningHistoryQuery, EventsStore, GovernanceSummary,
@@ -24,6 +26,7 @@ use inferra_storage::{
     StoredAdaptiveReviewViewSelection, StoredHypothesis, StoredInferenceGraphSnapshot,
 };
 use serde::{Deserialize, Serialize};
+use serde_json::json;
 use std::path::{Path, PathBuf};
 use std::process::Command;
 use sysinfo::{Disks, System};
@@ -958,19 +961,757 @@ pub fn build_workspace_map(config: &TomlValue, paths: &Paths) -> Result<Workspac
         .iter()
         .map(|m| m.service_id.clone())
         .collect();
-    let unmapped_services = service_ids
+    let unmapped_services: Vec<String> = service_ids
         .into_iter()
         .filter(|s| enabled && !mapped_services.contains(s) && !is_infrastructure_service_id(s))
         .collect();
+    let mut runtime_apps = runtime_apps;
+    for app in &mut runtime_apps {
+        app.setup = Some(build_workspace_app_setup_guide(app, &service_mappings));
+    }
+    let setup = build_workspace_setup_guide(
+        config,
+        scan_root,
+        &discovery_roots,
+        &projects,
+        &runtime_apps,
+        &service_mappings,
+        &unmapped_services,
+    );
     Ok(WorkspaceMapResponse {
         enabled,
         support_layers: workspace_support_layers(),
+        setup,
         projects,
         runtime_apps,
         service_mappings,
         unmapped_services,
         config_mappings,
     })
+}
+
+fn build_workspace_setup_guide(
+    config: &TomlValue,
+    scan_root: &Path,
+    discovery_roots: &[PathBuf],
+    projects: &[WorkspaceProject],
+    runtime_apps: &[WorkspaceRuntimeApp],
+    service_mappings: &[WorkspaceMapping],
+    unmapped_services: &[String],
+) -> WorkspaceSetupGuide {
+    let recommended_roots =
+        workspace_root_candidates(config, scan_root, discovery_roots, projects, runtime_apps);
+    let mut score: i32 = 100;
+    let mut issues = Vec::new();
+    let mut actions = Vec::new();
+    let apps_with_manifests = runtime_apps
+        .iter()
+        .filter(|app| workspace_app_has_manifest(app))
+        .count();
+    let apps_missing_logs = runtime_apps
+        .iter()
+        .filter(|app| {
+            !app.log_sources.iter().any(|source| {
+                source.readable.unwrap_or(false)
+                    || matches!(source.kind.as_str(), "stream" | "manager")
+            })
+        })
+        .count();
+
+    if projects.is_empty() {
+        score -= 35;
+        issues.push(workspace_setup_issue(
+            "no-projects",
+            if !recommended_roots.is_empty() {
+                "warning"
+            } else {
+                "critical"
+            },
+            "No workspace projects are attached yet",
+            if recommended_roots.is_empty() {
+                "Inferra has not found any supported project roots from the current configuration or common code locations."
+            } else {
+                "Inferra is running, but it still needs one or more real code roots before incidents and services can map back to projects."
+            },
+        ));
+        if !recommended_roots.is_empty() {
+            let config = recommended_roots
+                .iter()
+                .take(3)
+                .map(|candidate| WorkspaceConfigSuggestion {
+                    key: candidate.config_key.clone(),
+                    value: json!(candidate.config_value),
+                    reason: format!(
+                        "{} supported project(s) were detected under {}",
+                        candidate.project_count, candidate.path
+                    ),
+                })
+                .collect();
+            actions.push(workspace_setup_action(
+                "add-workspace-roots",
+                "Add discovered code roots",
+                "Start with one of the suggested roots so the workspace scanner can resolve real projects immediately.",
+                Some("/settings"),
+                None,
+                config,
+                None,
+                None,
+            ));
+        } else {
+            actions.push(workspace_setup_action(
+                "set-workspace-roots",
+                "Set workspace roots manually",
+                "Add a concrete code directory under `workspace.roots` or `workspace.home_roots`, then rerun the workspace scan.",
+                Some("/settings"),
+                None,
+                Vec::new(),
+                None,
+                None,
+            ));
+        }
+    }
+
+    if !projects.is_empty() && runtime_apps.is_empty() {
+        score -= 14;
+        issues.push(workspace_setup_issue(
+            "no-runtime-apps",
+            "info",
+            "Projects exist, but no workspace apps are attached",
+            "Inferra can see project folders, but it has not connected them to any running processes or synthesized app registrations yet.",
+        ));
+        actions.push(workspace_setup_action(
+            "rescan-runtime",
+            "Start an app and rescan",
+            "Running one app from a discovered project gives Inferra endpoints, process ownership, and app-specific drilldowns.",
+            Some("/workspace"),
+            Some("inferra workspace map".into()),
+            Vec::new(),
+            None,
+            None,
+        ));
+    }
+
+    if !runtime_apps.is_empty() && apps_with_manifests == 0 {
+        score -= 18;
+        issues.push(workspace_setup_issue(
+            "apps-unregistered",
+            "warning",
+            "Detected apps still rely on inferred metadata only",
+            "Runtime detection is working, but none of the attached workspace apps has an explicit `.inferra/app.toml` manifest yet.",
+        ));
+        if let Some(app) = runtime_apps
+            .iter()
+            .find(|app| workspace_app_manifest_snippet(app).is_some())
+        {
+            actions.push(workspace_setup_action(
+                "register-app-metadata",
+                "Register one app manifest",
+                "Create one `.inferra/app.toml` from the detected signals first; it will stabilize app URLs, logs, and future ownership mapping.",
+                Some("/workspace"),
+                None,
+                Vec::new(),
+                workspace_app_manifest_path(app),
+                workspace_app_manifest_snippet(app),
+            ));
+        }
+    }
+
+    if apps_missing_logs > 0 {
+        score -= 10;
+        issues.push(workspace_setup_issue(
+            "apps-missing-logs",
+            "info",
+            "Some workspace apps still have no readable log source",
+            "AI monitoring and app drilldowns become much more useful once each app has at least one readable file, stream, or manager log source.",
+        ));
+    }
+
+    if !unmapped_services.is_empty() && !service_mappings.is_empty() {
+        score -= 10;
+        issues.push(workspace_setup_issue(
+            "partial-ownership",
+            "info",
+            "Some observed services still have no workspace owner",
+            "The platform is partially mapped, but a subset of services still lacks project ownership.",
+        ));
+    } else if !unmapped_services.is_empty() {
+        score -= 18;
+        issues.push(workspace_setup_issue(
+            "no-service-ownership",
+            "warning",
+            "Observed services are not mapped back to projects yet",
+            "Inferra is receiving runtime evidence, but service ownership is still missing, which weakens incident routing and graph context.",
+        ));
+        actions.push(workspace_setup_action(
+            "map-services",
+            "Map observed services",
+            "After at least one project is detected, connect noisy or critical service ids to their real project paths.",
+            Some("/systems"),
+            Some("inferra workspace services".into()),
+            Vec::new(),
+            None,
+            None,
+        ));
+    }
+
+    actions.truncate(4);
+    issues.truncate(5);
+    score = score.clamp(0, 100);
+    let status = if score >= 85 {
+        "ready"
+    } else if score >= 60 {
+        "partial"
+    } else {
+        "blocked"
+    };
+    let headline = match status {
+        "ready" => "Workspace context is mostly operational.",
+        "partial" => "Workspace context is usable, but still missing key setup layers.",
+        _ => "Workspace context is not established yet.",
+    }
+    .to_string();
+    let summary = if projects.is_empty() {
+        if let Some(candidate) = recommended_roots.first() {
+            format!(
+                "Inferra can already see a promising code root at {} with {} supported project(s); wiring that root into config is the fastest way to make the platform useful.",
+                candidate.path, candidate.project_count
+            )
+        } else {
+            "Inferra needs at least one concrete code root before incidents, services, and app views can map back to software you actually own.".into()
+        }
+    } else if runtime_apps.is_empty() {
+        format!(
+            "{} project(s) are visible, but Inferra still needs one running or registered app to deepen workspace context.",
+            projects.len()
+        )
+    } else {
+        format!(
+            "{} project(s), {} app(s), and {} explicit service mapping(s) are already attached.",
+            projects.len(),
+            runtime_apps.len(),
+            service_mappings.len()
+        )
+    };
+    WorkspaceSetupGuide {
+        status: status.into(),
+        score: score as u8,
+        headline,
+        summary,
+        issues,
+        actions,
+        recommended_roots,
+    }
+}
+
+fn build_workspace_app_setup_guide(
+    app: &WorkspaceRuntimeApp,
+    service_mappings: &[WorkspaceMapping],
+) -> WorkspaceAppSetupGuide {
+    let mut score: i32 = 100;
+    let mut issues = Vec::new();
+    let mut actions = Vec::new();
+    let has_manifest = workspace_app_has_manifest(app);
+    let has_project = app.project_path.is_some() || app.cwd.is_some();
+    let has_endpoint = !app.endpoints.is_empty() || app.app_url.is_some();
+    let has_health = app.health_endpoint.is_some();
+    let has_readable_logs = app.log_sources.iter().any(|source| {
+        source.readable.unwrap_or(false) || matches!(source.kind.as_str(), "stream" | "manager")
+    });
+    let is_running = app.pid.is_some()
+        || app
+            .app_state
+            .as_ref()
+            .and_then(|state| state.status.as_deref())
+            .map(|status| !matches!(status, "not_running" | "stopped" | "offline" | "errored"))
+            .unwrap_or(false);
+    let is_mapped = workspace_app_has_service_mapping(app, service_mappings);
+
+    if !has_project {
+        score -= 30;
+        issues.push(workspace_setup_issue(
+            "unattached-project",
+            "warning",
+            "This app is not attached to a project folder",
+            "Inferra can see the process, but it still lacks a stable project path for file inspection, manifest lookup, and ownership.",
+        ));
+    }
+    if !has_manifest {
+        score -= 20;
+        issues.push(workspace_setup_issue(
+            "manifest-missing",
+            "warning",
+            "No explicit `.inferra/app.toml` is registered",
+            "The app is relying on inferred metadata only, which is weaker than an explicit app manifest.",
+        ));
+        if let Some(snippet) = workspace_app_manifest_snippet(app) {
+            actions.push(workspace_setup_action(
+                "create-app-manifest",
+                "Create `.inferra/app.toml`",
+                "Register the app with explicit metadata so future scans keep stable URLs, logs, and process identity.",
+                Some("/workspace"),
+                None,
+                Vec::new(),
+                workspace_app_manifest_path(app),
+                Some(snippet),
+            ));
+        }
+    }
+    if !has_readable_logs {
+        score -= 20;
+        issues.push(workspace_setup_issue(
+            "logs-missing",
+            "warning",
+            "No readable log source is attached",
+            "App monitoring is much less useful until Inferra can read at least one file, stream, or manager-backed log source for this app.",
+        ));
+    }
+    if !has_endpoint {
+        score -= 12;
+        issues.push(workspace_setup_issue(
+            "endpoint-missing",
+            "info",
+            "No app URL or listening endpoint is registered",
+            "Inferra cannot deep-link into the app or derive downstream heartbeat checks until an endpoint is observed or declared.",
+        ));
+    }
+    if !has_health {
+        score -= 8;
+        issues.push(workspace_setup_issue(
+            "heartbeat-missing",
+            "info",
+            "No heartbeat endpoint is registered",
+            "A health endpoint lets the workspace view surface liveliness without depending only on process presence.",
+        ));
+    }
+    if !is_mapped && has_project {
+        score -= 15;
+        issues.push(workspace_setup_issue(
+            "service-ownership-missing",
+            "warning",
+            "No observed service is mapped back to this app yet",
+            "The app is known to the workspace view, but service ownership has not been established for incidents and event drilldowns.",
+        ));
+        actions.push(workspace_setup_action(
+            "map-service-to-app",
+            "Map a service to this app",
+            "Once a relevant service id appears in Systems, map it to this app's project so evidence and incidents line up.",
+            Some("/systems"),
+            Some("inferra workspace services".into()),
+            Vec::new(),
+            None,
+            None,
+        ));
+    }
+    if !is_running && has_project {
+        score -= 10;
+        issues.push(workspace_setup_issue(
+            "app-not-running",
+            "info",
+            "The project is registered, but no live runtime is attached right now",
+            "Starting the app and rescanning gives Inferra process resources, runtime state, and stronger endpoint evidence.",
+        ));
+        actions.push(workspace_setup_action(
+            "start-app-and-rescan",
+            "Start the app and rescan",
+            "Inferra can keep the project registered while it is offline, but live runtime signals make the app view materially more useful.",
+            Some("/workspace"),
+            Some("inferra workspace map".into()),
+            Vec::new(),
+            None,
+            None,
+        ));
+    }
+
+    if has_manifest && !has_readable_logs && workspace_app_manifest_snippet(app).is_some() {
+        actions.push(workspace_setup_action(
+            "extend-app-manifest",
+            "Expand the existing manifest",
+            "Add the missing URL, logs, or heartbeat fields to the current `.inferra/app.toml` so the app view stops depending on guesswork.",
+            Some("/workspace"),
+            None,
+            Vec::new(),
+            workspace_app_manifest_path(app),
+            workspace_app_manifest_snippet(app),
+        ));
+    }
+
+    actions.truncate(4);
+    issues.truncate(5);
+    score = score.clamp(0, 100);
+    let status = if score >= 85 {
+        "ready"
+    } else if score >= 60 {
+        "partial"
+    } else {
+        "blocked"
+    };
+    let summary = match status {
+        "ready" => "This app already has enough explicit metadata for stable workspace drilldowns.".into(),
+        "partial" => "This app is visible, but it still needs explicit metadata or ownership to become consistently useful.".into(),
+        _ => "This app needs explicit setup before the workspace view can rely on it.".into(),
+    };
+    WorkspaceAppSetupGuide {
+        status: status.into(),
+        score: score as u8,
+        summary,
+        issues,
+        actions,
+    }
+}
+
+fn workspace_root_candidates(
+    config: &TomlValue,
+    scan_root: &Path,
+    discovery_roots: &[PathBuf],
+    projects: &[WorkspaceProject],
+    runtime_apps: &[WorkspaceRuntimeApp],
+) -> Vec<WorkspaceRootCandidate> {
+    let mut roots = Vec::new();
+    let mut push_candidate = |path: PathBuf, source: &str| {
+        let resolved = canonical_path_or_self(&path);
+        if resolved.is_dir()
+            && !roots
+                .iter()
+                .any(|(existing, _): &(PathBuf, String)| *existing == resolved)
+        {
+            roots.push((resolved, source.to_string()));
+        }
+    };
+
+    push_candidate(scan_root.to_path_buf(), "config_root");
+    if let Some(home) = user_home_dir() {
+        for relative in DEFAULT_HOME_WORKSPACE_ROOTS {
+            push_candidate(home.join(relative), "home_default");
+        }
+    }
+    for root in probable_external_workspace_roots() {
+        push_candidate(root, "mount_discovery");
+    }
+    for project in projects {
+        push_candidate(PathBuf::from(&project.path), "detected_project");
+    }
+    for app in runtime_apps {
+        if let Some(path) = app.project_path.as_deref().or(app.cwd.as_deref()) {
+            push_candidate(PathBuf::from(path), "runtime_app");
+        }
+    }
+
+    let mut candidates = roots
+        .into_iter()
+        .filter_map(|(path, source)| {
+            scan_workspace_root_candidate(config, scan_root, discovery_roots, path, &source)
+        })
+        .collect::<Vec<_>>();
+    candidates.sort_by(|left, right| {
+        right
+            .project_count
+            .cmp(&left.project_count)
+            .then_with(|| left.path.cmp(&right.path))
+    });
+    candidates.truncate(6);
+    candidates
+}
+
+fn scan_workspace_root_candidate(
+    config: &TomlValue,
+    scan_root: &Path,
+    discovery_roots: &[PathBuf],
+    candidate: PathBuf,
+    source: &str,
+) -> Option<WorkspaceRootCandidate> {
+    let candidate = canonical_path_or_self(&candidate);
+    if !candidate.is_dir()
+        || discovery_roots
+            .iter()
+            .any(|root| path_has_prefix(&candidate, root))
+    {
+        return None;
+    }
+    let projects =
+        discover_projects_under_root(config, &candidate, workspace_max_depth(config).min(4), 8);
+    if projects.is_empty() {
+        return None;
+    }
+    let (config_key, config_value) = workspace_config_entry_for_root(scan_root, &candidate)?;
+    let sample_projects = projects
+        .iter()
+        .take(4)
+        .map(|project| {
+            Path::new(&project.path)
+                .file_name()
+                .and_then(|value| value.to_str())
+                .map(str::to_string)
+                .unwrap_or_else(|| project.path.clone())
+        })
+        .collect::<Vec<_>>();
+    let mut sample_markers = projects
+        .iter()
+        .take(4)
+        .map(|project| project.marker.clone())
+        .collect::<Vec<_>>();
+    sample_markers.sort();
+    sample_markers.dedup();
+    Some(WorkspaceRootCandidate {
+        path: display_path(&candidate),
+        source: source.into(),
+        config_key,
+        config_value,
+        project_count: projects.len(),
+        sample_projects,
+        sample_markers,
+    })
+}
+
+fn probable_external_workspace_roots() -> Vec<PathBuf> {
+    let mut out = Vec::new();
+    let common_names = [
+        "Projects",
+        "projects",
+        "code",
+        "Code",
+        "repos",
+        "Repos",
+        "src",
+        "Source",
+        "source",
+        "workspace",
+        "Workspace",
+    ];
+    for disk in Disks::new_with_refreshed_list().list() {
+        let mount = canonical_path_or_self(disk.mount_point());
+        for name in common_names {
+            let candidate = mount.join(name);
+            if candidate.is_dir() {
+                push_workspace_root(&mut out, candidate);
+            }
+        }
+        let Ok(entries) = std::fs::read_dir(&mount) else {
+            continue;
+        };
+        for entry in entries.flatten().take(24) {
+            let child = entry.path();
+            if !child.is_dir() || is_user_profile_root(&child) {
+                continue;
+            }
+            for name in common_names {
+                let candidate = child.join(name);
+                if candidate.is_dir() {
+                    push_workspace_root(&mut out, candidate);
+                }
+            }
+        }
+    }
+    out
+}
+
+fn discover_projects_under_root(
+    config: &TomlValue,
+    root: &Path,
+    max_depth: usize,
+    max_results: usize,
+) -> Vec<WorkspaceProject> {
+    let mut out = Vec::new();
+    for entry in WalkDir::new(root)
+        .max_depth(max_depth)
+        .follow_links(false)
+        .into_iter()
+        .filter_entry(|entry| should_scan_workspace_entry(entry.path()))
+        .filter_map(|entry| entry.ok())
+    {
+        if out.len() >= max_results {
+            break;
+        }
+        let path = entry.path();
+        if !path.is_dir() || !should_accept_workspace_project(path) {
+            continue;
+        }
+        if let Some((marker, kind)) = workspace_project_marker(path, config) {
+            let rendered = display_path(path);
+            if out
+                .iter()
+                .any(|project: &WorkspaceProject| project.path == rendered)
+            {
+                continue;
+            }
+            out.push(WorkspaceProject {
+                path: rendered,
+                kind: kind.into(),
+                marker: marker.into(),
+            });
+        }
+    }
+    out
+}
+
+fn workspace_config_entry_for_root(scan_root: &Path, candidate: &Path) -> Option<(String, String)> {
+    let candidate = canonical_path_or_self(candidate);
+    if let Some(home) = user_home_dir() {
+        let home = canonical_path_or_self(&home);
+        if let Ok(relative) = candidate.strip_prefix(&home) {
+            let rendered = relative_path_for_config(relative);
+            if !rendered.is_empty() {
+                return Some(("workspace.home_roots".into(), rendered));
+            }
+        }
+    }
+    let scan_root = canonical_path_or_self(scan_root);
+    if let Ok(relative) = candidate.strip_prefix(&scan_root) {
+        let rendered = relative_path_for_config(relative);
+        if !rendered.is_empty() {
+            return Some(("workspace.roots".into(), rendered));
+        }
+    }
+    Some(("workspace.roots".into(), display_path(&candidate)))
+}
+
+fn relative_path_for_config(path: &Path) -> String {
+    clean_display_path(&path.to_string_lossy()).replace('\\', "/")
+}
+
+fn workspace_setup_issue(
+    id: &str,
+    severity: &str,
+    title: &str,
+    detail: &str,
+) -> WorkspaceSetupIssue {
+    WorkspaceSetupIssue {
+        id: id.into(),
+        severity: severity.into(),
+        title: title.into(),
+        detail: detail.into(),
+    }
+}
+
+fn workspace_setup_action(
+    id: &str,
+    title: &str,
+    detail: &str,
+    href: Option<&str>,
+    command: Option<String>,
+    config: Vec<WorkspaceConfigSuggestion>,
+    manifest_path: Option<String>,
+    manifest_snippet: Option<String>,
+) -> WorkspaceSetupAction {
+    WorkspaceSetupAction {
+        id: id.into(),
+        title: title.into(),
+        detail: detail.into(),
+        href: href.map(str::to_string),
+        command,
+        config,
+        manifest_path,
+        manifest_snippet,
+    }
+}
+
+fn workspace_app_has_manifest(app: &WorkspaceRuntimeApp) -> bool {
+    app.signals
+        .iter()
+        .any(|signal| signal.name == "inferra_manifest")
+}
+
+fn workspace_app_has_service_mapping(
+    app: &WorkspaceRuntimeApp,
+    service_mappings: &[WorkspaceMapping],
+) -> bool {
+    service_mappings.iter().any(|mapping| {
+        mapping.service_id.eq_ignore_ascii_case(&app.name)
+            || app
+                .project_path
+                .as_deref()
+                .map(|path| mapping.project_path == path)
+                .unwrap_or(false)
+    })
+}
+
+fn workspace_app_manifest_path(app: &WorkspaceRuntimeApp) -> Option<String> {
+    let base = app.project_path.as_deref().or(app.cwd.as_deref())?;
+    Some(display_path(
+        &Path::new(base).join(".inferra").join("app.toml"),
+    ))
+}
+
+fn workspace_app_manifest_snippet(app: &WorkspaceRuntimeApp) -> Option<String> {
+    let project_path = app.project_path.as_deref().or(app.cwd.as_deref())?;
+    let mut lines = vec!["[app]".to_string()];
+    let display_name = app.display_name.as_deref().unwrap_or(&app.name);
+    lines.push(format!("name = {}", toml_basic_string(display_name)));
+    if !app.runtime.trim().is_empty() && app.runtime != "unknown" {
+        lines.push(format!("runtime = {}", toml_basic_string(&app.runtime)));
+    }
+    if let Some(framework) = app.framework.as_deref() {
+        lines.push(format!("framework = {}", toml_basic_string(framework)));
+    }
+    if let Some(process_kind) = app.process_kind.as_deref() {
+        lines.push(format!(
+            "process_kind = {}",
+            toml_basic_string(process_kind)
+        ));
+    }
+    if let Some(url) = app.app_url.as_deref() {
+        lines.push(format!("url = {}", toml_basic_string(url)));
+    }
+    if let Some(endpoint) = app.health_endpoint.as_ref() {
+        lines.push(String::new());
+        lines.push("[heartbeat]".into());
+        if let Some(path) = manifest_health_path(app.app_url.as_deref(), endpoint) {
+            lines.push(format!("path = {}", toml_basic_string(&path)));
+        } else {
+            lines.push(format!("url = {}", toml_basic_string(&endpoint.url)));
+        }
+    }
+    if let Some(log_source) = app
+        .log_sources
+        .iter()
+        .find(|source| source.kind == "file" && source.path.as_deref().is_some())
+    {
+        if let Some(log_path) = log_source.path.as_deref() {
+            lines.push(String::new());
+            lines.push("[[logs]]".into());
+            lines.push(format!(
+                "label = {}",
+                toml_basic_string(log_source.label.as_str())
+            ));
+            if let Some(relative) = manifest_relative_path(project_path, log_path) {
+                lines.push(format!("path = {}", toml_basic_string(&relative)));
+            } else {
+                lines.push(format!("path = {}", toml_basic_string(log_path)));
+            }
+            lines.push(format!("kind = {}", toml_basic_string("file")));
+        }
+    }
+    Some(lines.join("\n"))
+}
+
+fn manifest_health_path(app_url: Option<&str>, endpoint: &WorkspaceAppEndpoint) -> Option<String> {
+    let base = app_url?;
+    let normalized_base = base.trim_end_matches('/');
+    if endpoint.url == normalized_base {
+        return Some("/".into());
+    }
+    endpoint
+        .url
+        .strip_prefix(normalized_base)
+        .filter(|value| value.starts_with('/'))
+        .map(str::to_string)
+}
+
+fn manifest_relative_path(project_path: &str, file_path: &str) -> Option<String> {
+    let project = canonical_path_or_self(Path::new(project_path));
+    let file = canonical_path_or_self(Path::new(file_path));
+    file.strip_prefix(&project)
+        .ok()
+        .map(relative_path_for_config)
+}
+
+fn toml_basic_string(value: &str) -> String {
+    format!(
+        "\"{}\"",
+        value
+            .replace('\\', "\\\\")
+            .replace('"', "\\\"")
+            .replace('\n', "\\n")
+    )
 }
 
 pub fn workspace_app_live_resources(
@@ -10057,6 +10798,7 @@ fn discover_pm2_runtime_apps(locator: &WorkspaceProjectLocator<'_>) -> Vec<Works
                 resources,
                 app_state,
                 context_capabilities,
+                setup: None,
                 app_structure,
                 manager: Some("pm2".into()),
                 status,
@@ -10303,6 +11045,7 @@ fn discover_process_runtime_apps(
             resources,
             app_state,
             context_capabilities,
+            setup: None,
             app_structure,
             manager: None,
             status: None,
@@ -10443,6 +11186,7 @@ fn synthesize_project_runtime_app(project: &WorkspaceProject) -> WorkspaceRuntim
         resources: None,
         app_state,
         context_capabilities,
+        setup: None,
         app_structure: project_structure(&project_path),
         manager: Some("workspace".into()),
         status: Some("registered".into()),

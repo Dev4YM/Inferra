@@ -6615,6 +6615,7 @@ enabled = false
             resources: None,
             app_state: None,
             context_capabilities: Vec::new(),
+            setup: None,
             app_structure: Vec::new(),
             manager: None,
             status: Some("running".into()),
@@ -7076,6 +7077,15 @@ redact_raw_logs = true
         let mut workspace = WorkspaceMapResponse {
             enabled: true,
             support_layers: Vec::new(),
+            setup: inferra_contracts::WorkspaceSetupGuide {
+                status: "ready".into(),
+                score: 100,
+                headline: "ready".into(),
+                summary: "ready".into(),
+                issues: Vec::new(),
+                actions: Vec::new(),
+                recommended_roots: Vec::new(),
+            },
             projects: Vec::new(),
             runtime_apps: vec![workspace_test_app("frontend", project_path)],
             service_mappings: vec![WorkspaceMapping {

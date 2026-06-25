@@ -1110,6 +1110,58 @@ export type WorkspaceAppCapability = {
   detail?: string | null;
 };
 
+export type WorkspaceSetupIssue = {
+  id: string;
+  severity: string;
+  title: string;
+  detail: string;
+};
+
+export type WorkspaceConfigSuggestion = {
+  key: string;
+  value: unknown;
+  reason: string;
+};
+
+export type WorkspaceSetupAction = {
+  id: string;
+  title: string;
+  detail: string;
+  href?: string | null;
+  command?: string | null;
+  config?: WorkspaceConfigSuggestion[];
+  manifest_path?: string | null;
+  manifest_snippet?: string | null;
+};
+
+export type WorkspaceRootCandidate = {
+  path: string;
+  source: string;
+  config_key: string;
+  config_value: string;
+  project_count: number;
+  sample_projects?: string[];
+  sample_markers?: string[];
+};
+
+export type WorkspaceSetupGuide = {
+  status: string;
+  score: number;
+  headline: string;
+  summary: string;
+  issues?: WorkspaceSetupIssue[];
+  actions?: WorkspaceSetupAction[];
+  recommended_roots?: WorkspaceRootCandidate[];
+};
+
+export type WorkspaceAppSetupGuide = {
+  status: string;
+  score: number;
+  summary: string;
+  issues?: WorkspaceSetupIssue[];
+  actions?: WorkspaceSetupAction[];
+};
+
 export type WorkspaceRuntimeApp = {
   pid?: number | null;
   name: string;
@@ -1128,6 +1180,7 @@ export type WorkspaceRuntimeApp = {
   resources?: WorkspaceAppResources | null;
   app_state?: WorkspaceAppState | null;
   context_capabilities?: WorkspaceAppCapability[];
+  setup?: WorkspaceAppSetupGuide | null;
   app_structure?: Array<{ path: string; kind: string; role: string }>;
   manager?: string | null;
   status?: string | null;
@@ -1169,6 +1222,7 @@ export type WorkspaceMapping = {
 export type WorkspaceMapResponse = {
   enabled: boolean;
   support_layers?: WorkspaceSupportLayer[];
+  setup: WorkspaceSetupGuide;
   projects: WorkspaceProject[];
   runtime_apps?: WorkspaceRuntimeApp[];
   service_mappings: WorkspaceMapping[];

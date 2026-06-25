@@ -313,6 +313,76 @@ pub struct WorkspaceAppCapability {
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct WorkspaceSetupIssue {
+    pub id: String,
+    pub severity: String,
+    pub title: String,
+    pub detail: String,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct WorkspaceConfigSuggestion {
+    pub key: String,
+    pub value: Value,
+    pub reason: String,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct WorkspaceSetupAction {
+    pub id: String,
+    pub title: String,
+    pub detail: String,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub href: Option<String>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub command: Option<String>,
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    pub config: Vec<WorkspaceConfigSuggestion>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub manifest_path: Option<String>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub manifest_snippet: Option<String>,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct WorkspaceRootCandidate {
+    pub path: String,
+    pub source: String,
+    pub config_key: String,
+    pub config_value: String,
+    pub project_count: usize,
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    pub sample_projects: Vec<String>,
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    pub sample_markers: Vec<String>,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct WorkspaceSetupGuide {
+    pub status: String,
+    pub score: u8,
+    pub headline: String,
+    pub summary: String,
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    pub issues: Vec<WorkspaceSetupIssue>,
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    pub actions: Vec<WorkspaceSetupAction>,
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    pub recommended_roots: Vec<WorkspaceRootCandidate>,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct WorkspaceAppSetupGuide {
+    pub status: String,
+    pub score: u8,
+    pub summary: String,
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    pub issues: Vec<WorkspaceSetupIssue>,
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    pub actions: Vec<WorkspaceSetupAction>,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct WorkspaceAppStructureItem {
     pub path: String,
     pub kind: String,
@@ -353,6 +423,8 @@ pub struct WorkspaceRuntimeApp {
     pub app_state: Option<WorkspaceAppState>,
     #[serde(default, skip_serializing_if = "Vec::is_empty")]
     pub context_capabilities: Vec<WorkspaceAppCapability>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub setup: Option<WorkspaceAppSetupGuide>,
     #[serde(default, skip_serializing_if = "Vec::is_empty")]
     pub app_structure: Vec<WorkspaceAppStructureItem>,
     #[serde(skip_serializing_if = "Option::is_none")]
@@ -499,6 +571,7 @@ pub struct WorkspaceMapResponse {
     pub enabled: bool,
     #[serde(default)]
     pub support_layers: Vec<WorkspaceSupportLayer>,
+    pub setup: WorkspaceSetupGuide,
     pub projects: Vec<WorkspaceProject>,
     #[serde(default)]
     pub runtime_apps: Vec<WorkspaceRuntimeApp>,
