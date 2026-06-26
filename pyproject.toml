@@ -23,7 +23,7 @@ dev = [
   "pytest-cov>=6",
   "ruff>=0.11",
 ]
-ui = ["playwright>=1.41"]
+ui = ["playwright>=1.60.0"]
 docs = ["mkdocs>=1.6"]
 
 [tool.setuptools]
